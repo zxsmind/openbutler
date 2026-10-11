@@ -1,0 +1,130 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const commands = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawnSync: commands.run };
+});
+
+let root: string;
+let entry: string;
+let registryValue: string | null;
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'ranite-autostart-check-'));
+  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.stubEnv('RANITE_TEST_SECRET', 'must-not-be-in-launcher');
+  entry = process.argv[1]!;
+  process.argv[1] = join(root, 'Ranite CLI', 'cli.js');
+  registryValue = null;
+  vi.resetModules();
+  commands.run.mockReset();
+  commands.run.mockImplementation((program: string, args: string[]) => {
+    if (program !== 'reg.exe') throw new Error('Unexpected OS command in fixture.');
+    if (args[0] === 'query')
+      return registryValue === null
+        ? { status: 1, stdout: '', stderr: 'Not found' }
+        : { status: 0, stdout: `Ranite REG_SZ ${registryValue}`, stderr: '' };
+    if (args[0] === 'add') registryValue = args[args.indexOf('/d') + 1]!;
+    if (args[0] === 'delete') registryValue = null;
+    return { status: 0, stdout: '', stderr: '' };
+  });
+});
+afterEach(() => {
+  process.argv[1] = entry;
+  vi.unstubAllEnvs();
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-autostart-check-'))
+    throw new Error('Unsafe fixture cleanup path.');
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe('login startup Telegram wiring (cross-platform builders)', () => {
+  it('embeds the token inline in the macOS agent and escapes XML', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    const document = service.buildMacosDocument('/bin/ranite', '/app/cli.js', '/data', '/data/daemon.log', {
+      TELEGRAM_BOT_TOKEN: '123:a&b<c>',
+    });
+    expect(document).toContain('<key>TELEGRAM_BOT_TOKEN</key><string>123:a&amp;b&lt;c&gt;</string>');
+    expect(document).toContain('<key>RANITE_DATA_DIR</key>');
+    const plain = service.buildMacosDocument('/bin/ranite', '/app/cli.js', '/data', '/data/daemon.log', {});
+    expect(plain).not.toContain('TELEGRAM_BOT_TOKEN');
+    expect(plain).toContain('<key>EnvironmentVariables</key><dict><key>RANITE_DATA_DIR</key><string>/data</string></dict>');
+  });
+
+  it('wires the token through an optional env file on Linux, never inline', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    const wired = service.buildLinuxUnit('/bin/ranite', '/app/cli.js', '/data', '/data/telegram.env');
+    expect(wired).toContain('EnvironmentFile=-"/data/telegram.env"');
+    expect(wired).not.toContain('123:');
+    const plain = service.buildLinuxUnit('/bin/ranite', '/app/cli.js', '/data', null);
+    expect(plain).not.toContain('EnvironmentFile');
+    expect(plain).toContain('Environment="RANITE_DATA_DIR=/data"');
+  });
+
+  it('rejects invalid variable names in builders', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    expect(() => service.buildMacosDocument('/b', '/e', '/d', '/l', { 'NOPE!': 'x' })).toThrow(/invalid environment variable name/);
+  });
+
+  it('reads the configured token from the process environment', async () => {
+    const settings = await import('../src/settings.js');
+    const service = await import('../src/daemon-autostart.js');
+    expect(service.currentTelegramEnv()).toBeNull();
+    const store = settings.defaultSettings();
+    store.telegram = { enabled: true, tokenEnv: 'RANITE_TEST_TG_TOKEN', workspaceRoot: root };
+    settings.saveSettings(store);
+    vi.stubEnv('RANITE_TEST_TG_TOKEN', '123456:valid-token-value-here-ok');
+    expect(service.currentTelegramEnv()).toEqual({ name: 'RANITE_TEST_TG_TOKEN', value: '123456:valid-token-value-here-ok' });
+    const disabled = settings.defaultSettings();
+    disabled.telegram = { enabled: false, tokenEnv: 'RANITE_TEST_TG_TOKEN', workspaceRoot: root };
+    settings.saveSettings(disabled);
+    expect(service.currentTelegramEnv()).toBeNull();
+  });
+});
+
+describe.skipIf(process.platform !== 'win32')('Windows login startup Telegram wiring', () => {
+  it('leaves login startup alone on Windows, where the user environment covers it', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    expect(service.refreshAutostartEnv()).toMatchObject({ updated: false });
+    expect(service.refreshAutostartEnv().detail).toMatch(/user environment/);
+  });
+});
+describe.skipIf(process.platform !== 'win32')('user Windows automatic startup ownership', () => {
+  it('quotes the compiled entry, preserves the selected data directory, and removes only its owned registration', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    service.installAutostart();
+    expect(service.isAutostartInstalled()).toBe(true);
+    const launcher = join(root, 'autostart', 'ranite-logon.vbs');
+    const content = readFileSync(launcher, 'utf8');
+    expect(content).toContain('RANITE_DATA_DIR');
+    expect(content).toContain(root);
+    expect(content).toContain('""' + process.argv[1] + '"" daemon run');
+    expect(content).not.toContain('must-not-be-in-launcher');
+    service.uninstallAutostart();
+    expect(registryValue).toBeNull();
+    expect(existsSync(launcher)).toBe(false);
+  });
+
+  it('preserves an existing foreign startup command and rejects a development-only TypeScript entry', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    registryValue = 'unrelated-user-command.exe';
+    expect(() => service.installAutostart()).toThrow('another command');
+    service.uninstallAutostart();
+    expect(registryValue).toBe('unrelated-user-command.exe');
+    expect(commands.run.mock.calls.some(([, args]) => args[0] === 'delete' || args[0] === 'add')).toBe(false);
+    process.argv[1] = join(root, 'cli.ts');
+    expect(() => service.installAutostart()).toThrow('compiled CLI');
+  });
+
+  it('cleans the generated launcher if registration fails without modifying other startup data', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    commands.run.mockImplementation((_program: string, args: string[]) =>
+      args[0] === 'query' ? { status: 1, stdout: '', stderr: 'Not found' } : { status: 5, stdout: '', stderr: 'Fixture access denied' },
+    );
+    expect(() => service.installAutostart()).toThrow('code 5');
+    expect(existsSync(join(root, 'autostart', 'ranite-logon.vbs'))).toBe(false);
+    expect(registryValue).toBeNull();
+  });
+});

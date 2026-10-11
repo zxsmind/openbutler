@@ -1,0 +1,652 @@
+import { execFile, spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  closeSync,
+  fstatSync,
+  futimesSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  readSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createConnection, createServer, type Server } from 'node:net';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { createDaemonHost } from './daemon-host.js';
+import { DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, type DaemonStatus } from './daemon-protocol.js';
+import { getDataDir, getDataPath } from './paths.js';
+
+const DAEMON_START_TIMEOUT_MS = 20_000;
+const DAEMON_START_LOCK_WAIT_MS = 30_000;
+// A 45s heartbeat lease reclaims crashed hosts without platform-specific mutex code.
+const DAEMON_START_LOCK_STALE_MS = 45_000;
+const DAEMON_START_LOCK_HEARTBEAT_MS = 10_000;
+const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
+const PREVIOUS_DAEMON_PROTOCOL_VERSION = 1;
+const execFileAsync = promisify(execFile);
+
+type DaemonStartLock = {
+  path: string;
+  fd: number;
+  token: string;
+  startedAt: string;
+  heartbeat: ReturnType<typeof setInterval>;
+};
+
+type BasicRequestAction = string;
+type BasicResponse = {
+  version: number;
+  id: string;
+  ok: boolean;
+  result?: unknown;
+  status?: unknown;
+  stopping?: boolean;
+  error?: string;
+};
+
+export { type DaemonStatus };
+
+export function getDaemonEndpoint(): string {
+  const directory = resolve(getDataDir());
+  if (process.platform === 'win32') {
+    const suffix = createHash('sha256').update(directory.toLocaleLowerCase('en-US')).digest('hex').slice(0, 24);
+    return `\\\\.\\pipe\\ranite-${suffix}`;
+  }
+  return join(directory, 'daemon.sock');
+}
+
+export async function getDaemonStatus(): Promise<DaemonStatus | null> {
+  try {
+    const response = await requestDaemon('status');
+    if (response.ok && isDaemonStatus(response.result)) return response.result;
+    const status = legacyStatusFromResponse(response);
+    if (status) return status;
+  } catch {
+    /* probe the previous protocol before assuming no host is running */
+  }
+
+  if (DAEMON_PROTOCOL_VERSION > PREVIOUS_DAEMON_PROTOCOL_VERSION) {
+    try {
+      const response = await requestDaemon('status', {}, DAEMON_REQUEST_TIMEOUT_MS, PREVIOUS_DAEMON_PROTOCOL_VERSION);
+      if (response.ok && isDaemonStatus(response.result)) return { ...response.result, legacy: true };
+      const status = legacyStatusFromResponse(response);
+      if (status) return status;
+    } catch {
+      /* no compatible earlier host */
+    }
+  }
+  const record = readDaemonPidRecord();
+  if (record && processIsAlive(record.pid)) {
+    return { pid: record.pid, startedAt: record.startedAt, workspaceCount: 0, connectedClients: 0, unresponsive: true };
+  }
+  return null;
+}
+
+export async function requestHost(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
+  const response = await requestDaemon(action, payload, 45_000);
+  if (!response.ok) throw new Error(response.error ?? 'Ranite host request failed.');
+  return response.result;
+}
+
+export async function startDaemon(_legacyWorkspaceScope?: string): Promise<DaemonStatus> {
+  const active = await getDaemonStatus();
+  if (active?.legacy) throw new Error('An older Ranite host is still running. Stop it with `ranite daemon stop`, then start Ranite again.');
+  if (active?.unresponsive)
+    throw new Error(
+      `Ranite host process ${active.pid} is alive but does not answer IPC health checks. Recover it with \`ranite restart\`.`,
+    );
+  if (active) return active;
+
+  const entry = process.argv[1];
+  if (!entry) throw new Error('Could not locate the Ranite CLI entry point.');
+  const dataDirectory = getDataDir();
+  const custodianDirectory = getDataPath('custodian');
+  mkdirSync(dataDirectory, { recursive: true });
+  mkdirSync(custodianDirectory, { recursive: true });
+  const logPath = getDataPath('daemon.log');
+  const logFd = openSync(logPath, 'a', 0o600);
+  const logOffset = fstatSync(logFd).size;
+  const args = /\.tsx?$/i.test(entry) ? ['--import', import.meta.resolve('tsx'), entry, 'daemon', 'run'] : [entry, 'daemon', 'run'];
+  let child;
+  try {
+    child = spawn(process.execPath, args, {
+      cwd: custodianDirectory,
+      env: {
+        ...process.env,
+        RANITE_DAEMON_CHILD: '1',
+      },
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      windowsHide: true,
+    });
+  } finally {
+    closeSync(logFd);
+  }
+
+  let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  child.once('exit', (code, signal) => {
+    childExit = { code, signal };
+  });
+
+  await new Promise<void>((resolveSpawn, rejectSpawn) => {
+    child.once('error', rejectSpawn);
+    child.once('spawn', () => resolveSpawn());
+  });
+  child.unref();
+
+  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const status = await getDaemonStatus();
+    if (status && !status.unresponsive) return status;
+    if (childExit) {
+      const logTail = readDaemonLogSince(logPath, logOffset);
+      const { code, signal } = childExit;
+      throw new Error(
+        `Ranite host process exited before becoming ready${code === null ? ` (${signal ?? 'unknown signal'})` : ` (exit code ${code})`}.${logTail ? `\n${logTail}` : ''}`,
+      );
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  const logTail = readDaemonLogSince(logPath, logOffset);
+  throw new Error(`Ranite host did not become ready within ${DAEMON_START_TIMEOUT_MS / 1_000} seconds.${logTail ? `\n${logTail}` : ''}`);
+}
+
+export async function stopDaemon(restarting = false): Promise<boolean> {
+  const active = await getDaemonStatus();
+  if (!active) return false;
+  if (!active.unresponsive) {
+    const protocolVersion = active.legacy ? PREVIOUS_DAEMON_PROTOCOL_VERSION : DAEMON_PROTOCOL_VERSION;
+    try {
+      const response = await requestDaemon('stop', restarting ? { restart: true } : {}, DAEMON_REQUEST_TIMEOUT_MS, protocolVersion);
+      if (!response.ok) throw new Error(response.error ?? 'The Ranite host could not stop.');
+    } catch (error) {
+      const status = await getDaemonStatus();
+      if (status?.pid === active.pid && !status.unresponsive) throw error;
+    }
+  }
+
+  // A reconnecting client may already have started the replacement host.
+  if (await waitForProcessExit(active.pid, 30_000)) return true;
+  const record = readDaemonPidRecord();
+  if (
+    !record?.identity ||
+    record.pid !== active.pid ||
+    record.startedAt !== active.startedAt ||
+    (await readProcessIdentity(active.pid)) !== record.identity
+  ) {
+    throw new Error(`Ranite host process ${active.pid} did not stop. Its process identity cannot be verified, so it was not terminated.`);
+  }
+  console.error(
+    `Ranite host process ${active.pid} did not finish shutdown within 30 seconds; terminating the verified host. Only the last saved session state can be recovered.`,
+  );
+  try {
+    process.kill(active.pid, 'SIGKILL');
+  } catch (error) {
+    if (processIsAlive(active.pid)) throw error;
+  }
+  if (await waitForProcessExit(active.pid, 5_000)) return true;
+  throw new Error(`Ranite host process ${active.pid} could not be terminated.`);
+}
+
+export async function restartDaemon(_legacyWorkspaceScope?: string): Promise<DaemonStatus> {
+  await stopDaemon(true);
+  return startDaemon();
+}
+
+/** Internal child-process entry point for `ranite daemon run`. */
+export async function runDaemonProcess(): Promise<void> {
+  const startLock = await acquireDaemonStartLock();
+  try {
+    const active = await getDaemonStatus();
+    if (active?.legacy)
+      throw new Error('An older Ranite host is still running. Stop it with `ranite daemon stop`, then start Ranite again.');
+    if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+    await runLockedDaemonProcess(startLock.startedAt);
+  } finally {
+    releaseDaemonStartLock(startLock);
+  }
+}
+
+async function runLockedDaemonProcess(startedAt: string): Promise<void> {
+  let stopping = false;
+  let shutdownReason: string | null = null;
+  let resolveStop!: () => void;
+  const stopRequested = new Promise<void>((resolvePromise) => {
+    resolveStop = resolvePromise;
+  });
+  const host = createDaemonHost({
+    startedAt,
+    requestStop: (restarting = false) => {
+      if (stopping) return;
+      stopping = true;
+      shutdownReason = restarting ? 'IPC restart request' : 'IPC stop request';
+      resolveStop();
+      void host.close().catch((error: unknown) => console.error(error instanceof Error ? error.message : String(error)));
+    },
+    log: (message) => console.error(message),
+  });
+  const server = createServer((socket) => host.handleConnection(socket));
+  const endpoint = getDaemonEndpoint();
+  const onSignal = (signal: 'SIGINT' | 'SIGTERM') => {
+    if (stopping) return;
+    stopping = true;
+    shutdownReason = signal;
+    resolveStop();
+    void host.close().catch((error: unknown) => console.error(String(error)));
+  };
+  const onSigint = () => onSignal('SIGINT');
+  const onSigterm = () => onSignal('SIGTERM');
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
+  try {
+    await listenDaemonServer(server, endpoint);
+    if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
+    await host.start();
+    await writeDaemonPidFile(startedAt);
+    console.log(`Ranite host ready (${process.pid}); ${host.getStatus().workspaceCount} workspace loaded.`);
+    await stopRequested;
+  } finally {
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
+    await host.close();
+    await closeServer(server);
+    if (process.platform !== 'win32') {
+      try {
+        unlinkSync(endpoint);
+      } catch {
+        /* socket already removed */
+      }
+    }
+    removeDaemonPidFile();
+    console.error(`Ranite host stopped (${shutdownReason ?? 'startup failed'}).`);
+  }
+}
+
+async function listenDaemonServer(server: Server, endpoint: string): Promise<void> {
+  try {
+    await listen(server, endpoint);
+  } catch (error) {
+    if (process.platform === 'win32' || !isAddressInUse(error)) {
+      if (isAddressInUse(error)) {
+        const active = await getDaemonStatus();
+        if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+        const recordedPid = readDaemonPid();
+        const holder = processIsAlive(recordedPid)
+          ? `The recorded host process ${recordedPid} is still alive but did not answer IPC health checks.`
+          : 'The endpoint is occupied by an incompatible or unresponsive process.';
+        throw new Error(`${holder} Stop the verified host process before retrying; Ranite will not remove an endpoint it cannot identify.`);
+      }
+      throw error;
+    }
+    const active = await getDaemonStatus();
+    if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+    const recordedPid = readDaemonPid();
+    if (recordedPid === null || processIsAlive(recordedPid)) {
+      throw new Error(
+        recordedPid === null
+          ? 'The daemon endpoint exists but its owner cannot be verified; refusing to remove it.'
+          : `The daemon endpoint exists but recorded process ${recordedPid} is still alive and not responding.`,
+      );
+    }
+    if (!lstatSync(endpoint).isSocket()) throw error;
+    unlinkSync(endpoint);
+    try {
+      unlinkSync(getDaemonPidPath());
+    } catch {
+      /* stale pid file */
+    }
+    await listen(server, endpoint);
+  }
+}
+
+function listen(server: Server, endpoint: string): Promise<void> {
+  return new Promise((resolveListen, rejectListen) => {
+    const onError = (error: Error) => {
+      server.off('listening', onListening);
+      rejectListen(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolveListen();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(endpoint);
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolveClose) => {
+    if (!server.listening) {
+      resolveClose();
+      return;
+    }
+    server.close(() => resolveClose());
+  });
+}
+
+function requestDaemon(
+  action: BasicRequestAction,
+  payload: Record<string, unknown> = {},
+  timeoutMs = DAEMON_REQUEST_TIMEOUT_MS,
+  protocolVersion = DAEMON_PROTOCOL_VERSION,
+): Promise<BasicResponse> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const id = randomUUID();
+    const request = JSON.stringify({ ...payload, version: protocolVersion, id, action }) + '\n';
+    const socket = createConnection(getDaemonEndpoint());
+    let responseBuffer = Buffer.alloc(0);
+    let settled = false;
+    const finish = (error?: Error, response?: BasicResponse) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      if (error) rejectPromise(error);
+      else resolvePromise(response!);
+    };
+    const timeout = setTimeout(() => finish(new Error('Ranite host control request timed out.')), timeoutMs);
+    socket.once('connect', () => socket.write(request));
+    socket.on('data', (chunk: Buffer) => {
+      responseBuffer = Buffer.concat([responseBuffer, chunk]);
+      if (responseBuffer.byteLength > MAX_DAEMON_FRAME_BYTES) {
+        finish(new Error('Ranite host response exceeded the frame limit.'));
+        return;
+      }
+      const newline = responseBuffer.indexOf(0x0a);
+      if (newline < 0) return;
+      try {
+        const value: unknown = JSON.parse(responseBuffer.subarray(0, newline).toString('utf8'));
+        if (!isBasicResponse(value, protocolVersion) || value.id !== id) throw new Error('Invalid Ranite host response.');
+        finish(undefined, value);
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    socket.once('error', (error) => finish(error));
+    socket.once('close', () => finish(new Error('Ranite host closed the control connection before replying.')));
+  });
+}
+
+function getDaemonPidPath(): string {
+  return getDataPath('daemon.pid');
+}
+
+function readDaemonPid(): number | null {
+  return readDaemonPidRecord()?.pid ?? null;
+}
+
+function readDaemonPidRecord(): { pid: number; startedAt: string; identity?: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(getDaemonPidPath(), 'utf8'));
+    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.pid) || Number(parsed.pid) < 1 || typeof parsed.startedAt !== 'string')
+      return null;
+    return {
+      pid: Number(parsed.pid),
+      startedAt: parsed.startedAt,
+      ...(typeof parsed.identity === 'string' ? { identity: parsed.identity } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function acquireDaemonStartLock(): Promise<DaemonStartLock> {
+  mkdirSync(getDataDir(), { recursive: true });
+  const path = getDataPath('daemon.start.lock');
+  const deadline = Date.now() + DAEMON_START_LOCK_WAIT_MS;
+  while (true) {
+    const token = randomUUID();
+    const startedAt = new Date().toISOString();
+    try {
+      const fd = openSync(path, 'wx', 0o600);
+      try {
+        writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt, token }));
+      } catch (error) {
+        closeSync(fd);
+        try {
+          unlinkSync(path);
+        } catch {
+          /* another process already removed it */
+        }
+        throw error;
+      }
+      const heartbeat = setInterval(() => {
+        try {
+          futimesSync(fd, new Date(), new Date());
+        } catch {
+          /* a stale-lock recovery replaced this file */
+        }
+      }, DAEMON_START_LOCK_HEARTBEAT_MS);
+      heartbeat.unref();
+      return { path, fd, token, startedAt, heartbeat };
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+    }
+
+    const active = await getDaemonStatus();
+    if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+    const lockOwner = readDaemonStartLockRecord(path);
+    const daemonRecord = readDaemonPidRecord();
+    if (
+      lockOwner &&
+      daemonRecord &&
+      lockOwner.pid === daemonRecord.pid &&
+      lockOwner.startedAt === daemonRecord.startedAt &&
+      processIsAlive(lockOwner.pid)
+    ) {
+      throw new Error(`Ranite host process ${lockOwner.pid} is alive but does not answer IPC health checks.`);
+    }
+    if (removeStaleDaemonStartLock(path)) continue;
+    if (Date.now() >= deadline) throw new Error('Another Ranite host is still starting. Retry after its startup finishes.');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+}
+
+function readDaemonStartLockRecord(path: string): { pid: number; startedAt: string; token: string } | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (
+      !isRecord(value) ||
+      !Number.isSafeInteger(value.pid) ||
+      Number(value.pid) < 1 ||
+      typeof value.startedAt !== 'string' ||
+      typeof value.token !== 'string'
+    )
+      return null;
+    return { pid: Number(value.pid), startedAt: value.startedAt, token: value.token };
+  } catch {
+    return null;
+  }
+}
+
+function releaseDaemonStartLock(lock: DaemonStartLock): void {
+  clearInterval(lock.heartbeat);
+  try {
+    closeSync(lock.fd);
+  } catch {
+    /* already closed */
+  }
+  try {
+    const record: unknown = JSON.parse(readFileSync(lock.path, 'utf8'));
+    if (isRecord(record) && record.token === lock.token) unlinkSync(lock.path);
+  } catch {
+    /* a newer startup owns the lock or the file is already gone */
+  }
+}
+
+function removeStaleDaemonStartLock(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return false;
+    let ownerPid: number | null = null;
+    try {
+      const record: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (isRecord(record) && Number.isSafeInteger(record.pid) && Number(record.pid) > 0) {
+        ownerPid = Number(record.pid);
+      }
+    } catch {
+      /* an empty new lock is protected by its fresh modification time */
+    }
+    const stale = Date.now() - stat.mtimeMs >= DAEMON_START_LOCK_STALE_MS;
+    if (!stale && (ownerPid === null || processIsAlive(ownerPid))) return false;
+    unlinkSync(path);
+    return true;
+  } catch (error) {
+    return isRecord(error) && error.code === 'ENOENT';
+  }
+}
+
+function processIsAlive(pid: number | null): boolean {
+  if (pid === null) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return isRecord(error) && error.code === 'EPERM';
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (processIsAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  }
+  return true;
+}
+
+async function readProcessIdentity(pid: number): Promise<string | null> {
+  try {
+    const windows = process.platform === 'win32';
+    const { stdout } = await execFileAsync(
+      windows ? 'powershell.exe' : 'ps',
+      windows
+        ? [
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$hostProcess = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($null -eq $hostProcess) { exit 1 }; @($hostProcess.CreationDate.ToUniversalTime().Ticks.ToString(), $hostProcess.ExecutablePath, $hostProcess.CommandLine) | ConvertTo-Json -Compress`,
+          ]
+        : ['-p', String(pid), '-o', 'lstart=', '-o', 'args='],
+      {
+        windowsHide: true,
+        timeout: 3_000,
+        maxBuffer: 16_384,
+        env: { ...process.env, LC_ALL: 'C' },
+      },
+    );
+    const identity = stdout.trim();
+    return identity ? createHash('sha256').update(identity).digest('hex') : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeDaemonPidFile(startedAt: string): Promise<void> {
+  const path = getDaemonPidPath();
+  const temporary = `${path}.${process.pid}.tmp`;
+  const identity = await readProcessIdentity(process.pid);
+  writeFileSync(temporary, JSON.stringify({ pid: process.pid, startedAt, ...(identity ? { identity } : {}) }), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  try {
+    unlinkSync(path);
+  } catch {
+    /* no previous daemon record */
+  }
+  renameSync(temporary, path);
+}
+
+function removeDaemonPidFile(): void {
+  if (readDaemonPid() !== process.pid) return;
+  try {
+    unlinkSync(getDaemonPidPath());
+  } catch {
+    /* already removed */
+  }
+}
+
+function readDaemonLogSince(path: string, offset: number): string {
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return '';
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(offset, size - 4_000);
+    const content = Buffer.alloc(size - start);
+    readSync(fd, content, 0, content.byteLength, start);
+    return content.toString('utf8').trim();
+  } catch {
+    return '';
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return isRecord(error) && error.code === 'EADDRINUSE';
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return isRecord(error) && error.code === 'EEXIST';
+}
+
+function isDaemonStatus(value: unknown): value is DaemonStatus {
+  return (
+    isRecord(value) &&
+    typeof value.pid === 'number' &&
+    typeof value.startedAt === 'string' &&
+    Number.isSafeInteger(value.workspaceCount) &&
+    Number.isSafeInteger(value.connectedClients)
+  );
+}
+
+function isBasicResponse(value: unknown, protocolVersion: number): value is BasicResponse {
+  return (
+    isRecord(value) &&
+    typeof value.version === 'number' &&
+    value.version === protocolVersion &&
+    typeof value.id === 'string' &&
+    typeof value.ok === 'boolean' &&
+    (!value.ok || 'result' in value || 'status' in value || value.stopping === true) &&
+    (value.ok || typeof value.error === 'string')
+  );
+}
+
+function legacyStatusFromResponse(response: BasicResponse): DaemonStatus | null {
+  if (response.ok && isDaemonStatus(response.result)) return { ...response.result, legacy: true };
+  if (!isLegacyDaemonStatus(response.status)) return null;
+  return {
+    pid: response.status.pid,
+    startedAt: response.status.startedAt,
+    workspaceCount: 1,
+    connectedClients: 0,
+    legacy: true,
+  };
+}
+
+function isLegacyDaemonStatus(value: unknown): value is { pid: number; startedAt: string } {
+  return (
+    isRecord(value) &&
+    typeof value.pid === 'number' &&
+    Number.isSafeInteger(value.pid) &&
+    typeof value.startedAt === 'string' &&
+    typeof value.workspaceRoot === 'string' &&
+    typeof value.sessionId === 'string'
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}

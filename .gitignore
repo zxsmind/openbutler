@@ -1,0 +1,48 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.tgz
+
+# Runtime state (this belongs in the data directory, never in the repository)
+state.db
+state.db-*
+catalog.ndjson
+catalog-*.json
+settings.yaml
+tool-whitelist.json
+sessions/
+MEMORY/
+packages/
+models/
+custodian/
+daemon.log
+daemon.pid
+daemon.start.lock
+state2048.json
+
+# Local tooling artifacts
+.playwright-mcp/
+__pycache__/
+
+# Development documents stay off the public tree; only documentation that ships
+# with the product is tracked. New working notes are excluded by default.
+*.md
+!README.md
+!skills/**/SKILL.md
+
+# Internal design and review records, deliberately untracked (see docs/README.md).
+docs/
+
+
+# Secrets
+.env
+.env.*
+
+# Editor and OS noise
+*.log
+*.bak
+*.bak-*
+.DS_Store
+Thumbs.db

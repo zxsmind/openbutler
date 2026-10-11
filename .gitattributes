@@ -1,0 +1,22 @@
+# Normalize line endings so the repository is identical on Windows, macOS and Linux.
+# Source is LF on disk today; without this a checkout with core.autocrlf=true would
+# rewrite every file and make diffs unreadable.
+* text=auto eol=lf
+
+# Line endings must stay byte-exact.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.gz binary
+*.pdf binary
+*.mp4 binary
+*.webm binary
+
+# Lock files are generated and must not be diff-normalised.
+package-lock.json linguist-generated=true -diff
