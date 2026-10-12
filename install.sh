@@ -58,29 +58,49 @@ say() {
 BAR_TTY=""
 if [ -t 2 ]; then BAR_TTY=1; fi
 
-fmt_mb() {
-  printf '%d.%d' "$(( $1 / 1048576 ))" "$(( ($1 % 1048576) * 10 / 1048576 ))"
+ORANGE=""
+RESET=""
+if [ -n "$BAR_TTY" ] && [ -z "${NO_COLOR:-}" ]; then
+  esc=$(printf '\033')
+  ORANGE="${esc}[38;5;214m"
+  RESET="${esc}[0m"
+fi
+
+hide_cursor() {
+  if [ -n "$BAR_TTY" ]; then printf '\033[?25l' >&2; fi
+}
+
+show_cursor() {
+  if [ -n "$BAR_TTY" ]; then printf '\033[?25h' >&2; fi
+}
+
+repeat_char() {
+  rc_n="$1"
+  rc_char="$2"
+  rc_out=""
+  rc_i=0
+  while [ "$rc_i" -lt "$rc_n" ]; do
+    rc_out="$rc_out$rc_char"
+    rc_i=$(( rc_i + 1 ))
+  done
+  printf '%s' "$rc_out"
 }
 
 render_single() {
   rs_done="$1"
   rs_total="$2"
   rs_label="$3"
-  rs_width=30
+  rs_width=50
   if [ -z "$rs_total" ] || [ "$rs_total" = "0" ]; then
-    rs_empty="$(printf '%30s' '')"
-    printf '\r[%s] %s (%s MB)' "$(printf '%s' "$rs_empty" | tr ' ' '-')" "$rs_label" "$(fmt_mb $(( rs_done * 1024 )))" >&2
+    printf '\r%s[%s] %-11s%s' "$ORANGE" "$(repeat_char "$rs_width" '-')" "$rs_label" "$RESET" >&2
     return
   fi
   rs_percent=$(( rs_done * 100 / rs_total ))
   if [ "$rs_percent" -gt 100 ]; then rs_percent=100; fi
   rs_filled=$(( rs_percent * rs_width / 100 ))
   rs_empty_n=$(( rs_width - rs_filled ))
-  rs_bar="$(printf "%${rs_filled}s" '')"
-  rs_bar="$(printf '%s' "$rs_bar" | tr ' ' '=')"
-  rs_rest="$(printf "%${rs_empty_n}s" '')"
-  rs_rest="$(printf '%s' "$rs_rest" | tr ' ' '-')"
-  printf '\r[%s%s] %3d%% (%s/%s MB) %s' "$rs_bar" "$rs_rest" "$rs_percent" "$(fmt_mb $(( rs_done * 1024 )))" "$(fmt_mb $(( rs_total * 1024 )))" "$rs_label" >&2
+  rs_bar="$(repeat_char "$rs_filled" '=')$(repeat_char "$rs_empty_n" '-')"
+  printf '\r%s[%s] %3d%% %-11s%s' "$ORANGE" "$rs_bar" "$rs_percent" "$rs_label" "$RESET" >&2
 }
 
 file_kb() {
@@ -135,7 +155,7 @@ download_to() {
     return $?
   fi
   : >"$dl_output"
-  trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
+  trap 'kill $BG_PID 2>/dev/null; show_cursor; rm -rf "$tmp_dir"; exit 130' INT TERM
   curl -fL -s -o "$dl_output" "$dl_url" &
   BG_PID=$!
   while kill -0 "$BG_PID" 2>/dev/null; do
@@ -144,7 +164,7 @@ download_to() {
   done
   BG_RET=0
   wait "$BG_PID" || BG_RET=$?
-  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  trap 'show_cursor; rm -rf "$tmp_dir"' EXIT INT TERM
   if [ "$BG_RET" -ne 0 ]; then
     printf '\n' >&2
     return "$BG_RET"
@@ -168,7 +188,7 @@ extract_to() {
     esac
     return $?
   fi
-  trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
+  trap 'kill $BG_PID 2>/dev/null; show_cursor; rm -rf "$tmp_dir"; exit 130' INT TERM
   case "$ex_archive" in
     *.zip) unzip -q "$ex_archive" -d "$ex_dest" & ;;
     *) tar -xzf "$ex_archive" -C "$ex_dest" & ;;
@@ -180,7 +200,7 @@ extract_to() {
   done
   BG_RET=0
   wait "$BG_PID" || BG_RET=$?
-  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  trap 'show_cursor; rm -rf "$tmp_dir"' EXIT INT TERM
   if [ "$BG_RET" -ne 0 ]; then
     printf '\n' >&2
     echo "Error: extraction failed." >&2
@@ -200,7 +220,7 @@ copy_to() {
     cp -r "$cp_src/." "$cp_dest/"
     return $?
   fi
-  trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
+  trap 'kill $BG_PID 2>/dev/null; show_cursor; rm -rf "$tmp_dir"; exit 130' INT TERM
   cp -r "$cp_src/." "$cp_dest/" &
   BG_PID=$!
   while kill -0 "$BG_PID" 2>/dev/null; do
@@ -212,7 +232,7 @@ copy_to() {
   done
   BG_RET=0
   wait "$BG_PID" || BG_RET=$?
-  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  trap 'show_cursor; rm -rf "$tmp_dir"' EXIT INT TERM
   if [ "$BG_RET" -ne 0 ]; then
     printf '\n' >&2
     echo "Error: install copy failed." >&2
@@ -305,7 +325,7 @@ fi
 
 tmp_dir="${TMPDIR:-/tmp}/ranite_install_$$"
 mkdir -p "$tmp_dir"
-trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+trap 'show_cursor; rm -rf "$tmp_dir"' EXIT INT TERM
 
 DO_COPY=1
 if [ -n "$binary_path" ]; then
@@ -321,6 +341,7 @@ else
   fetch_meta "$url" "$tmp_dir/meta"
   if [ -n "$BAR_TTY" ] && [ -n "$META_D_KB" ] && [ -n "$META_U_KB" ]; then
     BAR_TOTAL=$(( META_D_KB + META_U_KB + META_U_KB ))
+    hide_cursor
     download_to "$url" "$archive" "$BAR_TOTAL" 0
     BASE_D="$(file_kb "$archive")"
     mkdir -p "$tmp_dir/extract"
@@ -335,6 +356,7 @@ else
     FIN_DONE=$(( BASE_DU + FIN_GROWN ))
     render_single "$FIN_DONE" "$FIN_DONE" Done
     printf '\n' >&2
+    show_cursor
     DO_COPY=0
   else
     DL_KNOWN=""
