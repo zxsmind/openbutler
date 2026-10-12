@@ -211,12 +211,18 @@ if ($current -ne '' -and $current -eq $specific) {
   return
 }
 
+$isUpdate = $false
+if ([string]::IsNullOrWhiteSpace($Binary) -and $current -ne '' -and $current -ne $specific) {
+  $isUpdate = $true
+}
+
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("ranite_install_" + [IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
   if ($script:BarActive) { try { [Console]::CursorVisible = $false } catch {} }
   if ([string]::IsNullOrWhiteSpace($Binary)) {
-    Write-Host "Downloading ranite $specific ($target)"
+    if ($isUpdate) { Write-Host "Updating ranite $current -> $specific ($target)" }
+    else { Write-Host "Downloading ranite $specific ($target)" }
     $archive = Join-Path $tmp $fileName
     $meta = Get-RemoteMeta $url
     if ($meta -ne $null) {
@@ -270,7 +276,8 @@ try {
 
 $installed = Installed-Version
 if ([string]::IsNullOrWhiteSpace($installed)) { throw 'Installation finished but `ranite --version` does not run.' }
-Write-Host "Installed ranite $installed to $InstallDir."
+if ($isUpdate) { Write-Host "Updated ranite $current -> $installed." }
+else { Write-Host "Installed ranite $installed to $InstallDir." }
 
 if ($NoModifyPath) {
   Write-Host "Skipped PATH setup. Add $BinDir to PATH manually."

@@ -323,6 +323,11 @@ if [ -n "$current" ] && [ "$current" = "$specific_version" ]; then
   exit 0
 fi
 
+is_update=0
+if [ -z "$binary_path" ] && [ -n "$current" ] && [ "$current" != "$specific_version" ]; then
+  is_update=1
+fi
+
 tmp_dir="${TMPDIR:-/tmp}/ranite_install_$$"
 mkdir -p "$tmp_dir"
 trap 'show_cursor; rm -rf "$tmp_dir"' EXIT INT TERM
@@ -336,7 +341,11 @@ if [ -n "$binary_path" ]; then
   extract_to "$archive" "$tmp_dir/extract" "" 0
   if [ -n "$BAR_TTY" ]; then printf '\n' >&2; fi
 else
-  say "Downloading ranite $specific_version ($target)"
+  if [ "$is_update" = "1" ]; then
+    say "Updating ranite $current -> $specific_version ($target)"
+  else
+    say "Downloading ranite $specific_version ($target)"
+  fi
   archive="$tmp_dir/$filename"
   fetch_meta "$url" "$tmp_dir/meta"
   if [ -n "$BAR_TTY" ] && [ -n "$META_D_KB" ] && [ -n "$META_U_KB" ]; then
@@ -401,7 +410,11 @@ if [ -z "$installed" ]; then
   echo "Error: installation finished but \`ranite --version\` does not run." >&2
   exit 1
 fi
-say "Installed ranite $installed to $INSTALL_DIR."
+if [ "$is_update" = "1" ]; then
+  say "Updated ranite $current -> $installed."
+else
+  say "Installed ranite $installed to $INSTALL_DIR."
+fi
 
 if [ "$no_modify_path" = "true" ]; then
   say "Skipped PATH setup (--no-modify-path). Add $BIN_DIR to PATH manually."
