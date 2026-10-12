@@ -212,7 +212,7 @@ async function main() {
 
     // 4. Assemble the portable tree.
     const root = join(stage, 'ranite');
-    const nodeDir = join(root, 'node');
+    const nodeDir = join(root, 'node', 'bin');
     const appDir = join(root, 'app');
     const binDir = join(root, 'bin');
     mkdirSync(nodeDir, { recursive: true });
@@ -230,7 +230,7 @@ async function main() {
     if (os !== 'windows') chmodSync(join(binDir, 'ranite'), 0o755);
     writeFileSync(
       join(binDir, 'ranite.cmd'),
-      `@echo off\r\nrem Portable launcher: uses the Node.js runtime shipped next to the app.\r\nset "ROOT=%~dp0.."\r\n"%ROOT%\\node\\node.exe" "%ROOT%\\app\\dist\\cli.js" %*\r\n`,
+      `@echo off\r\nrem Portable launcher: uses the Node.js runtime shipped next to the app.\r\nset "ROOT=%~dp0.."\r\n"%ROOT%\\node\\bin\\node.exe" "%ROOT%\\app\\dist\\cli.js" %*\r\n`,
     );
 
     // 5. Compress.
