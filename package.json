@@ -1,6 +1,6 @@
 {
   "name": "ranite",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "description": "An agent that knows your machine.",
   "publishConfig": {
