@@ -19,7 +19,7 @@
  * (Windows 10+, macOS and Linux all ship one).
  */
 import { createHash } from 'node:crypto';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,58 @@ function log(message) {
 
 function run(command, parameters, options = {}) {
   execFileSync(command, parameters, { stdio: 'inherit', shell: process.platform === 'win32', ...options });
+}
+
+function formatMB(bytes) {
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+function directoryBytes(directory) {
+  let total = 0;
+  for (const entry of readdirSync(directory)) {
+    const path = join(directory, entry);
+    const info = statSync(path);
+    total += info.isDirectory() ? directoryBytes(path) : info.size;
+  }
+  return total;
+}
+
+/**
+ * Drops dead native weight from the staged tree: onnxruntime binaries for
+ * other operating systems/CPUs, and GPU-only provider libraries. The native
+ * binding links only its platform's CPU library (verified with ldd); CUDA and
+ * TensorRT providers load solely on explicit GPU requests, which the app never
+ * makes, so CPU inference is unaffected.
+ */
+function pruneNativeWeight(nodeModules) {
+  const platforms = { win32: 'win32', darwin: 'darwin', linux: 'linux' };
+  const ortBin = join(nodeModules, 'onnxruntime-node', 'bin', 'napi-v6');
+  if (!existsSync(ortBin)) return;
+  for (const os of readdirSync(ortBin)) {
+    const osDir = join(ortBin, os);
+    if (!statSync(osDir).isDirectory()) continue;
+    if (os !== platforms[process.platform]) {
+      log(`Dropped onnxruntime natives for ${os} (${formatMB(directoryBytes(osDir))}).`);
+      rmSync(osDir, { recursive: true, force: true });
+      continue;
+    }
+    for (const arch of readdirSync(osDir)) {
+      const archDir = join(osDir, arch);
+      if (!statSync(archDir).isDirectory()) continue;
+      if (arch !== process.arch) {
+        log(`Dropped onnxruntime natives for ${os}/${arch} (${formatMB(directoryBytes(archDir))}).`);
+        rmSync(archDir, { recursive: true, force: true });
+        continue;
+      }
+      for (const file of readdirSync(archDir)) {
+        if (/^libonnxruntime_providers_(cuda|tensorrt)\./.test(file)) {
+          const path = join(archDir, file);
+          log(`Dropped GPU-only ${file} (${formatMB(statSync(path).size)}).`);
+          rmSync(path, { force: true });
+        }
+      }
+    }
+  }
 }
 
 function capture(command, parameters) {
@@ -136,6 +188,8 @@ async function main() {
     run('npm', ['run', 'build'], { cwd: stage });
     log('Pruning development dependencies.');
     run('npm', ['prune', '--omit=dev'], { cwd: stage });
+    log('Pruning unused native binaries.');
+    pruneNativeWeight(join(stage, 'node_modules'));
 
     // 3. Fetch the official Node.js binary and verify its checksum.
     const downloadDir = join(stage, 'node-download');
