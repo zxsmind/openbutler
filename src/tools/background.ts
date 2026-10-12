@@ -315,26 +315,22 @@ export function createBackgroundManagementTool(
     providerId: 'host',
     name: 'background_manage',
     maxInputChars: 32_000,
-    description: `Manage user-requested durable background tasks and notify the configured owner. No tasks run by default. Actions: capabilities, list, add, update, remove, enable, disable, run, notify. A task contains id, name, instruction, workspaceRoot, enabled, and trigger {adapter, options}. Available trigger adapters: ${JSON.stringify(backgroundCapabilities)}. Use add/update only for an explicit user request. For notify, provide title and message; use it for material background findings and stay quiet when nothing requires attention.`,
+    description: `Manage user-requested durable background tasks. No tasks run by default. Actions: capabilities, list, add, update, remove, enable, disable, run. A task contains id, name, instruction, workspaceRoot, enabled, and trigger {adapter, options}. Available trigger adapters: ${JSON.stringify(backgroundCapabilities)}. Use add/update only for an explicit user request. Use send_message_to_owner to report a material finding from background work.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['capabilities', 'list', 'add', 'update', 'remove', 'enable', 'disable', 'run', 'notify'] },
+        action: { type: 'string', enum: ['capabilities', 'list', 'add', 'update', 'remove', 'enable', 'disable', 'run'] },
         taskId: { type: 'string' },
         task: { type: 'object' },
-        title: { type: 'string' },
-        message: { type: 'string' },
       },
     },
     effect: { ...readEffect, change: 'modify' },
     assess: (input) =>
       input.action === 'list' || input.action === 'capabilities'
         ? readEffect
-        : input.action === 'notify'
-          ? { ...readEffect, network: 'used', outbound: 'model-and-tool-server' }
-          : { ...readEffect, change: input.action === 'remove' ? 'delete' : 'modify' },
+        : { ...readEffect, change: input.action === 'remove' ? 'delete' : 'modify' },
     autoApprove: (input) => input.action === 'list' || input.action === 'capabilities',
     execute: (input) => execute(input, workspaceRoot),
   };

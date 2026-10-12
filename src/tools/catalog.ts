@@ -17,7 +17,7 @@ import { createSubagentPollTool } from './subagent-poll.js';
 import { createSubagentStopTool } from './subagent-stop.js';
 import { createSubagentTool, type SubagentRequest } from './subagent.js';
 import type { ToolDefinition } from './registry.js';
-import { createNotifyOwnerTool } from './notify-owner.js';
+import { createReadOwnerMessagesTool, createSendMessageToOwnerTool } from './owner-communication.js';
 
 export interface ToolCatalogueOptions {
   workspaceRoot: string;
@@ -27,7 +27,8 @@ export interface ToolCatalogueOptions {
   /** Rebuilds the registry after an MCP connection change. */
   onMcpConnectionsChanged: () => void;
   backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
-  ownerNotify?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+  ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+  ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
   parentMessage?: (input: { text: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
@@ -53,7 +54,8 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     createSessionListTool(options.workspaceRoot),
     createSessionSearchTool(options.workspaceRoot),
     createSessionReadTool(),
-    ...(options.ownerNotify ? [createNotifyOwnerTool(options.workspaceRoot, options.ownerNotify)] : []),
+    ...(options.ownerMessageSend ? [createSendMessageToOwnerTool(options.workspaceRoot, options.ownerMessageSend)] : []),
+    ...(options.ownerInboxRead ? [createReadOwnerMessagesTool(options.ownerInboxRead)] : []),
     ...(options.sessionMessage ? [createSessionMessageTool(options.sessionMessage)] : []),
     ...(options.subagent ? [createSubagentTool(options.subagent)] : []),
     ...(options.parentMessage ? [createParentMessageTool(options.parentMessage)] : []),

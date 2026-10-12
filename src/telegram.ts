@@ -6,6 +6,7 @@ import type { ApprovalDecision } from './agent-session.js';
 import type { TelegramSettings } from './settings.js';
 import type { ToolCallRequest } from './tools/registry.js';
 import { resolveTokenEnv } from './telegram-setup.js';
+import { imageTypeFromBytes } from './image.js';
 
 export interface TelegramStatus {
   state: 'disabled' | 'connecting' | 'polling' | 'error' | 'stopped';
@@ -15,7 +16,11 @@ export interface TelegramStatus {
 }
 
 type TelegramCallbacks = {
-  message: (updateId: number, text: string) => Promise<void>;
+  message: (
+    updateId: number,
+    text: string,
+    attachment?: { image?: { filename: string; mediaType: string; bytes: Buffer }; attachmentError?: string },
+  ) => Promise<void>;
   approval: (requestId: string, decision: ApprovalDecision) => boolean;
   paired: (chatId: string, userId: string) => void;
   log: (message: string) => void;
@@ -34,6 +39,7 @@ type LiveDraftRecord = {
 
 const LIVE_DRAFT_INTERVAL_MS = 900;
 const LIVE_DRAFT_TEXT_LIMIT = 3900;
+const MAX_OWNER_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const OWNER_COMMANDS = [
   { command: 'start', description: 'Show help and pairing info' },
@@ -138,6 +144,56 @@ export class TelegramAdapter {
       });
     }
     return true;
+  }
+
+  async sendOwnerImage(bytes: Buffer, filename: string, mediaType: string, caption = ''): Promise<boolean> {
+    if (!this.readyToSend()) return false;
+    if (bytes.length > 10 * 1024 * 1024) throw new Error('Telegram photos must be 10 MB or smaller.');
+    const detectedType = imageTypeFromBytes(bytes);
+    if (!detectedType || detectedType !== mediaType) throw new Error('The attachment is not a supported image.');
+    await this.callUpload('sendPhoto', 'photo', bytes, filename, mediaType, { caption: caption.slice(0, 1024) });
+    return true;
+  }
+
+  async sendOwnerDocument(bytes: Buffer, filename: string, caption = ''): Promise<boolean> {
+    if (!this.readyToSend()) return false;
+    if (bytes.length > 50 * 1024 * 1024) throw new Error('Telegram documents must be 50 MB or smaller.');
+    await this.callUpload('sendDocument', 'document', bytes, filename, 'application/octet-stream', { caption: caption.slice(0, 1024) });
+    return true;
+  }
+
+  async downloadOwnerImage(fileId: string): Promise<{ bytes: Buffer; mediaType: string; filename: string }> {
+    if (!this.token) throw new Error('Telegram is not connected.');
+    const file = await this.call('getFile', { file_id: fileId });
+    if (!isRecord(file) || typeof file.file_path !== 'string' || file.file_path.split(/[\\/]/).includes('..'))
+      throw new Error('Telegram returned an invalid image path.');
+    if (typeof file.file_size === 'number' && file.file_size > MAX_OWNER_IMAGE_BYTES)
+      throw new Error('Telegram images must be 5 MB or smaller.');
+    const encodedFilePath = file.file_path.split('/').map(encodeURIComponent).join('/');
+    const response = await this.fetchApi(`https://api.telegram.org/file/bot${this.token}/${encodedFilePath}`, {
+      signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(35_000)]),
+    }).catch(() => {
+      throw new TelegramApiError('Telegram image download failed.', null);
+    });
+    if (!response.ok || !response.body) throw new TelegramApiError(`Telegram file download failed (HTTP ${response.status}).`);
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > MAX_OWNER_IMAGE_BYTES) {
+        await reader.cancel();
+        throw new Error('Telegram images must be 5 MB or smaller.');
+      }
+      chunks.push(value);
+    }
+    const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    const mediaType = imageTypeFromBytes(bytes);
+    if (!mediaType) throw new Error('Telegram attachment is not a supported PNG, JPEG, GIF, or WebP image.');
+    const extension = mediaType === 'image/jpeg' ? '.jpg' : mediaType.slice('image/'.length);
+    return { bytes, mediaType, filename: `telegram-image${extension}` };
   }
 
   beginLiveDraft(onStop: () => void): number | null {
@@ -359,8 +415,22 @@ export class TelegramAdapter {
           'Send a request to Ranite. /approvals refreshes pending action buttons. /stop cancels this chat run; /stop <task-id> stops a task run.',
           OWNER_KEYBOARD,
         );
-      } else if (text.trim()) {
-        await this.callbacks.message(updateId, text);
+      } else {
+        const photos = Array.isArray(message.photo) ? message.photo.filter(isRecord) : [];
+        const photo = photos.at(-1);
+        const imageFileId = photo && typeof photo.file_id === 'string' ? photo.file_id : null;
+        const body = text || (typeof message.caption === 'string' ? message.caption : '');
+        if (imageFileId || body.trim()) {
+          if (!imageFileId) await this.callbacks.message(updateId, body);
+          else {
+            try {
+              const image = await this.downloadOwnerImage(imageFileId);
+              await this.callbacks.message(updateId, body, { image });
+            } catch (error) {
+              await this.callbacks.message(updateId, body, { attachmentError: errorText(error) });
+            }
+          }
+        }
       }
     }
     const callback = isRecord(update.callback_query) ? update.callback_query : null;
@@ -486,6 +556,32 @@ export class TelegramAdapter {
     }).catch(() => {
       throw new TelegramApiError(`Telegram ${method}: connection failed.`, null);
     });
+    return this.parseApiResponse(method, response);
+  }
+
+  private async callUpload(
+    method: string,
+    field: 'photo' | 'document',
+    bytes: Buffer,
+    filename: string,
+    mediaType: string,
+    extra: Record<string, unknown>,
+  ): Promise<unknown> {
+    const form = new FormData();
+    form.set('chat_id', this.settings!.chatId);
+    for (const [key, value] of Object.entries(extra)) if (value !== '') form.set(key, String(value));
+    form.set(field, new Blob([new Uint8Array(bytes)], { type: mediaType }), filename);
+    const response = await this.fetchApi(`https://api.telegram.org/bot${this.token}/${method}`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(35_000)]),
+    }).catch(() => {
+      throw new TelegramApiError(`Telegram ${method}: connection failed.`, null);
+    });
+    return this.parseApiResponse(method, response);
+  }
+
+  private async parseApiResponse(method: string, response: Response): Promise<unknown> {
     const text = await response.text();
     if (text.length > 2_000_000) throw new Error(`Telegram ${method} response exceeded the size limit.`);
     let parsed: unknown;

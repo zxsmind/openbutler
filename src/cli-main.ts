@@ -71,6 +71,7 @@ function usage(): void {
     ['workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
     ['--c "<request>"', 'Ask the agent; it can select available tools.'],
     ['--list-models', 'List models that can call tools. --filter, --limit, --provider.'],
+    ['--version', 'Print the installed version.'],
     ['skills', 'List global and active-workspace Agent Skills.'],
     ['about', 'Version, runtime, configuration paths.'],
   ];
@@ -1291,6 +1292,10 @@ async function main(): Promise<void> {
 
   if (parsed.command === '--help' || parsed.command === '-h' || parsed.command === 'help') {
     usage();
+    return;
+  }
+  if (parsed.command === '--version' || parsed.command === '-v' || parsed.command === 'version') {
+    process.stdout.write(`${getRaniteVersion()}\n`);
     return;
   }
   /* A bare `ranite` has no terminal to prompt in, so showing usage is more

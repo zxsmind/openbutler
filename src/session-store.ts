@@ -11,7 +11,7 @@ export type SessionEntry =
       text: string;
       workspaceRoot?: string;
       imageCount?: number;
-      source?: 'terminal' | 'telegram' | 'background';
+      source?: 'terminal' | 'telegram' | 'owner-inbox' | 'background';
       eventId?: string;
     }
   | { kind: 'assistant' | 'notice'; text: string }
@@ -246,8 +246,8 @@ export function readSessionHeader(path: string, id: string): StoredSessionHeader
  * Reads at most `bytes` from the front of a file. Session headers are a few hundred bytes.
  *
  * `complete` reports that the read reached end of file. It cannot be inferred from the text length,
- * because the prefix is measured in bytes while the string is measured in characters and a Turkish
- * or CJK header decodes to fewer of them.
+ * because the prefix is measured in bytes while the string is measured in characters and a multibyte
+ * (e.g. CJK) header decodes to fewer of them.
  */
 function readPrefix(path: string, bytes: number): { text: string; complete: boolean } | null {
   let descriptor: number | undefined;

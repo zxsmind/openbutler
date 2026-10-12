@@ -22,7 +22,8 @@ export interface CreateAgentRuntimeOptions {
   onMcpError?: (serverId: string, message: string) => void;
   onMcpConnected?: (serverId: string, toolCount: number) => void;
   backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
-  ownerNotify?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+  ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+  ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
   parentMessage?: (input: { text: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
@@ -87,7 +88,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
           runtime.registry = createRegistry(activeInputModalities);
         },
         ...(options.backgroundManage ? { backgroundManage: options.backgroundManage } : {}),
-        ...(options.ownerNotify ? { ownerNotify: options.ownerNotify } : {}),
+        ...(options.ownerMessageSend ? { ownerMessageSend: options.ownerMessageSend } : {}),
+        ...(options.ownerInboxRead ? { ownerInboxRead: options.ownerInboxRead } : {}),
         ...(options.sessionMessage ? { sessionMessage: options.sessionMessage } : {}),
         ...(options.subagent ? { subagent: options.subagent } : {}),
         ...(options.parentMessage ? { parentMessage: options.parentMessage } : {}),

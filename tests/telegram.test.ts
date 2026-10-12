@@ -213,7 +213,7 @@ describe('owner Telegram authentication and replay protection', () => {
 });
 
 it('splits long output without cutting Unicode characters or exceeding the Telegram limit', () => {
-  const text = 'Turkish ı ş 👋\n'.repeat(1000);
+  const text = 'Sample café naïve 👋\n'.repeat(1000);
   const chunks = splitTelegramText(text);
   expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
   expect(chunks.join('')).toBe(text);

@@ -116,7 +116,7 @@ describe('secret detection over provider formats', () => {
       'sha512-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+/=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       'id=550e8400-e29b-41d4-a716-446655440000 commit=f2b7de1a9c3e4d5f6a7b8c9d0e1f2a3b4c5d6e7f',
       'const apiKey = process.env.API_KEY; const token = localStorage.getItem("token");',
-      'Şifre yönetimi ve token süreleri hakkında konuştuk; anahtar kelimeler: güvenlik.',
+      'We discussed password handling and token lifetimes; keywords: security.',
       'https://user@example.com/profile',
       '-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n',
     ];
@@ -155,9 +155,9 @@ describe('secret detection over provider formats', () => {
   });
 
   it('is idempotent and preserves multibyte text around a mask', () => {
-    const text = 'şifreler: ĞÜŞİÖÇ password=hunter2 ve ııı';
+    const text = 'notes: ÉÈÊ password=hunter2 and âââ';
     const redacted = redactSecrets(text);
-    expect(redacted).toBe('şifreler: ĞÜŞİÖÇ password=[redacted] ve ııı');
+    expect(redacted).toBe('notes: ÉÈÊ password=[redacted] and âââ');
     expect(redactSecrets(redacted)).toBe(redacted);
   });
 

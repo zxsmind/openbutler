@@ -1,10 +1,16 @@
 /** Host-owned communication facts; channel adapters never choose agent identity. */
 export type OwnerReplyRoute = { channel: 'terminal' } | { channel: 'telegram'; chatId: string };
 export type TurnCommunication = {
-  source: 'terminal' | 'telegram' | 'background';
+  source: 'terminal' | 'telegram' | 'owner-inbox' | 'background';
   replyTo?: OwnerReplyRoute;
 };
-export type OwnerPresence = { terminalAttached: boolean; telegramAvailable: boolean };
+export type OwnerInboxMessage = {
+  id: string;
+  source: 'telegram';
+  receivedAt: string;
+  text: string;
+  image?: { data: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; filename: string };
+};
 
 export function sameReplyRoute(left: OwnerReplyRoute | undefined, right: OwnerReplyRoute | undefined): boolean {
   return Boolean(

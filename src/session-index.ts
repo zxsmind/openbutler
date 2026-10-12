@@ -512,7 +512,7 @@ function clampInteger(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-/** Case- and diacritic-insensitive folding, so Turkish text matches across İ/ı and accents. */
+/** Case- and diacritic-insensitive folding, so accented text matches across cases and accents. */
 function fold(value: string): string {
   return value.toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '');
 }

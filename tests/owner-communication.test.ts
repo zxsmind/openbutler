@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOwnerNotificationRoute, sameReplyRoute } from '../src/owner-communication.js';
+import { resolveOwnerNotificationRoute, sameReplyRoute } from '../src/communication.js';
 
 describe('host-owned owner routes', () => {
   it('uses presence only for proactive auto delivery and keeps explicit Telegram replies independent', () => {

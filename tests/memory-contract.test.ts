@@ -196,7 +196,7 @@ it('keeps the global entrypoint to concise shared-user links and supplies curren
   expect(system).toContain(paths.workspaceFile);
   expect(system).toContain('every H3 entry needs a non-empty #### Summary');
   expect(system).toContain('profiles marked not initialized');
-  expect(system).not.toContain('Turkish responses; no emojis');
+  expect(system).not.toContain('responses; no emojis');
   expect(readdirSync(paths.root)).not.toContain('user.md');
 });
 

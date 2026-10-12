@@ -21,7 +21,7 @@ import { redactSensitive, redactSensitiveText } from './sensitive-data.js';
 import { DEFAULT_SESSION_LIST_LIMIT } from './tools/session-list.js';
 import { reportSessionActivity } from './session-registry.js';
 import { getDataPath } from './paths.js';
-import { sameReplyRoute, type OwnerPresence, type TurnCommunication } from './owner-communication.js';
+import { sameReplyRoute, type TurnCommunication } from './communication.js';
 import { isUnsupportedImageInputError, omitUnsupportedImageInputs } from './image.js';
 
 export type AgentProviderOptions = Record<string, Record<string, JSONValue>>;
@@ -115,7 +115,6 @@ export interface AgentSessionOptions {
   writeGuard?: (sessionId: string, path: string) => string | null;
   /** null stores a machine-wide custodian session without assigning it to one workspace. */
   sessionWorkspaceRoot?: string | null;
-  ownerPresence?: () => OwnerPresence;
 }
 
 export interface AgentSessionClient {
@@ -156,7 +155,6 @@ export class AgentSessionController implements AgentSessionClient {
   private readonly eventRunResults = new Map<string, AgentEventRunResult>();
   private activeEventOutputs: AgentEventOutput[] | null = null;
   private activeEventAssistantText = '';
-  private activeCommunication: TurnCommunication | undefined;
   private activeTurnProgress: QueuedMessage['onProgress'];
   private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string }> = [];
   private busy = false;
@@ -853,16 +851,6 @@ export class AgentSessionController implements AgentSessionClient {
     if (text.trim()) this.activeEventOutputs?.push({ kind: 'assistant', text });
   }
 
-  private communicationContext(): string {
-    return JSON.stringify({
-      source: this.activeCommunication?.source ?? (this.options.background ? 'background' : 'terminal'),
-      replyTo: this.activeCommunication?.replyTo ?? null,
-      automaticReply: Boolean(this.activeCommunication?.replyTo),
-      pendingOwnerMessages: this.queuedMessages.length,
-      ...(this.options.ownerPresence?.() ?? {}),
-    });
-  }
-
   private addUserEntry(message: QueuedMessage): void {
     this.addEntry({
       kind: 'user',
@@ -947,7 +935,6 @@ export class AgentSessionController implements AgentSessionClient {
         this.runError = null;
         this.activeEventOutputs = [];
         this.activeEventAssistantText = '';
-        this.activeCommunication = current.communication;
         steeredTurns = [];
         this.activeTurnProgress = current.onProgress;
         if (current.workspaceRoot) {
@@ -1072,7 +1059,6 @@ export class AgentSessionController implements AgentSessionClient {
               },
               tools: tools.tools,
               shouldStop: tools.shouldStop,
-              getRunContext: () => this.communicationContext(),
               takeQueuedMessages: () => {
                 // Steering is admitted only at SDK prepareStep, after the prior tool batch.
                 // Scope/route changes remain FIFO followups so they cannot borrow an active binding.
@@ -1080,7 +1066,8 @@ export class AgentSessionController implements AgentSessionClient {
                 if (
                   this.options.sessionWorkspaceRoot !== null ||
                   !next ||
-                  !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo) ||
+                  (next.message.communication?.source !== 'owner-inbox' &&
+                    !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
                   (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
                   next.preferences.reasoningVariantId !== preferences.reasoningVariantId ||
                   next.preferences.showReasoning !== preferences.showReasoning
@@ -1161,7 +1148,6 @@ export class AgentSessionController implements AgentSessionClient {
               abortSignal: abortController.signal,
               sessionId: this.session.id,
               systemInstruction: `${this.options.systemInstruction ?? ''}\nThe owner's request requires a visible answer. Compose it from the settled work and tool results. Do not call tools or repeat actions.`,
-              getRunContext: () => this.communicationContext(),
               getProviderOptions: () => this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning),
               onTextDelta: (delta) => {
                 this.activeEventAssistantText += delta;
@@ -1253,7 +1239,6 @@ export class AgentSessionController implements AgentSessionClient {
       if (abortController.signal.aborted) this.runError = 'Run cancelled.';
       this.activeEventOutputs = null;
       this.activeEventAssistantText = '';
-      this.activeCommunication = undefined;
       this.activeTurnProgress = undefined;
       this.activeEventId = undefined;
       this.busy = false;
@@ -1855,7 +1840,18 @@ function formatExecOutput(result: Record<string, unknown>): { outcome: string; t
 
 function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
   const content: Array<{ type: 'text'; text: string } | { type: 'image'; image: string; mediaType: 'image/png' }> = [];
-  if (message.text) content.push({ type: 'text', text: message.text });
+  const source = message.communication?.source;
+  const sourceLabel =
+    source === 'telegram'
+      ? '[Host context: owner message via Telegram]'
+      : source === 'terminal'
+        ? '[Host context: owner message via terminal]'
+        : source === 'owner-inbox'
+          ? '[Host context: Telegram owner inbox signal]'
+          : '';
+  const workspaceLabel = message.workspaceRoot ? `[Host context: active workspace ${message.workspaceRoot.replace(/[\r\n]/g, ' ')}]` : '';
+  if (message.text || sourceLabel || workspaceLabel)
+    content.push({ type: 'text', text: [sourceLabel, workspaceLabel, message.text].filter(Boolean).join('\n') });
   for (const image of message.images) content.push({ type: 'image', image: image.base64, mediaType: image.mediaType });
   return { role: 'user', content, ...(message.eventId ? { providerOptions: { ranite: { queuedMessageId: message.eventId } } } : {}) };
 }

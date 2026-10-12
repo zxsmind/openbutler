@@ -138,42 +138,40 @@ describe('owner replies and safe steering', () => {
           delayedStream(
             [
               { type: 'text-start', id: 'before' },
-              { type: 'text-delta', id: 'before', delta: 'Bakıyorum.' },
+              { type: 'text-delta', id: 'before', delta: 'Looking into it.' },
               { type: 'text-end', id: 'before' },
               { type: 'tool-call', toolCallId: 'one', toolName: 'inspect', input: '{}' },
             ],
             'tool-calls',
           ),
         )
-        .mockImplementationOnce(async () => fixtureText('Yeni isteğini de dikkate aldım.')),
+        .mockImplementationOnce(async () => fixtureText('Your new request has been taken into account.')),
     });
     const { AgentSessionController } = await import('../src/agent-session.js');
-    session = new AgentSessionController(runtimeFor(model, registry), undefined, {
-      sessionWorkspaceRoot: null,
-      ownerPresence: () => ({ terminalAttached: false, telegramAvailable: true }),
-    });
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
     const communication = { source: 'telegram' as const, replyTo: { channel: 'telegram' as const, chatId: '42' } };
-    const first = session.sendMessage({ text: 'İncele.', images: [], eventId: 'first', communication }, preferences);
+    const first = session.sendMessage({ text: 'Review it.', images: [], eventId: 'first', communication }, preferences);
     await vi.waitFor(() => expect(started).toBe(true));
-    const second = session.sendMessage({ text: 'Silme, yalnızca oku.', images: [], eventId: 'second', communication }, preferences);
+    const second = session.sendMessage({ text: 'Do not delete, only read.', images: [], eventId: 'second', communication }, preferences);
     release();
     await Promise.all([first, second]);
     expect(model.doStreamCalls).toHaveLength(2);
     const prompt = model.doStreamCalls[1]!.prompt;
     const steerIndex = prompt.findIndex(
-      (message) => message.role === 'user' && JSON.stringify(message.content).includes('Silme, yalnızca oku.'),
+      (message) => message.role === 'user' && JSON.stringify(message.content).includes('Do not delete, only read.'),
     );
     expect(steerIndex).toBeGreaterThan(0);
     expect(prompt[steerIndex - 1]!.role).toBe('tool');
     expect(
-      prompt.filter((message) => message.role === 'user' && JSON.stringify(message.content).includes('Silme, yalnızca oku.')),
+      prompt.filter((message) => message.role === 'user' && JSON.stringify(message.content).includes('Do not delete, only read.')),
     ).toHaveLength(1);
-    expect(JSON.stringify(prompt)).toContain('telegramAvailable');
+    expect(JSON.stringify(prompt)).toContain('[Host context: owner message via Telegram]');
+    expect(JSON.stringify(prompt)).not.toContain('telegramAvailable');
     expect(session.takeEventRunResult('first')).toEqual({
       error: null,
       outputs: [
-        { kind: 'assistant', text: 'Bakıyorum.' },
-        { kind: 'assistant', text: 'Yeni isteğini de dikkate aldım.' },
+        { kind: 'assistant', text: 'Looking into it.' },
+        { kind: 'assistant', text: 'Your new request has been taken into account.' },
       ],
     });
     expect(session.takeEventRunResult('second')).toEqual({ error: null, outputs: [], replyHandledByEventId: 'first' });
@@ -185,13 +183,13 @@ describe('owner replies and safe steering', () => {
       doStream: vi
         .fn()
         .mockImplementationOnce(async () => delayedStream([]))
-        .mockImplementationOnce(async () => fixtureText('Selam!')),
+        .mockImplementationOnce(async () => fixtureText('Hello!')),
     });
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtimeFor(model), undefined, { sessionWorkspaceRoot: null });
     await session.sendMessage(
       {
-        text: 'selam',
+        text: 'hello',
         images: [],
         eventId: 'hello',
         communication: { source: 'telegram', replyTo: { channel: 'telegram', chatId: '42' } },
@@ -200,7 +198,7 @@ describe('owner replies and safe steering', () => {
     );
     expect(model.doStreamCalls).toHaveLength(2);
     expect(model.doStreamCalls[1]!.tools ?? []).toHaveLength(0);
-    expect(session.takeEventRunResult('hello')).toEqual({ error: null, outputs: [{ kind: 'assistant', text: 'Selam!' }] });
+    expect(session.takeEventRunResult('hello')).toEqual({ error: null, outputs: [{ kind: 'assistant', text: 'Hello!' }] });
   });
 
   it('keeps a changed reply route as a followup and gives each route its own output', async () => {
@@ -255,7 +253,7 @@ describe('owner replies and safe steering', () => {
   });
 
   it('preserves every assistant segment across tools without including their output or reasoning', async () => {
-    const answers = ['Bakıyorum.', 'Bir şeyler buldum.', 'Uzun cevap '.repeat(600), 'Evet, durum böyle.'];
+    const answers = ['Looking into it.', 'I found something.', 'Long answer '.repeat(600), 'Yes, that is how it is.'];
     let call = 0;
     const registry = new ToolRegistry();
     registry.register({
@@ -324,11 +322,11 @@ describe('session streaming message boundaries', () => {
           { type: 'reasoning-delta', id: 'reasoning', delta: 'greeting.' },
           { type: 'reasoning-end', id: 'reasoning' },
           { type: 'text-start', id: 'answer' },
-          { type: 'text-delta', id: 'answer', delta: 'Selam! 👋 Nasıls' },
+          { type: 'text-delta', id: 'answer', delta: 'Hello! 👋 How ca' },
           { pause: 80 },
-          { type: 'text-delta', id: 'answer', delta: 'ın, nasıl yardımcı ' },
+          { type: 'text-delta', id: 'answer', delta: 'n I help ' },
           { pause: 80 },
-          { type: 'text-delta', id: 'answer', delta: 'olabilirim?' },
+          { type: 'text-delta', id: 'answer', delta: 'you today?' },
           { type: 'text-end', id: 'answer' },
         ]),
     });
@@ -341,7 +339,7 @@ describe('session streaming message boundaries', () => {
       { kind: 'reasoning', text: 'A simple greeting.' },
     ]);
     expect(snapshot.session.entries.filter((entry) => entry.kind === 'assistant')).toEqual([
-      { kind: 'assistant', text: 'Selam! 👋 Nasılsın, nasıl yardımcı olabilirim?' },
+      { kind: 'assistant', text: 'Hello! 👋 How can I help you today?' },
     ]);
     expect(snapshot.streamingAssistantEntry).toBeNull();
     expect(snapshot.busy).toBe(false);
@@ -648,7 +646,7 @@ describe('session compaction persistence and continuation', () => {
         (message) =>
           message.role === 'user' &&
           Array.isArray(message.content) &&
-          message.content.some((part) => part.type === 'text' && part.text === 'Keep the queued constraint.'),
+          message.content.some((part) => part.type === 'text' && part.text.includes('Keep the queued constraint.')),
       );
       expect(queued).toHaveLength(1);
     }

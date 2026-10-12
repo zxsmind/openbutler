@@ -106,38 +106,38 @@ describe('recent sessions in the assembled agent context', () => {
   it('keeps the section inside its byte budget with heavy sibling sessions', async () => {
     const { getAgentContext } = await import('../src/agent.js');
     saveSession({
-      title: 'İstanbul sunucusunda ağır bakım',
+      title: 'Heavy maintenance on the Lyon server',
       entries: [
-        { kind: 'user', text: 'ş'.repeat(240) },
-        { kind: 'assistant', text: 'ğ'.repeat(240) },
+        { kind: 'user', text: 'é'.repeat(240) },
+        { kind: 'assistant', text: 'è'.repeat(240) },
       ],
     });
     saveSession({
-      title: 'Ankara sunucusu',
+      title: 'Lyon server',
       entries: [
-        { kind: 'user', text: 'ü'.repeat(240) },
-        { kind: 'assistant', text: 'ö'.repeat(240) },
+        { kind: 'user', text: 'ê'.repeat(240) },
+        { kind: 'assistant', text: 'à'.repeat(240) },
       ],
     });
     saveSession({
-      title: 'İzmir sunucusu',
+      title: 'Nice server',
       entries: [
-        { kind: 'user', text: 'ç'.repeat(240) },
-        { kind: 'assistant', text: 'ı'.repeat(240) },
+        { kind: 'user', text: 'ù'.repeat(240) },
+        { kind: 'assistant', text: 'â'.repeat(240) },
       ],
     });
     saveSession({
-      title: 'Bursa sunucusu',
+      title: 'Marseille server',
       entries: [
-        { kind: 'user', text: 'ş'.repeat(240) },
-        { kind: 'assistant', text: 'ü'.repeat(240) },
+        { kind: 'user', text: 'é'.repeat(240) },
+        { kind: 'assistant', text: 'ê'.repeat(240) },
       ],
     });
     saveSession({
-      title: 'Antalya sunucusu',
+      title: 'Bordeaux server',
       entries: [
-        { kind: 'user', text: 'ö'.repeat(240) },
-        { kind: 'assistant', text: 'ç'.repeat(240) },
+        { kind: 'user', text: 'à'.repeat(240) },
+        { kind: 'assistant', text: 'ù'.repeat(240) },
       ],
     });
     const current = saveSession({ title: 'Current session', entries: [{ kind: 'user', text: 'hello' }] });

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolSet } from 'ai';
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
-import { summarizeFileToolResult, summarizeImageToolResult } from '../image.js';
+import { summarizeFileToolResult, summarizeImageToolResult, summarizeOwnerInboxToolResult } from '../image.js';
 import { redactToolOutput } from '../sensitive-data.js';
 import type { ToolActionState } from '../activity-ledger.js';
 import type { ApprovalMode } from '../settings.js';
@@ -298,7 +298,7 @@ export class ToolRegistry {
         // only ever see the redacted result. Media payloads pass through untouched.
         const result = redactToolOutput(executed);
         if (definition.restartAfterExecute?.(result) === true) restartRequested = true;
-        const mediaSummary = summarizeImageToolResult(result) ?? summarizeFileToolResult(result);
+        const mediaSummary = summarizeImageToolResult(result) ?? summarizeFileToolResult(result) ?? summarizeOwnerInboxToolResult(result);
         if (mediaSummary !== null) {
           await options.onAction?.(request, 'completed', { result: mediaSummary });
           resultRecorded = true;

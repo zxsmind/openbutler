@@ -36,7 +36,8 @@ const subagentSeen = new WeakSet<ToolRegistry>();
 const parentMessageSeen = new WeakSet<ToolRegistry>();
 const subagentPollSeen = new WeakSet<ToolRegistry>();
 const subagentStopSeen = new WeakSet<ToolRegistry>();
-const ownerNotifySeen = new WeakSet<ToolRegistry>();
+const ownerMessageSendSeen = new WeakSet<ToolRegistry>();
+const ownerInboxReadSeen = new WeakSet<ToolRegistry>();
 
 function stream(parts: LanguageModelV3StreamPart[], reason: 'stop' | 'tool-calls' = 'stop') {
   return {
@@ -89,10 +90,15 @@ async function createFixtureHost(): Promise<DaemonHost> {
     log: () => {},
     runtimeFactory: async (options) => {
       const backgroundManage = options?.backgroundManage;
-      if (options?.ownerNotify && !ownerNotifySeen.has(registry)) {
-        const { createNotifyOwnerTool } = await import('../src/tools/notify-owner.js');
-        registry.register(createNotifyOwnerTool(options.workspaceRoot ?? process.cwd(), options.ownerNotify));
-        ownerNotifySeen.add(registry);
+      if (options?.ownerMessageSend && !ownerMessageSendSeen.has(registry)) {
+        const { createSendMessageToOwnerTool } = await import('../src/tools/owner-communication.js');
+        registry.register(createSendMessageToOwnerTool(options.workspaceRoot ?? process.cwd(), options.ownerMessageSend));
+        ownerMessageSendSeen.add(registry);
+      }
+      if (options?.ownerInboxRead && !ownerInboxReadSeen.has(registry)) {
+        const { createReadOwnerMessagesTool } = await import('../src/tools/owner-communication.js');
+        registry.register(createReadOwnerMessagesTool(options.ownerInboxRead));
+        ownerInboxReadSeen.add(registry);
       }
       const sessionMessage = options?.sessionMessage;
       const subagent = options?.subagent;
@@ -230,18 +236,13 @@ async function replaceFixtureHost() {
 }
 
 describe('shared host and session IPC', () => {
-  it('delivers ordered assistant replies only to their source and resumes failed chunks without replaying confirmed ones', async () => {
+  it('reads Telegram owner messages through the inbox tool and only sends replies through the explicit tool', async () => {
     const settings = await import('../src/settings.js');
     const store = settings.defaultSettings();
     store.telegram = { enabled: true, tokenEnv: 'FTG_REPLY_TOKEN', workspaceRoot: root, chatId: '42', userId: '7' };
     settings.saveSettings(store);
     vi.stubEnv('FTG_REPLY_TOKEN', '123456:fixture-reply-token-value-ok');
-    const { ActivityLedger } = await import('../src/activity-ledger.js');
-    const fixtureLedger = new ActivityLedger(join(root, 'state.db'));
-    fixtureLedger.setState('telegram:routed-to-custodian', 'sent');
-    fixtureLedger.close();
     const sent: string[] = [];
-    let attempts = 0;
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: unknown, init?: RequestInit) => {
@@ -255,14 +256,9 @@ describe('shared host and session IPC', () => {
             init?.signal?.addEventListener('abort', () => reject(new Error('Fixture polling aborted.')), { once: true });
           });
         if (method === 'sendMessage') {
-          attempts++;
-          if (attempts === 2)
-            return new Response(JSON.stringify({ ok: false, description: 'Fixture send failure', parameters: { retry_after: 1 } }), {
-              status: 429,
-            });
           expect(body.chat_id).toBe('42');
           sent.push(String(body.text));
-          result = { message_id: attempts };
+          result = { message_id: sent.length };
         }
         return new Response(JSON.stringify({ ok: true, result }));
       }),
@@ -270,103 +266,44 @@ describe('shared host and session IPC', () => {
     try {
       await requestHost('settings.reload');
       const viewer = await client();
-      registry.register({
-        providerId: 'host',
-        name: 'inspect',
-        description: 'Fixture',
-        inputSchema: { type: 'object', properties: {} },
-        effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
-        autoApprove: () => true,
-        execute: async () => ({ message: 'Private tool output' }),
-      });
-      const before = `Bakıyorum. ${'x'.repeat(4500)}\n`;
-      const final = 'Uzun yanıtın ardından gelen son parça.';
       model.doStream = vi
         .fn()
         .mockImplementationOnce(async () =>
-          stream(
-            [
-              { type: 'text-start', id: 'before' },
-              { type: 'text-delta', id: 'before', delta: before },
-              { type: 'text-end', id: 'before' },
-              { type: 'tool-call', toolCallId: 'inspect', toolName: 'inspect', input: '{}' },
-            ],
-            'tool-calls',
-          ),
+          stream([{ type: 'tool-call', toolCallId: 'read', toolName: 'read_owner_messages', input: '{}' }], 'tool-calls'),
         )
-        .mockImplementationOnce(async () => textStream(final));
-      await host.receiveTelegramMessage(1001, 'Inspect this');
-      type Event = { id: string; source: string; status: string; payload: Record<string, unknown> };
-      let notificationId = '';
-      await vi.waitFor(
-        async () => {
-          const events = (await requestHost('ledger.events')) as Event[];
-          const notification = events.find(
-            (event) =>
-              event.source === 'notification' &&
-              Array.isArray(event.payload.messages) &&
-              String(event.payload.messages[0]).startsWith('Bakıyorum.'),
-          );
-          expect(notification?.status).toBe('pending');
-          notificationId = notification!.id;
-        },
-        { timeout: 6000 },
-      );
-      expect(sent).toHaveLength(1);
-      model.doStream = vi.fn(async () => textStream('Second reply'));
-      await host.receiveTelegramMessage(1002, 'Second request');
-      await vi.waitFor(
-        async () => {
-          const events = (await requestHost('ledger.events')) as Event[];
-          expect(events.filter((event) => event.source === 'notification' && event.status === 'pending')).toHaveLength(2);
-        },
-        { timeout: 6000 },
-      );
-      expect(sent).toHaveLength(1);
-      await expect(requestHost('events.retry', { eventId: notificationId })).resolves.toEqual({ queued: true });
-      await vi.waitFor(
-        async () => {
-          const events = (await requestHost('ledger.events')) as Event[];
-          expect(events.filter((event) => event.source === 'notification' && event.status === 'delivered')).toHaveLength(2);
-        },
-        { timeout: 8000 },
-      );
-      expect(sent.join('')).toBe(before + final + 'Second reply');
-      expect(sent.join('')).not.toContain('Private tool output');
-      expect(sent.every((text) => text.length <= 4096)).toBe(true);
-      expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Bakıyorum.'))).toBe(
-        false,
-      );
-      const ordinaryReplyCount = sent.length;
-      await expect(
-        requestHost('background.manage', { input: { action: 'notify', message: 'Terminal-only alert' }, workspaceRoot: root }),
-      ).resolves.toMatchObject({ status: 'delivered', channel: 'terminal' });
-      expect(sent).toHaveLength(ordinaryReplyCount);
-      model.doStream = vi
-        .fn()
-        .mockImplementationOnce(async () =>
-          stream(
+        .mockImplementationOnce(async (options: { prompt?: unknown }) => {
+          expect(JSON.stringify(options.prompt)).toContain('Inspect this');
+          expect(JSON.stringify(options.prompt)).toContain('owner message via Telegram');
+          return stream(
             [
               {
                 type: 'tool-call',
-                toolCallId: 'notify',
-                toolName: 'notify_owner',
-                input: JSON.stringify({ channel: 'telegram', message: 'Proactive owner alert' }),
+                toolCallId: 'send',
+                toolName: 'send_message_to_owner',
+                input: JSON.stringify({ text: 'Explicit Telegram answer' }),
               },
             ],
             'tool-calls',
-          ),
-        )
-        .mockImplementationOnce(async () => textStream('Notification sent.'));
-      await viewer.sendMessage({ text: 'Send a separate owner alert', images: [] }, preferences);
+          );
+        })
+        .mockImplementationOnce(async () => textStream('This final text stays in the terminal.'));
+      await host.receiveTelegramMessage(1001, 'Inspect this');
+      type Event = { id: string; source: string; status: string; payload: Record<string, unknown> };
       await vi.waitFor(
-        () =>
-          expect(
-            viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Notification sent.'),
-          ).toBe(true),
-        { timeout: 5000 },
+        async () => {
+          const events = (await requestHost('ledger.events')) as Event[];
+          expect(events.some((event) => event.source === 'owner-inbox' && event.status === 'delivered')).toBe(true);
+          expect(events.some((event) => event.source === 'notification' && event.status === 'delivered')).toBe(true);
+        },
+        { timeout: 8000 },
       );
-      expect(sent.slice(ordinaryReplyCount)).toEqual(['Proactive owner alert']);
+      expect(sent).toEqual(['Explicit Telegram answer']);
+      expect(sent).not.toContain('This final text stays in the terminal.');
+      expect(
+        viewer
+          .getSnapshot()
+          .session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'This final text stays in the terminal.'),
+      ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -546,7 +483,7 @@ describe('shared host and session IPC', () => {
     await vi.waitFor(() => expect(shared.getSnapshot().session.entries).toHaveLength(1));
     const isolated = await client({ isolatedSession: true });
     expect(isolated.getSnapshot().session.id).not.toBe(sharedId);
-    const longAnswer = 'Large Turkish ı ş 👋 output\n'.repeat(4000);
+    const longAnswer = 'Large sample café naïve 👋 output\n'.repeat(4000);
     model.doStream = async () => textStream(longAnswer);
     await isolated.sendMessage({ text: 'Isolated fixture request', images: [] }, preferences);
     await vi.waitFor(() => {
@@ -745,7 +682,18 @@ describe('shared host and session IPC', () => {
     const viewer = await client();
     const mainId = viewer.getSnapshot().session.id;
 
-    await host.receiveTelegramMessage(11, 'Merhaba from Telegram');
+    const prompts: string[] = [];
+    model.doStream = vi
+      .fn()
+      .mockImplementationOnce(async () =>
+        stream([{ type: 'tool-call', toolCallId: 'read', toolName: 'read_owner_messages', input: '{}' }], 'tool-calls'),
+      )
+      .mockImplementation(async (options: { prompt?: unknown }) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return textStream('Fixture response');
+      });
+
+    await host.receiveTelegramMessage(11, 'Hello from Telegram');
 
     await vi.waitFor(() =>
       expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Fixture response')).toBe(
@@ -753,9 +701,10 @@ describe('shared host and session IPC', () => {
       ),
     );
     expect(viewer.getSnapshot().session.id).toBe(mainId);
-    expect(viewer.getSnapshot().session.entries).toContainEqual(
-      expect.objectContaining({ kind: 'user', text: 'Merhaba from Telegram', source: 'telegram' }),
-    );
+    // The inbox wake signal joins the shared thread as a user entry…
+    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'owner-inbox')).toBe(true);
+    // …while the actual Telegram text only surfaces through an explicit inbox read.
+    expect(prompts.some((prompt) => prompt.includes('Hello from Telegram') && prompt.includes('owner message via Telegram'))).toBe(true);
   }, 10_000);
 
   it('delivers the setup test message to the paired owner chat and refuses it before pairing', async () => {
@@ -838,18 +787,19 @@ describe('shared host and session IPC', () => {
     model.doStream = vi.fn(async () => textStream('Fixture response'));
     await host.receiveTelegramMessage(23, '/stop');
 
-    await vi.waitFor(
-      () =>
-        expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Second queued request')).toBe(
-          true,
-        ),
-      { timeout: 8_000 },
-    );
     await vi.waitFor(() =>
       expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Fixture response')).toBe(
         true,
       ),
     );
+    // The queued inbox message survives the stop: still present in the owner inbox ledger…
+    type InboxEvent = { source: string; status: string; payload: { text?: unknown } };
+    const events = (await requestHost('ledger.events')) as InboxEvent[];
+    const inboxTexts = events.filter((event) => event.source === 'owner-inbox').map((event) => event.payload.text);
+    expect(inboxTexts).toContain('First long request');
+    expect(inboxTexts).toContain('Second queued request');
+    // …and its wake still ran on the shared thread after the stop.
+    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'owner-inbox')).toBe(true);
   }, 15_000);
 
   it('removes the reply keyboard when the owner chat is unpaired', async () => {

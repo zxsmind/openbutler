@@ -4,13 +4,30 @@ Ranite is a general-purpose AI agent for the terminal. It can use local tools, M
 
 ## Install
 
-Requires Node.js 22.13 or newer.
+Pick the installer for your system. It downloads a self-contained package
+with its own Node.js runtime — no Node.js, npm, or admin rights needed — and
+sets up the `ranite` command:
+
+Linux (x64/arm64) and macOS (bash, zsh, fish; Windows users in Git Bash too):
 
 ```sh
-npm install --global ranite
+curl -fsSL https://raw.githubusercontent.com/zxsmind/ranite/main/install.sh | bash
 ```
 
-The package installs the `ranite` executable into npm's global binary directory. Standard Node.js/npm installations add that directory to `PATH`, so `ranite` works from any terminal directory. If your npm uses a custom prefix, check it with `npm prefix --global`; its `bin` directory on macOS/Linux, or the prefix directory on Windows, must be on `PATH`. Open a new terminal after changing `PATH`.
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
+```
+
+A specific release: `bash -s -- --version 0.1.0` for the shell installer, or
+download `install.ps1` first and run `.\install.ps1 -Version 0.1.0`.
+`--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
+Both installers verify the result with `ranite --version`; restart the
+terminal afterwards so the updated PATH takes effect.
+
+Published builds: Windows x64 today; Linux x64 and arm64 archives join the same
+release next, macOS follows in a later release.
 
 Configure a provider and model once:
 
@@ -57,9 +74,31 @@ ranite permissions        Show the current permission mode
 ranite restart            Restart the background host using the installed code
 ranite telegram setup     Connect the owner Telegram channel
 ranite --help             Show all commands
+ranite --version          Print the installed version
 ```
 
 `ranite restart` stops active runs, saves sessions, and waits for the previous host to exit before starting the replacement. Open sessions reconnect and restore their history. Closing the TUI only detaches it; use this command after updating Ranite to reload the background host.
+
+## Building release archives
+
+Maintainers produce one archive per supported platform. On each target
+machine (Windows x64, Linux x64, Linux arm64), from a clean checkout:
+
+```sh
+node scripts/package-release.mjs --out release
+```
+
+The script compiles the app, prunes development dependencies, downloads the
+matching official Node.js runtime (checksum-verified), and writes
+`release/ranite-<version>-<os>-<arch>.zip` (Windows) or `.tar.gz` (Linux).
+Upload every archive to the same release tag before announcing it:
+
+```sh
+gh release upload v0.1.0 release/ranite-0.1.0-*
+```
+
+The installers resolve per-platform files from the GitHub release, so all
+archives must be attached before the install commands work everywhere.
 
 ## Telegram channel
 
@@ -71,7 +110,7 @@ ranite telegram setup
 
 It asks for the environment variable holding the bot token (paste the token from `@BotFather` when prompted; the value is validated live and never stored in the settings file) and Telegram's default workspace scope, then starts the host, waits while you send the one-time pairing command to the bot, and delivers a test message to prove the channel works end to end. That setting selects the scope of Telegram turns; it does not define Ranite's identity. In the chat, `/approvals` re-sends pending approvals and `/stop` stops the current run while preserving queued messages. A live draft shows current output and short tool status with a Stop control. Completed assistant messages return to their original Telegram chat in order; tool results and private reasoning stay separate from those replies. Long messages are split without discarding text, and confirmed chunks are not replayed after a later chunk fails.
 
-The host tells the agent which channel supplied a request, where its answer belongs, and whether an owner terminal and Telegram are available. Compatible messages can steer the custodian after a complete tool batch; a workspace, reply route, or turn-preference change waits as a followup. Background work uses `notify_owner` for separate proactive messages: `auto` prefers a connected owner terminal, then the paired Telegram chat; an explicit `telegram` or `terminal` selects that owner channel. Ordinary replies never broadcast to every connected channel. On Windows, a new host can read a token already saved in the user environment even when its launching shell has an older environment snapshot.
+The host tells the agent which channel supplied a request, where its answer belongs, and whether an owner terminal and Telegram are available. Compatible messages can steer the custodian after a complete tool batch; a workspace, reply route, or turn-preference change waits as a followup. Background work uses `send_message_to_owner` for separate proactive messages: `auto` prefers a connected owner terminal, then the paired Telegram chat; an explicit `telegram` or `terminal` selects that owner channel. Ordinary replies never broadcast to every connected channel. On Windows, a new host can read a token already saved in the user environment even when its launching shell has an older environment snapshot.
 
 Further commands: `ranite telegram status`, `ranite telegram pair` (fresh pairing code), `ranite telegram unpair` (forget the chat, keep the channel polling), `ranite telegram disable` (stop the channel, keep the settings), `ranite telegram reset` (remove the channel, settings, and — with `--remove-env` — the token from the user environment).
 
@@ -95,7 +134,7 @@ MEMORY/
 ├── user/
 │   ├── profile.md                # Stable cross-workspace user facts
 │   └── notes/
-│       └── workspace-file-hygiene.md
+│       └── editor-settings.md
 └── workspaces/
     └── <stable-workspace-key>/
         ├── profile.md            # Current workspace facts
@@ -109,24 +148,24 @@ Profiles and topic notes use the same document contract: YAML metadata, an H1 do
 
 ```md
 ---
-type: feedback
-title: Workspace File Hygiene
-description: User preferences for temporary working artifacts.
+type: user
+title: Editor Settings
+description: Preferred indentation and word wrap for source files.
 ---
-# Workspace File Hygiene
+# Editor Settings
 
-## Temporary Artifacts
+## Source Files
 
-### Storage Location
+### Indentation
 
 #### Summary
-Use the operating system temporary directory for research scripts.
+Use spaces for indentation and match the width the project already uses.
 
 #### Details
-Temporary artifacts should be removed after the task is complete.
+Word wrap stays off in editors opened on repository files so diffs and long strings stay aligned.
 
 #### Evidence
-An explicit user correction; record its date if known.
+A preference stated once while starting a new project; record the number if a project fixes one.
 ```
 
 `type` is `user`, `feedback`, `project`, or `reference`. User profiles use `user`; workspace profiles use `project`. Native memory writes validate metadata, names, and heading structure before replacing a file. These checks apply to Ranite's memory storage; ordinary file writes remain general-purpose.

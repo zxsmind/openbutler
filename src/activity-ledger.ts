@@ -318,9 +318,13 @@ export class ActivityLedger {
     const result = this.database
       .prepare(
         `
-      UPDATE ranite_events SET status = CASE WHEN source = 'notification' THEN 'pending' ELSE 'interrupted' END,
-        error = 'Host stopped while this event was being processed.', updated_at = ?
+      UPDATE ranite_events SET
+        status = CASE WHEN source IN ('notification','owner-inbox') OR (source = 'telegram' AND kind LIKE 'inbox.%') THEN 'pending' ELSE 'interrupted' END,
+        error = CASE WHEN source = 'owner-inbox' THEN 'Owner message is available for retry after host restart.' ELSE 'Host stopped while this event was being processed.' END,
+        updated_at = ?
       WHERE status = 'processing'
+        OR (source = 'owner-inbox' AND status = 'delivered'
+          AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || ranite_events.event_id))
     `,
       )
       .run(now);
@@ -396,7 +400,17 @@ export class ActivityLedger {
     this.assertOpen();
     const rows = this.database
       .prepare(
-        "SELECT * FROM ranite_events WHERE status = 'pending' ORDER BY CASE source WHEN 'telegram' THEN 0 WHEN 'notification' THEN 1 ELSE 2 END, received_at, rowid LIMIT ?",
+        "SELECT * FROM ranite_events WHERE status = 'pending' AND source != 'owner-inbox' ORDER BY CASE source WHEN 'telegram' THEN 0 WHEN 'notification' THEN 1 ELSE 2 END, received_at, rowid LIMIT ?",
+      )
+      .all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as unknown as EventDbRow[];
+    return rows.map(eventFromRow);
+  }
+
+  ownerInboxEvents(limit = 10): ObservedEventRow[] {
+    this.assertOpen();
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM ranite_events WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') ORDER BY received_at, rowid LIMIT ?",
       )
       .all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);

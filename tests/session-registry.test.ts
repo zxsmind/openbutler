@@ -389,8 +389,8 @@ describe('the recent sessions block', () => {
       const saved = saveSession({
         title: `Heavy ${index}`,
         entries: [
-          { kind: 'user', text: 'ş'.repeat(240) },
-          { kind: 'assistant', text: 'ğ'.repeat(240) },
+          { kind: 'user', text: 'é'.repeat(240) },
+          { kind: 'assistant', text: 'è'.repeat(240) },
         ],
       });
       const stamp = new Date(Date.now() - 600_000 + index * 1_000);

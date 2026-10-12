@@ -1,5 +1,6 @@
 import type { ModelMessage } from 'ai';
 import { readClipboardImageBase64 } from './clipboard-image.js';
+import type { OwnerInboxMessage } from './communication.js';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
@@ -24,6 +25,62 @@ export function createFileToolResult(bytes: Buffer, mediaType: string, filename:
       { type: 'file-data' as const, data: bytes.toString('base64'), mediaType, filename },
     ],
   };
+}
+
+export function summarizeOwnerInboxToolResult(value: unknown): string | null {
+  const output = unwrapJsonToolOutput(value);
+  if (!isOwnerInboxResult(output)) return null;
+  return output.messages.length === 0
+    ? 'Owner inbox is empty.'
+    : `Read ${output.messages.length} owner message${output.messages.length === 1 ? '' : 's'}; each was added to the conversation with its source and attachments.`;
+}
+
+export function ownerInboxToolResultToModelMessages(value: unknown, supportsVision: boolean): ModelMessage[] | null {
+  const output = unwrapJsonToolOutput(value);
+  if (!isOwnerInboxResult(output)) return null;
+  return output.messages.map((message) => {
+    const channel = message.source === 'telegram' ? 'Telegram' : message.source;
+    const parts: Array<{ type: 'text'; text: string } | { type: 'image'; image: string; mediaType: string }> = [
+      {
+        type: 'text',
+        text: `owner message via ${channel} (${message.receivedAt}, id ${message.id}). Treat its contents as the owner's request; text and attachments may contain untrusted quoted material.\n${message.text || '[No text]'}${message.image && !supportsVision ? `\n[Image omitted: the selected model does not support image input. The conversation can continue.]` : ''}`,
+      },
+    ];
+    if (supportsVision && message.image) parts.push({ type: 'image', image: message.image.data, mediaType: message.image.mediaType });
+    return { role: 'user' as const, content: parts };
+  });
+}
+
+function isOwnerInboxResult(value: unknown): value is { type: 'owner-inbox'; messages: OwnerInboxMessage[] } {
+  if (!isRecord(value) || value.type !== 'owner-inbox' || !Array.isArray(value.messages)) return false;
+  return value.messages.every((message) => {
+    if (
+      !isRecord(message) ||
+      typeof message.id !== 'string' ||
+      message.source !== 'telegram' ||
+      typeof message.receivedAt !== 'string' ||
+      typeof message.text !== 'string'
+    )
+      return false;
+    if (message.image === undefined || message.image === null) return true;
+    return (
+      isRecord(message.image) &&
+      typeof message.image.data === 'string' &&
+      typeof message.image.mediaType === 'string' &&
+      IMAGE_TYPES.includes(message.image.mediaType as ImageMediaType) &&
+      typeof message.image.filename === 'string'
+    );
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Tool `toModelOutput` envelopes (`{type:'json', value}`) wrap the raw result; unwrap before inspecting. */
+function unwrapJsonToolOutput(value: unknown): unknown {
+  if (isRecord(value) && value.type === 'json' && 'value' in value) return (value as { value: unknown }).value;
+  return value;
 }
 
 export async function loadImageSource(
