@@ -66,6 +66,185 @@ say() {
   printf '%s\n' "$1"
 }
 
+# ---- One-bar progress: sequential phases, every number measured ----
+# The bar stays on a single terminal line across download and extraction.
+# Each phase shows its step (1/2, 2/2) with a measured fraction; nothing is
+# staged or estimated. Without a terminal, downloads keep curl's own meter
+# and extraction stays silent.
+BAR_TTY=""
+if [ -t 2 ]; then BAR_TTY=1; fi
+
+# Formats a byte count as megabytes with one decimal, using shell arithmetic only.
+fmt_mb() {
+  printf '%d.%d' "$(( $1 / 1048576 ))" "$(( ($1 % 1048576) * 10 / 1048576 ))"
+}
+
+# render_step <step> <steps> <label> <done_bytes> <total_bytes|''>.
+# An empty total renders a measured counter with no percentage, never a guess.
+# Writes to stderr so stdout stays clean for piping.
+render_step() {
+  rs_step="$1"
+  rs_steps="$2"
+  rs_label="$3"
+  rs_done="$4"
+  rs_total="$5"
+  rs_width=30
+  if [ -z "$rs_total" ] || [ "$rs_total" = "0" ]; then
+    rs_empty="$(printf '%30s' '')"
+    printf '\r[%s] Step %s/%s: %s (%s MB)' "$(printf '%s' "$rs_empty" | tr ' ' '-')" "$rs_step" "$rs_steps" "$rs_label" "$(fmt_mb "$rs_done")" >&2
+    return
+  fi
+  rs_percent=$(( rs_done * 100 / rs_total ))
+  if [ "$rs_percent" -gt 100 ]; then rs_percent=100; fi
+  rs_filled=$(( rs_percent * rs_width / 100 ))
+  rs_empty_n=$(( rs_width - rs_filled ))
+  rs_bar="$(printf "%${rs_filled}s" '')"
+  rs_bar="$(printf '%s' "$rs_bar" | tr ' ' '=')"
+  rs_rest="$(printf "%${rs_empty_n}s" '')"
+  rs_rest="$(printf '%s' "$rs_rest" | tr ' ' '-')"
+  printf '\r[%s%s] %3d%% Step %s/%s: %s (%s/%s MB)' "$rs_bar" "$rs_rest" "$rs_percent" "$rs_step" "$rs_steps" "$rs_label" "$(fmt_mb "$rs_done")" "$(fmt_mb "$rs_total")" >&2
+}
+
+# File size in bytes, or 0 when unreadable.
+file_bytes() {
+  fb_out="$(wc -c <"$1" 2>/dev/null)" || {
+    echo 0
+    return
+  }
+  set -- $fb_out
+  case "$1" in
+    '' | *[!0-9]*) echo 0 ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Directory size in bytes via du kilobytes, or 0 when unreadable.
+dir_bytes() {
+  db_out="$(du -sk "$1" 2>/dev/null)" || {
+    echo 0
+    return
+  }
+  set -- $db_out
+  case "$1" in
+    '' | *[!0-9]*) echo 0 ;;
+    *) echo $(( $1 * 1024 )) ;;
+  esac
+}
+
+# Archive size in bytes from a HEAD request, or empty when unavailable.
+head_bytes() {
+  hb_out="$(curl -fsSLI "$1" 2>/dev/null | tr -d '\r' | grep -i -o 'content-length: *[0-9]*' | grep -o '[0-9]*' | tail -n 1)"
+  case "$hb_out" in
+    '' | *[!0-9]* | 0) echo '' ;;
+    *) echo "$hb_out" ;;
+  esac
+}
+
+# Uncompressed payload size of an archive in bytes, or empty when it cannot
+# be determined without extracting.
+archive_payload_bytes() {
+  case "$1" in
+    *.tar.gz | *.tgz)
+      set -- $(gzip -l "$1" 2>/dev/null | tail -n 1)
+      case "$2" in
+        '' | *[!0-9]*) echo '' ;;
+        *) echo "$2" ;;
+      esac
+      ;;
+    *.zip)
+      set -- $(unzip -l "$1" 2>/dev/null | tail -n 1)
+      case "$1" in
+        '' | *[!0-9]*) echo '' ;;
+        *) echo "$1" ;;
+      esac
+      ;;
+    *) echo '' ;;
+  esac
+}
+
+# Downloads a file as step <step>/<steps> of the single install bar.
+# Falls back to curl's own meter when the size is unknown or stderr is not
+# a terminal. Sets DL_TOTAL to the measured archive size.
+download_phase() {
+  dl_step="$1"
+  dl_steps="$2"
+  dl_url="$3"
+  dl_output="$4"
+  if [ -z "$BAR_TTY" ]; then
+    curl -fL --progress-bar -o "$dl_output" "$dl_url"
+    BG_RET=$?
+    DL_TOTAL="$(file_bytes "$dl_output")"
+    return "$BG_RET"
+  fi
+  DL_TOTAL="$(head_bytes "$dl_url")"
+  case "$DL_TOTAL" in
+    '')
+      curl -fL --progress-bar -o "$dl_output" "$dl_url"
+      BG_RET=$?
+      DL_TOTAL="$(file_bytes "$dl_output")"
+      return "$BG_RET"
+      ;;
+  esac
+  : >"$dl_output"
+  trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
+  curl -fL -s -o "$dl_output" "$dl_url" &
+  BG_PID=$!
+  while kill -0 "$BG_PID" 2>/dev/null; do
+    render_step "$dl_step" "$dl_steps" Downloading "$(file_bytes "$dl_output")" "$DL_TOTAL"
+    sleep 1
+  done
+  BG_RET=0
+  wait "$BG_PID" || BG_RET=$?
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  if [ "$BG_RET" -ne 0 ]; then
+    printf '\n' >&2
+    return "$BG_RET"
+  fi
+  render_step "$dl_step" "$dl_steps" Downloading "$(file_bytes "$dl_output")" "$DL_TOTAL"
+}
+
+# Extracts an archive as the final step of the single install bar, measuring
+# written bytes against the payload size. Without a terminal the extractor
+# runs silently in the foreground.
+extract_phase() {
+  ex_step="$1"
+  ex_steps="$2"
+  ex_archive="$3"
+  ex_dest="$4"
+  case "$ex_archive" in
+    *.zip) archive_ext=".zip" ;;
+    *) archive_ext=".tar.gz" ;;
+  esac
+  if [ -z "$BAR_TTY" ]; then
+    case "$ex_archive" in
+      *.zip) unzip -q "$ex_archive" -d "$ex_dest" ;;
+      *) tar -xzf "$ex_archive" -C "$ex_dest" ;;
+    esac
+    return $?
+  fi
+  EX_TOTAL="$(archive_payload_bytes "$ex_archive")"
+  trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
+  case "$ex_archive" in
+    *.zip) unzip -q "$ex_archive" -d "$ex_dest" & ;;
+    *) tar -xzf "$ex_archive" -C "$ex_dest" & ;;
+  esac
+  BG_PID=$!
+  while kill -0 "$BG_PID" 2>/dev/null; do
+    render_step "$ex_step" "$ex_steps" Extracting "$(dir_bytes "$ex_dest")" "$EX_TOTAL"
+    sleep 1
+  done
+  BG_RET=0
+  wait "$BG_PID" || BG_RET=$?
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  if [ "$BG_RET" -ne 0 ]; then
+    printf '\n' >&2
+    echo "Error: extraction failed." >&2
+    return 1
+  fi
+  render_step "$ex_step" "$ex_steps" Extracting "$(dir_bytes "$ex_dest")" "$EX_TOTAL"
+  printf '\n' >&2
+}
+
 installed_version() {
   if [ -x "$BIN_DIR/$APP" ]; then
     "$BIN_DIR/$APP" --version 2>/dev/null || true
@@ -149,21 +328,20 @@ tmp_dir="${TMPDIR:-/tmp}/ranite_install_$$"
 mkdir -p "$tmp_dir"
 trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
+PHASE_STEPS=2
 if [ -n "$binary_path" ]; then
   say "Installing ranite from $binary_path"
   archive="$tmp_dir/$(basename "$binary_path")"
   cp "$binary_path" "$archive"
+  PHASE_STEPS=1
 else
   say "Downloading ranite $specific_version ($target)"
   archive="$tmp_dir/$filename"
-  curl -fL --progress-bar -o "$archive" "$url"
+  download_phase 1 "$PHASE_STEPS" "$url" "$archive"
 fi
 
 mkdir -p "$tmp_dir/extract"
-case "$archive" in
-  *.zip) archive_ext=".zip"; unzip -q "$archive" -d "$tmp_dir/extract" ;;
-  *) archive_ext=".tar.gz"; tar -xzf "$archive" -C "$tmp_dir/extract" ;;
-esac
+extract_phase "$PHASE_STEPS" "$PHASE_STEPS" "$archive" "$tmp_dir/extract"
 
 mkdir -p "$INSTALL_DIR"
 cp -r "$tmp_dir/extract/$APP/." "$INSTALL_DIR/"
