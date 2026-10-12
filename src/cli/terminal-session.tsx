@@ -185,6 +185,31 @@ function createMouseInputBridge(): MouseInputBridge {
   };
 }
 
+const RUNNING_WORD = 'running';
+
+/** A bright highlight that sweeps across "running", with a cycling spinner glyph. */
+function RunningIndicator({ tokens }: { tokens: UiTokens }) {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setFrame((value) => (value + 1) % 1_000_000), 110);
+    return () => clearInterval(timer);
+  }, []);
+  const spinner = glyphs.spinner[frame % glyphs.spinner.length]!;
+  const highlight = frame % (RUNNING_WORD.length + 3);
+  return (
+    <Text>
+      <Text color={tokens.accent} bold>
+        {`${spinner} `}
+      </Text>
+      {Array.from(RUNNING_WORD, (character, index) => (
+        <Text key={index} {...(index === highlight ? { color: tokens.accent, bold: true } : { dimColor: true })}>
+          {character}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
 function SessionScreen({
   controller: parentController,
   mouseInput,
@@ -481,6 +506,12 @@ function SessionScreen({
     [],
   );
 
+  useEffect(() => {
+    if (!composerNotice) return;
+    const timer = setTimeout(() => setComposerNotice(null), 5_000);
+    return () => clearTimeout(timer);
+  }, [composerNotice]);
+
   const addEntry = useCallback(
     (entry: Entry) => {
       controller.addEntry(entry);
@@ -753,18 +784,17 @@ function SessionScreen({
               : null;
   }
   if (queuedMessageCount > 0) approvalNote = `${approvalNote ? approvalNote + ' · ' : ''}${queuedMessageCount} queued`;
-  const footerShortcuts = `${
-    pendingQuestion
-      ? pendingQuestionOptions.length > 0
-        ? '↑/↓ choose · Enter answer · Esc dismiss'
-        : 'Type an answer · Enter send · Esc dismiss'
-      : pending
-        ? '←/→ approve · Enter confirm'
-        : busy
-          ? `${glyphs.spinner[0]} running · Esc to stop · Enter to queue`
-          : 'Enter send · / commands · Ctrl+C quit'
-  } · Home/End history${!pending && !pendingQuestion && runtime.supportsVision ? ' · Ctrl+V image' : ''}${!pending && !pendingQuestion && imageAttachments.length > 0 ? ' · Backspace removes the last image' : ''}`;
-  const footerMeta = `${runtime.modelName} · ${activeReasoningLabel} · ${formatContextIndicator(activeSession.contextTokens, activeSession.contextWindowTokens)}`;
+  const busyHint = 'Esc to stop · Enter to queue';
+  const footerHint = pendingQuestion
+    ? pendingQuestionOptions.length > 0
+      ? '↑/↓ choose · Enter answer · Esc dismiss'
+      : 'Type an answer · Enter send · Esc dismiss'
+    : pending
+      ? '←/→ approve · Enter confirm'
+      : busy
+        ? `running · ${busyHint}`
+        : '';
+  const footerMeta = `${runtime.modelId} · ${activeReasoningLabel} · ${formatContextIndicator(activeSession.contextTokens, activeSession.contextWindowTokens)}`;
   const approvalPanelBottom = layoutMetrics.hasMeasured ? layoutMetrics.composerTop + COMPOSER_SLOT_HEIGHT : rows - 5;
   const approvalPanelTop = Math.max(0, approvalPanelBottom - approvalPanelHeight);
   useEffect(() => {
@@ -1474,18 +1504,18 @@ function SessionScreen({
           </Text>
         </Box>
       ) : null}
-      {escapeWarning ? (
-        <Box width="100%" justifyContent="center" marginBottom={1} flexShrink={0}>
-          <Text color="yellow">{escapeWarning}</Text>
+      <Box width="100%" flexDirection="row" justifyContent="space-between" flexShrink={0}>
+        <Box flexDirection="row" flexShrink={1}>
+          {pendingQuestion || pending ? (
+            <Text dimColor>{footerHint}</Text>
+          ) : busy ? (
+            <>
+              <RunningIndicator tokens={tokens} />
+              <Text dimColor>{` · ${busyHint}`}</Text>
+            </>
+          ) : null}
         </Box>
-      ) : null}
-      <Box width="100%" flexDirection="column" flexShrink={0}>
-        <Box width="100%" justifyContent="space-between" flexShrink={0}>
-          <Text dimColor>{footerShortcuts}</Text>
-          <Text dimColor>{clipped(footerMeta, Math.max(8, composerWidth - terminalTextWidth(footerShortcuts) - 2))}</Text>
-        </Box>
-        {sessionSaveError ? <Text color={tokens.error}>Session auto-save failed: {clipped(sessionSaveError, 120)}</Text> : null}
-        {composerNotice ? <Text color={tokens.warning}>{composerNotice}</Text> : null}
+        <Text dimColor>{clipped(footerMeta, Math.max(8, composerWidth - terminalTextWidth(footerHint) - 2))}</Text>
       </Box>
 
       {pending ? (
@@ -1739,6 +1769,16 @@ function SessionScreen({
               })}
             </Box>
             <Text dimColor>↑/↓ select · Type to search · Enter open · Esc close</Text>
+          </Box>
+        </Box>
+      ) : null}
+
+      {sessionSaveError || composerNotice || escapeWarning ? (
+        <Box position="absolute" top={0} left={0} width="100%" justifyContent="center">
+          <Box flexDirection="column" backgroundColor={tokens.surface} paddingX={1} flexShrink={0}>
+            {sessionSaveError ? <Text color={tokens.error}>Session auto-save failed: {clipped(sessionSaveError, 120)}</Text> : null}
+            {composerNotice ? <Text color={tokens.warning}>{composerNotice}</Text> : null}
+            {!composerNotice && escapeWarning ? <Text color="yellow">{escapeWarning}</Text> : null}
           </Box>
         </Box>
       ) : null}
