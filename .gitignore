@@ -26,6 +26,7 @@ state2048.json
 # Local tooling artifacts
 .playwright-mcp/
 __pycache__/
+scripts/release.mjs
 
 # Development documents stay off the public tree; only documentation that ships
 # with the product is tracked. New working notes are excluded by default.
