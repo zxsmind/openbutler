@@ -51,9 +51,9 @@ import type { McpServerRequest } from './tools/mcp.js';
 const DEFAULT_MODEL_LIMIT = 200;
 
 function usage(): void {
-  ui.line(`${ui.color.bold('Usage')}  ranite [options]`);
+  ui.line('Usage  ranite [options]');
   ui.line();
-  ui.line(`${ui.color.bold('Commands:')}`);
+  ui.line('Commands:');
   printHelpRows([
     ['ranite', 'Open an interactive terminal session', '[default]'],
     ['ranite setup', 'First-run wizard. Saves once at the end.'],
@@ -73,7 +73,7 @@ function usage(): void {
     ['ranite about', 'Version, runtime, configuration paths.'],
   ]);
   ui.line();
-  ui.line(`${ui.color.bold('Options:')}`);
+  ui.line('Options:');
   printHelpRows([
     ['--workspace <path>', 'Select this client’s workspace scope for the shared custodian.', '[string]'],
     ['--c "<request>"', 'Ask the agent; it can select available tools.', '[string]'],
@@ -90,9 +90,7 @@ function printHelpRows(rows: Array<[string, string, string?]>) {
   const nameWidth = Math.max(...rows.map(([name]) => name.length));
   const descWidth = Math.max(...rows.map(([, description]) => description.length));
   for (const [name, description, tag = ''] of rows) {
-    ui.line(
-      `  ${ui.color.cyan(name.padEnd(nameWidth))}  ${ui.color.dim(description.padEnd(descWidth))}${tag ? `  ${ui.color.dim(tag)}` : ''}`,
-    );
+    ui.line(`  ${name.padEnd(nameWidth)}  ${description.padEnd(descWidth)}${tag ? `  ${tag}` : ''}`);
   }
 }
 
