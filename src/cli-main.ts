@@ -38,7 +38,7 @@ import {
 import type { McpServerState } from './settings.js';
 import { defaultModelIsUsable, readiness, summarizeProviders } from './cli/config-edit.js';
 import * as ui from './cli/ui.js';
-import { banner } from './cli/banner.js';
+
 import type { AgentSessionRuntimeView } from './agent-session.js';
 import type { ToolCallRequest } from './tools/registry.js';
 import type { McpServerRequest } from './tools/mcp.js';
@@ -51,7 +51,6 @@ import type { McpServerRequest } from './tools/mcp.js';
 const DEFAULT_MODEL_LIMIT = 200;
 
 function usage(): void {
-  banner();
   ui.line(`${ui.color.bold('Usage')}  ranite [options]`);
   ui.line();
   ui.line(`${ui.color.bold('Commands')}`);
@@ -142,7 +141,7 @@ async function runPermissions(requestedMode = ''): Promise<void> {
     } else if (activeHost) await requestHost('permissions.set-mode', { mode: settings.approvalMode });
     else saveSettings(settings);
   }
-  banner('permissions');
+
   ui.kv('Current mode', formatApprovalMode(settings.approvalMode));
   ui.info('Workspace paths run without prompts. Auto-review asks the selected model about actions outside the workspace.');
   ui.info('Use `ranite permissions full-access` to disable tool permission prompts.');
@@ -399,7 +398,7 @@ async function runSkills(parsed: Parsed): Promise<void> {
     ? resolveWorkspace(parsed.flags.get('workspace')!)
     : (loadSettings().defaultWorkspaceRoot ?? getDataPath('custodian'));
   const skills = discoverSkills(workspaceRoot);
-  banner('skills');
+
   if (skills.length === 0) {
     ui.info('No Agent Skills found.');
     for (const root of getSkillRoots(workspaceRoot)) ui.kv(root.scope, root.path);
@@ -561,7 +560,6 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
 
 async function runSession(workspaceRoot: string): Promise<void> {
   if (!(await defaultModelReady())) {
-    banner('setup');
     const { runSetup } = await import('./cli/setup.js');
     if (!(await runSetup())) return;
     if (!(await defaultModelReady())) return;
@@ -716,7 +714,7 @@ function runAbout(): void {
 
 async function runTasks(parsed: Parsed): Promise<void> {
   const action = parsed.words[0] ?? 'list';
-  banner('background tasks');
+
   if (action === 'capabilities') {
     const { backgroundCapabilities } = await import('./tools/background.js');
     ui.line(JSON.stringify(backgroundCapabilities, null, 2));
@@ -995,7 +993,7 @@ async function verifySetupToken(token: string, envName?: string): Promise<void> 
 
 async function runTelegram(parsed: Parsed): Promise<void> {
   const action = parsed.words[0] ?? 'status';
-  banner('telegram');
+
   if (action === 'setup') {
     await runTelegramSetup(parsed);
     return;
@@ -1088,7 +1086,6 @@ async function runTelegram(parsed: Parsed): Promise<void> {
 }
 
 async function runSessionsCommand(parsed: Parsed): Promise<void> {
-  banner('sessions');
   if (parsed.words[0] === 'index') {
     await runSessionsIndex(parsed);
     return;
@@ -1194,7 +1191,6 @@ async function runLedgerPrune(kind: 'events' | 'actions', parsed: Parsed): Promi
 }
 
 async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Promise<void> {
-  banner(kind);
   if (parsed.words[0] === 'prune') {
     await runLedgerPrune(kind, parsed);
     return;
@@ -1222,7 +1218,6 @@ async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Pr
 }
 
 async function runDaemonCommand(action: string): Promise<void> {
-  banner('daemon');
   if (action === 'run') {
     await runDaemonProcess();
     return;
@@ -1306,13 +1301,11 @@ async function main(): Promise<void> {
   }
 
   if (parsed.flags.has('list-models') || parsed.command === '--list-models') {
-    banner('models');
     await runListModels(parsed);
     return;
   }
 
   if (parsed.flags.has('c') || parsed.command === '--c') {
-    banner('question');
     const question = questionFrom(parsed);
     if (!question) throw new Error('Write a request after --c.');
     ui.line(`  ${ui.color.dim('Request:')} ${question}`);
@@ -1334,13 +1327,12 @@ async function main(): Promise<void> {
       if (!process.stdin.isTTY) {
         throw new Error('setup needs an interactive terminal. Run it from a real terminal, or edit settings.yaml directly.');
       }
-      banner('setup');
+
       const { runSetup } = await import('./cli/setup.js');
       await runSetup();
       return;
     }
     case 'config': {
-      banner('settings');
       await runConfig();
       return;
     }
@@ -1362,7 +1354,7 @@ async function main(): Promise<void> {
     }
     case 'restart': {
       if (parsed.words.length > 0) throw new Error('Usage: ranite restart');
-      banner('restart');
+
       ui.info('Stopping active runs and saving sessions…');
       const status = await restartDaemon();
       ui.success(`Background host restarted (pid ${status.pid}).`);
@@ -1390,7 +1382,6 @@ async function main(): Promise<void> {
       return;
     }
     case 'about': {
-      banner();
       runAbout();
       return;
     }

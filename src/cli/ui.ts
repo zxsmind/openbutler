@@ -1,7 +1,6 @@
 import ora from 'ora';
 import { color, supportsColor } from './colors.js';
 
-export { banner, bannerLines, bannerWidth } from './banner.js';
 export { color, supportsColor };
 
 export const spinner = ora;
