@@ -73,6 +73,7 @@ ranite --c "<request>"    Run a one-shot request
 ranite permissions        Show the current permission mode
 ranite restart            Restart the background host using the installed code
 ranite telegram setup     Connect the owner Telegram channel
+ranite events / actions   Inspect the durable event and tool action ledger
 ranite --help             Show all commands
 ranite --version          Print the installed version
 ```

@@ -53,33 +53,47 @@ const DEFAULT_MODEL_LIMIT = 200;
 function usage(): void {
   ui.line(`${ui.color.bold('Usage')}  ranite [options]`);
   ui.line();
-  ui.line(`${ui.color.bold('Commands')}`);
-  const rows: Array<[string, string]> = [
-    ['setup', 'First-run wizard. Saves once at the end.'],
-    ['config', 'Show the current settings.'],
-    ['permissions [workspace|auto-review|full-access]', 'Choose the workspace and tool approval mode.'],
-    ['daemon', 'Start, inspect, stop, or install the background host.'],
-    ['restart', 'Restart the background host and reconnect open sessions.'],
-    ['mcp', 'Manage global MCP servers.'],
-    ['tasks', 'List, add, run, and open explicitly configured background tasks.'],
-    ['telegram', 'Configure and pair the owner Telegram channel.'],
-    ['events / actions', 'Inspect the durable event and tool action ledger.'],
-    ['sessions index', 'Build or refresh the derived session search index (--rebuild to redo it).'],
-    ['sessions prune', 'Delete session files older than an explicit cutoff (needs --yes).'],
-    ['--workspace <path>', 'Select this client’s workspace scope for the shared Ranite custodian.'],
-    ['workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
-    ['--c "<request>"', 'Ask the agent; it can select available tools.'],
-    ['--list-models', 'List models that can call tools. --filter, --limit, --provider.'],
-    ['--version', 'Print the installed version.'],
-    ['skills', 'List global and active-workspace Agent Skills.'],
-    ['about', 'Version, runtime, configuration paths.'],
-  ];
-  for (const [name, description] of rows) {
-    ui.line(`  ${ui.color.cyan(name.padEnd(38))} ${ui.color.dim(description)}`);
-  }
+  ui.line(`${ui.color.bold('Commands:')}`);
+  printHelpRows([
+    ['ranite', 'Open an interactive terminal session', '[default]'],
+    ['ranite setup', 'First-run wizard. Saves once at the end.'],
+    ['ranite config', 'Show the current settings.'],
+    ['ranite permissions [workspace|auto-review|full-access]', 'Choose the workspace and tool approval mode.'],
+    ['ranite daemon', 'Start, inspect, stop, or install the background host.'],
+    ['ranite restart', 'Restart the background host and reconnect open sessions.'],
+    ['ranite mcp', 'Manage global MCP servers.'],
+    ['ranite tasks', 'List, add, run, and open explicitly configured background tasks.'],
+    ['ranite telegram', 'Configure and pair the owner Telegram channel.'],
+    ['ranite events', 'Inspect the durable event ledger.'],
+    ['ranite actions', 'Inspect the durable tool action ledger.'],
+    ['ranite sessions index', 'Build or refresh the derived session search index (--rebuild to redo it).'],
+    ['ranite sessions prune', 'Delete session files older than an explicit cutoff (needs --yes).'],
+    ['ranite workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
+    ['ranite skills', 'List global and active-workspace Agent Skills.'],
+    ['ranite about', 'Version, runtime, configuration paths.'],
+  ]);
+  ui.line();
+  ui.line(`${ui.color.bold('Options:')}`);
+  printHelpRows([
+    ['--workspace <path>', 'Select this client’s workspace scope for the shared custodian.', '[string]'],
+    ['--c "<request>"', 'Ask the agent; it can select available tools.', '[string]'],
+    ['--list-models', 'List models that can call tools. --filter, --limit, --provider.', '[boolean]'],
+    ['--version', 'Print the installed version.', '[boolean]'],
+    ['-h, --help', 'Show all commands.', '[boolean]'],
+  ]);
   ui.line();
   ui.info(`Settings live in ${getSettingsPath()}.`);
   ui.line();
+}
+
+function printHelpRows(rows: Array<[string, string, string?]>) {
+  const nameWidth = Math.max(...rows.map(([name]) => name.length));
+  const descWidth = Math.max(...rows.map(([, description]) => description.length));
+  for (const [name, description, tag = ''] of rows) {
+    ui.line(
+      `  ${ui.color.cyan(name.padEnd(nameWidth))}  ${ui.color.dim(description.padEnd(descWidth))}${tag ? `  ${ui.color.dim(tag)}` : ''}`,
+    );
+  }
 }
 
 async function runConfig(): Promise<void> {
