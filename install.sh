@@ -250,11 +250,23 @@ installed_version() {
   fi
 }
 
-restart_running_host() {
-  if "$BIN_DIR/$APP" daemon status 2>/dev/null | grep -q "Background host running"; then
-    say "Restarting the background host to load the new version."
-    "$BIN_DIR/$APP" restart >/dev/null 2>&1 || say "Restart it later with: ranite restart"
-  fi
+host_running() {
+  "$BIN_DIR/$APP" daemon status 2>/dev/null | grep -q "Background host running"
+}
+
+# The running host holds its node binary open, so it must stop before the files
+# under the install directory are replaced; restarting only after the copy is
+# too late.
+stop_running_host() {
+  if ! host_running; then return 1; fi
+  say "Stopping the background host so its files can be replaced."
+  "$BIN_DIR/$APP" daemon stop >/dev/null 2>&1 || true
+  return 0
+}
+
+start_running_host() {
+  say "Starting the background host on the new version."
+  "$BIN_DIR/$APP" daemon start >/dev/null 2>&1 || say "Start it later with: ranite daemon start"
 }
 
 if [ -n "$binary_path" ]; then
@@ -339,6 +351,9 @@ tmp_dir="${TMPDIR:-/tmp}/ranite_install_$$"
 mkdir -p "$tmp_dir"
 trap 'show_cursor; rm -rf "$tmp_dir"' EXIT INT TERM
 
+host_was_running=0
+if stop_running_host; then host_was_running=1; fi
+
 DO_COPY=1
 if [ -n "$binary_path" ]; then
   say "Installing ranite from $binary_path"
@@ -422,7 +437,7 @@ if [ "$is_update" = "1" ]; then
 else
   say "Installed ranite $installed to $INSTALL_DIR."
 fi
-restart_running_host
+if [ "$host_was_running" = "1" ]; then start_running_host; fi
 
 if [ "$no_modify_path" = "true" ]; then
   say "Skipped PATH setup (--no-modify-path). Add $BIN_DIR to PATH manually."

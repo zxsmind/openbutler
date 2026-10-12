@@ -129,11 +129,44 @@ function Installed-Version {
   } catch { return '' } finally { $ErrorActionPreference = $previous }
 }
 
-function Restart-RunningHost {
-  $status = (& $Launcher daemon status 2>$null | Out-String)
-  if ($status -match 'Background host running') {
-    Write-Host 'Restarting the background host to load the new version.'
-    & $Launcher restart 2>$null | Out-Null
+function Test-RunningHost {
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $status = (& $Launcher daemon status 2>$null | Out-String)
+    return $status -match 'Background host running'
+  } catch { return $false } finally { $ErrorActionPreference = $previous }
+}
+
+# The running host holds node.exe open, so it must stop before the files under
+# the install directory are replaced; restarting only after the copy is too late.
+function Stop-RunningHost {
+  if (-not (Test-RunningHost)) { return $false }
+  Write-Host 'Stopping the background host so its files can be replaced.'
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $Launcher daemon stop 2>$null | Out-Null } catch {} finally { $ErrorActionPreference = $previous }
+  return $true
+}
+
+function Start-RunningHost {
+  Write-Host 'Starting the background host on the new version.'
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $Launcher daemon start 2>$null | Out-Null } catch {} finally { $ErrorActionPreference = $previous }
+}
+
+# A just-exited host, antivirus, or a slow handle release can briefly keep a
+# file locked; retry the copy instead of failing the whole install.
+function Copy-WithRetry {
+  param([scriptblock]$Action)
+  $attempt = 0
+  while ($true) {
+    try { & $Action; return } catch {
+      $attempt++
+      if ($attempt -ge 12) { throw }
+      Start-Sleep -Milliseconds 500
+    }
   }
 }
 
@@ -253,6 +286,7 @@ try {
   if ($BarTotal -gt 0) { Extract-WithProgress -Archive $archive -Destination $extract -Total $BarTotal -Base $baseD }
   else { Extract-WithProgress -Archive $archive -Destination $extract -Total 0 -Base 0 }
   if (-not (Test-Path -LiteralPath (Join-Path $extract $App))) { throw "Archive does not contain a '$App' directory." }
+  $hostWasRunning = Stop-RunningHost
   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
   if ($BarTotal -gt 0) {
     $treeRoot = Join-Path $extract $App
@@ -265,12 +299,12 @@ try {
       } else {
         $childSize = [long]$item.Length
       }
-      Copy-Item -LiteralPath $item.FullName -Destination $InstallDir -Recurse -Force
+      Copy-WithRetry { Copy-Item -LiteralPath $item.FullName -Destination $InstallDir -Recurse -Force }
       $copied += $childSize
       Show-Bar ($baseDU + $copied) $BarTotal 'Installing'
     }
   } else {
-    Copy-Item -Path (Join-Path $extract "$App/*") -Destination $InstallDir -Recurse -Force
+    Copy-WithRetry { Copy-Item -Path (Join-Path $extract "$App/*") -Destination $InstallDir -Recurse -Force }
   }
   if ($BarTotal -gt 0) { Show-Bar $BarTotal $BarTotal 'Done' }
   if ($script:BarActive) { Write-Host '' }
@@ -286,7 +320,7 @@ $installed = Installed-Version
 if ([string]::IsNullOrWhiteSpace($installed)) { throw 'Installation finished but `ranite --version` does not run.' }
 if ($isUpdate) { Write-Host "Updated ranite $current -> $installed." }
 else { Write-Host "Installed ranite $installed to $InstallDir." }
-Restart-RunningHost
+if ($hostWasRunning) { Start-RunningHost }
 
 if ($NoModifyPath) {
   Write-Host "Skipped PATH setup. Add $BinDir to PATH manually."
