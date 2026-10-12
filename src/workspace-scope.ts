@@ -1,5 +1,6 @@
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { getScratchRoot } from './paths.js';
 
 export type WorkspaceScope = 'workspace' | 'outside' | 'unknown';
 
@@ -13,6 +14,34 @@ export function classifyWorkspacePath(path: string, workspaceRoot: string): Work
   } catch {
     return 'unknown';
   }
+}
+
+/**
+ * Classifies against every root the owner has already trusted for this turn:
+ * the directory Ranite was launched in (or an explicit `--workspace`) and the
+ * agent's own scratch area. Any single match keeps the operation inside the
+ * approved boundary. A root that cannot be resolved is skipped rather than
+ * treated as a denial.
+ */
+export function classifyTrustedPath(path: string, roots: readonly string[]): WorkspaceScope {
+  const target = resolveThroughExistingParents(path);
+  if (!target) return 'unknown';
+  let resolvedAny = false;
+  for (const root of roots) {
+    try {
+      const resolvedRoot = realpathSync(root);
+      resolvedAny = true;
+      if (isWithinResolved(target, resolvedRoot)) return 'workspace';
+    } catch {
+      // A root that no longer exists cannot contain the target.
+    }
+  }
+  return resolvedAny ? 'outside' : 'unknown';
+}
+
+/** The roots that never need a permission prompt: the turn scope plus scratch. */
+export function trustedRootsFor(workspaceRoot: string): string[] {
+  return [workspaceRoot, getScratchRoot()];
 }
 
 /** True when the physically resolved target stays inside the physically resolved parent. */

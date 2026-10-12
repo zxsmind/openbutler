@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ToolDefinition } from './registry.js';
-import { classifyWorkspacePath } from '../workspace-scope.js';
+import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 
 const MAX_COMMAND_CHARS = 10_000;
 const MAX_OUTPUT_CHARS = 24_000;
@@ -28,11 +28,12 @@ export function createExecuteCommandTool(startDirectory: string): ToolDefinition
     resolveTarget: (input) => resolveCommandDirectory(input.cwd, workspaceRoot),
     workspaceScope: (input, target) => {
       const command = typeof input.command === 'string' ? input.command : '';
+      const trustedRoots = trustedRootsFor(workspaceRoot);
       const cwd = target ?? resolveCommandDirectory(input.cwd, workspaceRoot);
-      const cwdScope = classifyWorkspacePath(cwd, workspaceRoot);
+      const cwdScope = classifyTrustedPath(cwd, trustedRoots);
       if (cwdScope !== 'workspace') return cwdScope;
-      if (commandChangesDirectoryOutsideWorkspace(command, cwd, workspaceRoot)) return 'outside';
-      if (commandMayAccessOutsideWorkspace(command, cwd, workspaceRoot)) return 'outside';
+      if (commandChangesDirectoryOutsideWorkspace(command, cwd, trustedRoots)) return 'outside';
+      if (commandMayAccessOutsideWorkspace(command, cwd, trustedRoots)) return 'outside';
       return 'workspace';
     },
     execute: async (input, signal, context) => {
@@ -66,7 +67,7 @@ function isWithinDirectory(root: string, target: string): boolean {
   return relativePath === '' || (relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
 }
 
-function commandChangesDirectoryOutsideWorkspace(command: string, cwd: string, workspaceRoot: string): boolean {
+function commandChangesDirectoryOutsideWorkspace(command: string, cwd: string, trustedRoots: readonly string[]): boolean {
   let currentDirectory = cwd;
   const segments = command.split(/&&|\|\||[;&|\n]/);
   for (const segment of segments) {
@@ -81,12 +82,12 @@ function commandChangesDirectoryOutsideWorkspace(command: string, cwd: string, w
     if (quoted) target = quoted[1] ?? quoted[2]!;
     else if (/\s/.test(target)) return true;
     currentDirectory = canonicalPath(isAbsolute(target) ? target : resolve(currentDirectory, target));
-    if (!isWithinDirectory(workspaceRoot, currentDirectory)) return true;
+    if (!trustedRoots.some((root) => isWithinDirectory(root, currentDirectory))) return true;
   }
   return false;
 }
 
-function commandMayAccessOutsideWorkspace(command: string, cwd: string, workspaceRoot: string): boolean {
+function commandMayAccessOutsideWorkspace(command: string, cwd: string, trustedRoots: readonly string[]): boolean {
   if (/\b(?:npm|pnpm|bun)\s+(?:install|i|add)\b[^&;|]*(?:\s-g\b|\s--global\b|\s--location=global\b|\s--prefix(?:=|\s))/i.test(command))
     return true;
   if (/\b(?:npm|pnpm|bun)\s+link\b|\byarn\s+global\s+(?:add|remove|upgrade)\b/i.test(command)) return true;
@@ -133,7 +134,7 @@ function commandMayAccessOutsideWorkspace(command: string, cwd: string, workspac
         : isAbsolute(candidate)
           ? candidate
           : resolve(cwd, candidate);
-      if (classifyWorkspacePath(expanded, workspaceRoot) !== 'workspace') return true;
+      if (classifyTrustedPath(expanded, trustedRoots) !== 'workspace') return true;
     }
   }
   return false;

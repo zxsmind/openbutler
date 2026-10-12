@@ -12,6 +12,7 @@ import {
   summarizeOwnerInboxToolResult,
 } from './image.js';
 import { getMemoryPaths, isMemoryDocumentPath } from './memory-paths.js';
+import { getScratchRoot } from './paths.js';
 import { MEMORY_DOCUMENT_GUIDANCE, MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES } from './memory-document.js';
 import { buildRecentSessionsBlock } from './session-registry.js';
 import { discoverSkills, formatSkillIndex, getRaniteSkillDirectory, getSkillRoots } from './skills.js';
@@ -87,7 +88,7 @@ Write durable information as soon as it stabilizes, updating the entry it change
   // Only a session that knows its own id sees the other sessions; every other caller (tests,
   // previews) keeps the exact prompt it had. The block spans every workspace, labelled by folder.
   const recentSessions = currentSessionId ? buildRecentSessionsBlock({ excludeSessionId: currentSessionId }) : '';
-  const workspaceSystem = `${system}\n\n## Active workspace\nThe host selected this scope for the current turn: ${workspaceRoot}. Workspace memory and local tool defaults use this directory. The scope cannot be changed by model output.`;
+  const workspaceSystem = `${system}\n\n## Active workspace\nThe host selected this scope for the current turn: ${workspaceRoot}. Workspace memory and local tool defaults use this directory. The scope cannot be changed by model output.\n\n## Scratch space\n${getScratchRoot()} is your own dated scratch directory under the system temp folder. Write throwaway scripts, experiments, and intermediate output there; it needs no permission prompt and the OS may delete it at any time. Use the active workspace or a named project for anything the user must keep.`;
   const sessionSystem = recentSessions ? `${workspaceSystem}\n\n${recentSessions}` : workspaceSystem;
   const channelSystem = systemInstruction ? `${sessionSystem}\n\n## Active channel\n${systemInstruction}` : sessionSystem;
   return {

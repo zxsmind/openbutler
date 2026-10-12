@@ -13,7 +13,7 @@ import {
 import type { MemoryIndex } from '../memory-index.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
-import { classifyWorkspacePath } from '../workspace-scope.js';
+import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 
 const editEffect: ToolEffect = {
   change: 'modify',
@@ -52,7 +52,7 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
       const source = typeof input.path === 'string' ? input.path.trim() : '';
       if (!source) return 'unknown';
       try {
-        return classifyWorkspacePath(target ?? resolveFilePath(source, workspaceRoot), workspaceRoot);
+        return classifyTrustedPath(target ?? resolveFilePath(source, workspaceRoot), trustedRootsFor(workspaceRoot));
       } catch {
         return 'unknown';
       }

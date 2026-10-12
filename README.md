@@ -35,29 +35,33 @@ Configure a provider and model once:
 ranite setup
 ```
 
-Ranite keeps one machine-wide custodian conversation. The current directory does not choose its workspace. On first launch, bare `ranite` asks which workspace this client should use; set a stable default once with:
-
-```sh
-ranite workspace default path/to/project
-```
-
-Then `ranite` opens the same custodian with that workspace scope from any terminal directory. To attach a client to another workspace for its turns without changing the default:
+Ranite keeps one machine-wide custodian conversation. Bare `ranite` uses the directory you launched it in as the workspace, so work there runs without permission prompts and nothing is asked at startup. To attach a client to a different workspace for its turns:
 
 ```sh
 ranite --workspace path/to/project
 ```
 
+Pin a stable default for bare launches with:
+
+```sh
+ranite workspace default path/to/project
+```
+
 `--workspace` accepts an absolute or current-directory-relative path (including `~` on macOS/Linux). Ranite checks that it exists and is a directory. The host binds each message to the client's selected scope, serializes all main turns through the same custodian, and applies the workspace permission policy there. A path mentioned in a request does not switch the scope.
+
+Two roots never need a permission prompt: the active workspace and the agent's dated scratch directory under the system temp folder (`Temp/ranite/YYYY-MM-DD`). The agent writes throwaway scripts, experiments, and intermediate output there; the operating system may delete it at any time, so anything worth keeping belongs in the workspace or a named project.
 
 ## Permission modes
 
 Run `ranite permissions` or use `/permissions` in the session.
 
-- **Workspace** (default): local file and command operations scoped to the current workspace run without a prompt. Operations outside it ask first.
+- **Workspace** (default): local file and command operations inside the active workspace or the scratch directory run without a prompt. Operations outside them ask first.
 - **Approve for me**: keeps the workspace rule and uses the selected model to review outside-workspace actions. Unclear or unavailable reviews ask you.
 - **Full access**: runs tools without permission prompts.
 
 The workspace mode checks file paths, command working directories, directory changes, and common explicit paths in shell commands. It is a permission prompt policy, not an operating-system sandbox; shell scripts and programs can access paths that static command inspection cannot identify.
+
+The trusted boundary is the directory you launched Ranite in, so launching it in a home directory trusts that whole tree for writes.
 
 ## Providers and models
 

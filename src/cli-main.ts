@@ -171,7 +171,7 @@ function runWorkspaceCommand(parsed: Parsed): void {
   const settings = loadSettings();
   const path = parsed.words[1];
   if (path === undefined) {
-    ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(none; bare Ranite will ask)');
+    ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(none; bare Ranite uses the launch directory)');
     return;
   }
   const root = resolveWorkspace(path);
@@ -194,22 +194,9 @@ async function resolveSessionWorkspace(path: string | undefined): Promise<string
   if (path !== undefined) return resolveWorkspace(path);
   const configured = loadSettings().defaultWorkspaceRoot;
   if (configured) return resolveWorkspace(configured);
-  if (!process.stdin.isTTY) {
-    throw new Error('Choose a workspace with `ranite --workspace <path>` or set one with `ranite workspace default <path>`.');
-  }
-  const { input } = await import('@inquirer/prompts');
-  const selected = await input({
-    message: 'Choose the workspace scope for this Ranite client',
-    validate: (value) => {
-      try {
-        const root = resolveWorkspace(value);
-        return statSync(root).isDirectory() ? true : 'Choose an existing directory.';
-      } catch {
-        return 'Choose an existing directory.';
-      }
-    },
-  });
-  return resolveWorkspace(selected);
+  /* The directory the client was launched in is the scope the owner meant, so
+     it needs no question: work there runs without permission prompts. */
+  return resolveWorkspace(process.cwd());
 }
 
 function showMcpServers(settings: ReturnType<typeof loadSettings>): void {

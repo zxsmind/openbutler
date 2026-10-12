@@ -13,7 +13,7 @@ import {
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import type { MemoryIndex } from '../memory-index.js';
 import { type ToolDefinition, type ToolEffect } from './registry.js';
-import { classifyWorkspacePath } from '../workspace-scope.js';
+import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 
 const writeEffect: ToolEffect = {
   change: 'modify',
@@ -46,7 +46,7 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
       const source = typeof input.path === 'string' ? input.path.trim() : '';
       if (!source) return 'unknown';
       try {
-        return classifyWorkspacePath(target ?? resolveFilePath(source, workspaceRoot), workspaceRoot);
+        return classifyTrustedPath(target ?? resolveFilePath(source, workspaceRoot), trustedRootsFor(workspaceRoot));
       } catch {
         return 'unknown';
       }

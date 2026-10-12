@@ -4,7 +4,7 @@ import { classifyFilePath, resolveFilePath, resolveFileTarget } from '../file-wr
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import { isTrustedSkillResourcePath } from '../skills.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
-import { classifyWorkspacePath } from '../workspace-scope.js';
+import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILES_SCANNED = 20_000;
@@ -238,7 +238,7 @@ function searchSource(input: Record<string, unknown>): string {
 
 function classifySearchScope(input: Record<string, unknown>, target: string | undefined, workspaceRoot: string) {
   try {
-    return classifyWorkspacePath(target ?? resolveFilePath(searchSource(input), workspaceRoot), workspaceRoot);
+    return classifyTrustedPath(target ?? resolveFilePath(searchSource(input), workspaceRoot), trustedRootsFor(workspaceRoot));
   } catch {
     return 'unknown' as const;
   }

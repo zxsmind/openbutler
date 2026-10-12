@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -23,6 +23,19 @@ export function getDataDir(): string {
 /** A path inside the data directory, or the data directory itself. */
 export function getDataPath(name?: string): string {
   return name === undefined ? getDataDir() : join(getDataDir(), name);
+}
+
+/**
+ * Short-lived scratch space for the agent's own work: throwaway scripts, test
+ * output, notes it makes for itself. Kept outside the data directory because
+ * the data directory is durable user state, and dated so a day of scratch can
+ * be discarded without touching anything worth keeping. The host's temp
+ * directory may be cleaned by the OS at any time, which is the point.
+ */
+export function getScratchRoot(): string {
+  const date = new Date();
+  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return join(tmpdir(), 'ranite', day);
 }
 
 /**

@@ -18,7 +18,7 @@ import { classifyFilePath, resolveFilePath } from '../file-write-core.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import { isTrustedSkillResourcePath } from '../skills.js';
 import { MAX_TOOL_INPUT_CHARS, type ToolDefinition, type ToolEffect } from './registry.js';
-import { classifyWorkspacePath, resolveThroughExistingParents } from '../workspace-scope.js';
+import { classifyTrustedPath, resolveThroughExistingParents, trustedRootsFor } from '../workspace-scope.js';
 
 const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -143,7 +143,7 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
       const sourceType = isImageSourceType(input.sourceType) ? input.sourceType : 'auto';
       if (resolveImageSourceType(source, sourceType) !== 'path') return 'outside';
       try {
-        return classifyWorkspacePath(target ?? resolveFilePath(source, workspaceRoot), workspaceRoot);
+        return classifyTrustedPath(target ?? resolveFilePath(source, workspaceRoot), trustedRootsFor(workspaceRoot));
       } catch {
         return 'unknown';
       }
