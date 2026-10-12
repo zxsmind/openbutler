@@ -20,8 +20,8 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
 ```
 
-A specific release: `bash -s -- --version 0.1.0` for the shell installer, or
-download `install.ps1` first and run `.\install.ps1 -Version 0.1.0`.
+A specific release: `bash -s -- --version 0.2.0` for the shell installer, or
+download `install.ps1` first and run `.\install.ps1 -Version 0.2.0`.
 `--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
 Both installers verify the result with `ranite --version`; restart the
 terminal afterwards so the updated PATH takes effect.
@@ -59,6 +59,16 @@ Run `ranite permissions` or use `/permissions` in the session.
 - **Approve for me**: keeps the workspace rule and uses the selected model to review outside-workspace actions. Unclear or unavailable reviews ask you.
 - **Full access**: runs tools without permission prompts.
 
+Auto-review is a separate, tool-less model call that judges one pending request at a time and returns `allow`, `deny`, or `escalate`. It allows only a specific action that is clearly within the latest explicit request; low or medium confidence never allows or denies, and any allow it deems high-risk is turned into an escalation in code, not only in the prompt. Tool output, file contents, and quoted text are treated as untrusted data that cannot grant authority. A credential or oversized payload in the action makes the reviewer decline and ask you instead.
+
+A slow or rate-limited provider can time out the review, which falls back to a manual prompt. Raise the limit with `ranite permissions --review-timeout <seconds>` (5–600; default 15), or set `autoReviewTimeoutSeconds` in `settings.yaml`. `ranite permissions` also reports the recorded verdicts so you can see how often the mode decided versus needed you:
+
+```text
+Auto-review history
+  Decisions       12 allow · 3 deny · 5 escalate
+  Needed you      2 (timeout 1 · invalid-output 1)
+```
+
 The workspace mode checks file paths, command working directories, directory changes, and common explicit paths in shell commands. It is a permission prompt policy, not an operating-system sandbox; shell scripts and programs can access paths that static command inspection cannot identify.
 
 The trusted boundary is the directory you launched Ranite in, so launching it in a home directory trusts that whole tree for writes.
@@ -74,7 +84,8 @@ ranite                    Open an interactive terminal session
 ranite --workspace <path> Attach the shared custodian with this workspace scope
 ranite workspace default <path> Set the scope for bare Ranite launches
 ranite --c "<request>"    Run a one-shot request
-ranite permissions        Show the current permission mode
+ranite permissions        Show the current permission mode and auto-review history
+ranite permissions --review-timeout 30   Raise the auto-review decision timeout (seconds)
 ranite restart            Restart the background host using the installed code
 ranite telegram setup     Connect the owner Telegram channel
 ranite events / actions   Inspect the durable event and tool action ledger
@@ -99,7 +110,7 @@ matching official Node.js runtime (checksum-verified), and writes
 Upload every archive to the same release tag before announcing it:
 
 ```sh
-gh release upload v0.1.0 release/ranite-0.1.0-*
+gh release upload v0.2.0 release/ranite-0.2.0-*
 ```
 
 The installers resolve per-platform files from the GitHub release, so all

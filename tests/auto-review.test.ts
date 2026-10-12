@@ -133,6 +133,57 @@ async function startSession(autoReviewer: (options: { request: { requestId: stri
   return controller;
 }
 
+describe('auto-review history summary', () => {
+  const effect = { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' } as const;
+
+  function record(requestId: string, state: 'proposed' | 'reviewed' | 'review_unavailable', result?: unknown) {
+    ledger.recordToolAction({
+      requestId,
+      workspaceRoot: process.cwd(),
+      sessionId: 'summary-session',
+      providerId: 'host',
+      name: 'inspect',
+      input: {},
+      effect,
+      state,
+      ...(result === undefined ? {} : { result }),
+    });
+  }
+
+  it('counts decisions and breaks unavailable reviews down by their code', () => {
+    record('a', 'proposed');
+    record('a', 'reviewed', { verdict: 'allow' });
+    record('b', 'proposed');
+    record('b', 'reviewed', { verdict: 'deny' });
+    record('c', 'proposed');
+    record('c', 'reviewed', { verdict: 'escalate' });
+    record('d', 'proposed');
+    record('d', 'review_unavailable', { code: 'timeout', reason: 'slow' });
+    record('e', 'proposed');
+    record('e', 'review_unavailable', { code: 'timeout', reason: 'slow again' });
+
+    expect(ledger.autoReviewSummary()).toEqual({
+      reviewed: 3,
+      allow: 1,
+      deny: 1,
+      escalate: 1,
+      unavailable: 2,
+      unavailableByCode: { timeout: 2 },
+    });
+  });
+
+  it('reports an empty summary before any review has run', () => {
+    expect(ledger.autoReviewSummary()).toEqual({
+      reviewed: 0,
+      allow: 0,
+      deny: 0,
+      escalate: 0,
+      unavailable: 0,
+      unavailableByCode: {},
+    });
+  });
+});
+
 describe('auto-review records its verdict and still lets the decision through', () => {
   it('keeps the selected reasoning settings for agent, reviewer, and title requests', async () => {
     const providerOptions = { fixture: { reasoningEffort: 'xhigh', cache_salt: 'conversation-cache' } };
@@ -218,7 +269,7 @@ describe('auto-review records its verdict and still lets the decision through', 
   });
 
   it('asks the user when the reviewer is unavailable instead of failing the run', async () => {
-    const session = await startSession(async () => ({ status: 'unavailable', reason: 'Reviewer timed out.' }));
+    const session = await startSession(async () => ({ status: 'unavailable', code: 'timeout', reason: 'Reviewer timed out.' }));
 
     const sending = session.sendMessage({ text: 'Inspect the fixture', images: [] }, preferences);
     await vi.waitFor(() => expect(session.getSnapshot().pendingApprovalId).toBeTruthy());

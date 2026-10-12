@@ -79,6 +79,12 @@ export interface SettingsStore {
   theme?: 'Dark' | 'Light' | 'System';
   /** Who decides actions that reach the explicit permission gate. */
   approvalMode: ApprovalMode;
+  /**
+   * How long an auto-review decision may take before it gives up and asks the
+   * user. Slow or rate-limited providers need more than the built-in default;
+   * too small a value turns every outside action into a manual prompt.
+   */
+  autoReviewTimeoutSeconds?: number;
   /** Explicit user tasks. An empty list starts no observers or scheduled model calls. */
   backgroundTasks: BackgroundTaskState[];
   /** Workspace used by bare Ranite launches; it does not define the machine custodian identity. */
@@ -98,6 +104,7 @@ const KNOWN_KEYS = new Set([
   'showReasoning',
   'theme',
   'approvalMode',
+  'autoReviewTimeoutSeconds',
   'backgroundTasks',
   'defaultWorkspaceRoot',
   'telegram',
@@ -341,6 +348,17 @@ export function loadSettings(): SettingsStore {
       settings.approvalMode = parsed.approvalMode;
     } else throw new Error('approvalMode must be workspace, auto-review, or full-access');
   }
+  if (parsed.autoReviewTimeoutSeconds !== undefined) {
+    if (
+      typeof parsed.autoReviewTimeoutSeconds !== 'number' ||
+      !Number.isInteger(parsed.autoReviewTimeoutSeconds) ||
+      parsed.autoReviewTimeoutSeconds < 5 ||
+      parsed.autoReviewTimeoutSeconds > 600
+    ) {
+      throw new Error('autoReviewTimeoutSeconds must be a whole number of seconds between 5 and 600.');
+    }
+    settings.autoReviewTimeoutSeconds = parsed.autoReviewTimeoutSeconds;
+  }
   if (parsed.backgroundTasks !== undefined) {
     if (!Array.isArray(parsed.backgroundTasks) || parsed.backgroundTasks.length > 256)
       throw new Error('backgroundTasks must be a list of up to 256 tasks.');
@@ -377,6 +395,7 @@ export function saveSettings(settings: SettingsStore): void {
     ...(settings.showReasoning !== undefined ? { showReasoning: settings.showReasoning } : {}),
     ...(settings.theme ? { theme: settings.theme } : {}),
     approvalMode: settings.approvalMode,
+    ...(settings.autoReviewTimeoutSeconds === undefined ? {} : { autoReviewTimeoutSeconds: settings.autoReviewTimeoutSeconds }),
     backgroundTasks: settings.backgroundTasks,
     ...(settings.defaultWorkspaceRoot ? { defaultWorkspaceRoot: settings.defaultWorkspaceRoot } : {}),
     ...(settings.telegram ? { telegram: settings.telegram } : {}),

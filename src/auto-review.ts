@@ -8,6 +8,25 @@ export type AutoReviewVerdict = 'allow' | 'deny' | 'escalate';
 export type AutoReviewConfidence = 'high' | 'medium' | 'low';
 export type AutoReviewRisk = 'low' | 'moderate' | 'high' | 'critical' | 'unknown';
 
+/**
+ * Why a review could not produce a decision. The code is machine-readable so
+ * the ledger summary can tell a slow provider (timeout) from a weak model
+ * (invalid-output) without parsing prose, and so the two are never conflated.
+ */
+export type AutoReviewUnavailableCode =
+  | 'sensitive-input'
+  | 'oversized-input'
+  | 'unserializable-input'
+  | 'no-instruction'
+  | 'sensitive-task-instruction'
+  | 'oversized-trigger-facts'
+  | 'oversized-context'
+  | 'timeout'
+  | 'invalid-output'
+  | 'model-error'
+  | 'changed-during-review'
+  | 'circuit-open';
+
 export interface AutoReviewDecision {
   verdict: AutoReviewVerdict;
   confidence: AutoReviewConfidence;
@@ -16,7 +35,9 @@ export interface AutoReviewDecision {
 }
 
 export type AutoReviewResult =
-  { status: 'decision'; decision: AutoReviewDecision } | { status: 'unavailable'; reason: string } | { status: 'cancelled' };
+  | { status: 'decision'; decision: AutoReviewDecision }
+  | { status: 'unavailable'; reason: string; code: AutoReviewUnavailableCode }
+  | { status: 'cancelled' };
 
 export interface AutoReviewOptions {
   model: LanguageModel;
@@ -66,22 +87,29 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
   if (options.signal?.aborted) return { status: 'cancelled' };
 
   const preparedInput = prepareReviewValue(options.request.input);
-  if (preparedInput.redacted || preparedInput.truncated) {
-    return { status: 'unavailable', reason: 'Sensitive or omitted action input requires direct user review.' };
+  if (preparedInput.redacted) {
+    return { status: 'unavailable', code: 'sensitive-input', reason: 'Sensitive or omitted action input requires direct user review.' };
+  }
+  if (preparedInput.truncated) {
+    return { status: 'unavailable', code: 'oversized-input', reason: 'The action input is too large for a complete review.' };
   }
   let serializedInput: string;
   try {
     serializedInput = JSON.stringify(preparedInput.value);
   } catch {
-    return { status: 'unavailable', reason: 'The tool input could not be safely prepared for review.' };
+    return { status: 'unavailable', code: 'unserializable-input', reason: 'The tool input could not be safely prepared for review.' };
   }
   if (!serializedInput || serializedInput.length > MAX_ACTION_INPUT_CHARS) {
-    return { status: 'unavailable', reason: 'The tool input is too large for a complete review.' };
+    return { status: 'unavailable', code: 'oversized-input', reason: 'The tool input is too large for a complete review.' };
   }
 
   const transcript = prepareTranscript(options.messages, options.authorizedBackgroundTask !== undefined);
   if (!transcript.messages.some((message) => message.role === 'user')) {
-    return { status: 'unavailable', reason: 'No explicit user or task instruction is available to compare with this action.' };
+    return {
+      status: 'unavailable',
+      code: 'no-instruction',
+      reason: 'No explicit user or task instruction is available to compare with this action.',
+    };
   }
 
   let configuredBackgroundTask: { name: string; instruction: string } | undefined;
@@ -90,10 +118,19 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
     const taskName = String(redactSensitive(options.authorizedBackgroundTask.name));
     const taskInstruction = String(redactSensitive(options.authorizedBackgroundTask.instruction));
     if (taskInstruction !== options.authorizedBackgroundTask.instruction || taskInstruction.length > 16_000) {
-      return { status: 'unavailable', reason: 'The configured task instruction contains sensitive or omitted content.' };
+      return {
+        status: 'unavailable',
+        code: 'sensitive-task-instruction',
+        reason: 'The configured task instruction contains sensitive or omitted content.',
+      };
     }
     const safeFacts = prepareReviewValue(options.authorizedBackgroundTask.triggerFacts);
-    if (safeFacts.truncated) return { status: 'unavailable', reason: 'The observed trigger facts are too large for a complete review.' };
+    if (safeFacts.truncated)
+      return {
+        status: 'unavailable',
+        code: 'oversized-trigger-facts',
+        reason: 'The observed trigger facts are too large for a complete review.',
+      };
     configuredBackgroundTask = { name: taskName, instruction: taskInstruction };
     untrustedTriggerFacts = safeFacts.value;
   }
@@ -114,7 +151,7 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
   };
   const prompt = JSON.stringify(payload);
   if (prompt.length > MAX_TRANSCRIPT_CHARS + MAX_ACTION_INPUT_CHARS + 8_000) {
-    return { status: 'unavailable', reason: 'The review context is too large to send completely.' };
+    return { status: 'unavailable', code: 'oversized-context', reason: 'The review context is too large to send completely.' };
   }
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -149,13 +186,14 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
     const decision = validateDecision(result.output);
     return decision
       ? { status: 'decision', decision }
-      : { status: 'unavailable', reason: 'The model returned an invalid structured review.' };
+      : { status: 'unavailable', code: 'invalid-output', reason: 'The model returned an invalid structured review.' };
   } catch (error) {
     if (options.signal?.aborted) return { status: 'cancelled' };
-    if (timeoutSignal.aborted) return { status: 'unavailable', reason: `Auto-review timed out after ${timeoutMs / 1000} seconds.` };
+    if (timeoutSignal.aborted)
+      return { status: 'unavailable', code: 'timeout', reason: `Auto-review timed out after ${timeoutMs / 1000} seconds.` };
     const message = error instanceof Error ? error.message : String(error);
     const safeMessage = String(redactSensitive(message)).slice(0, 360);
-    return { status: 'unavailable', reason: `Auto-review could not complete: ${safeMessage}` };
+    return { status: 'unavailable', code: 'model-error', reason: `Auto-review could not complete: ${safeMessage}` };
   }
 }
 

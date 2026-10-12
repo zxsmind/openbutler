@@ -58,7 +58,10 @@ function usage(): void {
     ['ranite', 'Open an interactive terminal session', '[default]'],
     ['ranite setup', 'First-run wizard. Saves once at the end.'],
     ['ranite config', 'Show the current settings.'],
-    ['ranite permissions [workspace|auto-review|full-access]', 'Choose the workspace and tool approval mode.'],
+    [
+      'ranite permissions [workspace|auto-review|full-access]',
+      'Choose the tool approval mode; --review-timeout <seconds> tunes auto-review.',
+    ],
     ['ranite daemon', 'Start, inspect, stop, or install the background host.'],
     ['ranite restart', 'Restart the background host and reconnect open sessions.'],
     ['ranite mcp', 'Manage global MCP servers.'],
@@ -134,10 +137,25 @@ async function runConfig(): Promise<void> {
   if (!defaultModelIsUsable(settings)) ui.info('Change the default model: ranite setup');
 }
 
-async function runPermissions(requestedMode = ''): Promise<void> {
-  const settings = loadSettings();
+async function runPermissions(parsed: Parsed): Promise<void> {
+  const requestedMode = parsed.words[0] ?? '';
   if (requestedMode && !['ask', 'workspace', 'auto-review', 'full-access'].includes(requestedMode)) {
-    throw new Error('Usage: ranite permissions [workspace|auto-review|full-access]');
+    throw new Error('Usage: ranite permissions [workspace|auto-review|full-access] [--review-timeout <seconds>]');
+  }
+  const timeoutFlag = parsed.flags.get('review-timeout');
+  let timeoutSeconds: number | undefined;
+  if (timeoutFlag !== undefined) {
+    const candidate = Number(timeoutFlag);
+    if (!Number.isInteger(candidate) || candidate < 5 || candidate > 600) {
+      throw new Error('--review-timeout must be a whole number of seconds between 5 and 600.');
+    }
+    timeoutSeconds = candidate;
+  }
+
+  const settings = loadSettings();
+  if (timeoutSeconds !== undefined) {
+    settings.autoReviewTimeoutSeconds = timeoutSeconds;
+    saveSettings(settings);
   }
   if (requestedMode) {
     settings.approvalMode =
@@ -155,9 +173,38 @@ async function runPermissions(requestedMode = ''): Promise<void> {
   }
 
   ui.kv('Current mode', formatApprovalMode(settings.approvalMode));
+  ui.kv(
+    'Auto-review timeout',
+    settings.autoReviewTimeoutSeconds === undefined ? '15 seconds (default)' : `${settings.autoReviewTimeoutSeconds} seconds`,
+  );
   ui.info('Workspace paths run without prompts. Auto-review asks the selected model about actions outside the workspace.');
   ui.info('Use `ranite permissions full-access` to disable tool permission prompts.');
   if (requestedMode) ui.success(`Saved ${formatApprovalMode(settings.approvalMode)} mode.`);
+  if (timeoutSeconds !== undefined) ui.success(`Auto-review timeout set to ${timeoutSeconds} seconds.`);
+  await showAutoReviewHistory();
+}
+
+/** Surfaces the recorded auto-review verdicts so the mode is observable in production. */
+async function showAutoReviewHistory(): Promise<void> {
+  const path = getDataPath('state.db');
+  if (!existsSync(path)) return;
+  const { ActivityLedger } = await import('./activity-ledger.js');
+  const ledger = new ActivityLedger(path, { readOnly: true });
+  try {
+    const summary = ledger.autoReviewSummary();
+    if (summary.reviewed + summary.unavailable === 0) return;
+    ui.line();
+    ui.section('Auto-review history');
+    ui.kv('Decisions', `${summary.allow} allow · ${summary.deny} deny · ${summary.escalate} escalate`);
+    if (summary.unavailable > 0) {
+      const breakdown = Object.entries(summary.unavailableByCode)
+        .map(([code, count]) => `${code} ${count}`)
+        .join(' · ');
+      ui.kv('Needed you', `${summary.unavailable} (${breakdown})`);
+    }
+  } finally {
+    ledger.close();
+  }
 }
 
 function formatApprovalMode(mode: ReturnType<typeof loadSettings>['approvalMode']): string {
@@ -1340,7 +1387,7 @@ async function main(): Promise<void> {
       return;
     }
     case 'permissions': {
-      await runPermissions(parsed.words[0] ?? '');
+      await runPermissions(parsed);
       return;
     }
     case 'mcp': {

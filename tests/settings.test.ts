@@ -91,6 +91,28 @@ describe('settings round trip', () => {
   });
 });
 
+describe('auto-review timeout setting', () => {
+  it('round-trips a configured timeout', async () => {
+    writeSettings(['approvalMode: auto-review', 'autoReviewTimeoutSeconds: 45', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().autoReviewTimeoutSeconds).toBe(45);
+    settings.saveSettings(settings.loadSettings());
+    expect(settings.loadSettings().autoReviewTimeoutSeconds).toBe(45);
+  });
+
+  it('rejects a timeout outside the 5-600 second range', async () => {
+    writeSettings(['autoReviewTimeoutSeconds: 2', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/autoReviewTimeoutSeconds must be a whole number of seconds between 5 and 600/);
+  });
+
+  it('rejects a non-integer timeout', async () => {
+    writeSettings(['autoReviewTimeoutSeconds: 12.5', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/autoReviewTimeoutSeconds/);
+  });
+});
+
 describe('the settings schema is closed', () => {
   it('rejects an unknown top-level key rather than ignoring it', async () => {
     writeSettings(['provders:', '  openai: {keys: [k]}', ''].join('\n'));

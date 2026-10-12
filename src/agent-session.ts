@@ -13,7 +13,7 @@ import {
 } from './session-store.js';
 import { isToolRequestWhitelisted, rememberToolRequest } from './tool-permissions.js';
 import type { ReasoningVariant } from './provider/registry.js';
-import type { ApprovalMode } from './settings.js';
+import { loadSettings, type ApprovalMode } from './settings.js';
 import { autoReviewFingerprint, reviewToolRequest, type AutoReviewOptions, type AutoReviewResult } from './auto-review.js';
 import type { ToolApprovalOutcome, ToolCallRequest, ToolRegistry, ToolUserQuestion } from './tools/registry.js';
 import { ToolInputPreview } from './tool-preview.js';
@@ -681,7 +681,7 @@ export class AgentSessionController implements AgentSessionClient {
     if (approvalMode === 'auto-review') {
       if (this.isAutoReviewCircuitOpen()) {
         this.addNotice('Auto-review paused after repeated denials. This action needs your approval.');
-        await this.recordAutoReviewState(request, 'review_unavailable', { status: 'circuit-open' });
+        await this.recordAutoReviewState(request, 'review_unavailable', { code: 'circuit-open', status: 'circuit-open' });
         return this.requestManualApproval(request);
       }
 
@@ -703,6 +703,8 @@ export class AgentSessionController implements AgentSessionClient {
       }
 
       this.addNotice(`Auto-review is checking ${request.providerId}/${request.name}…`);
+      // Read fresh so a `ranite permissions --review-timeout` change applies without a host restart.
+      const reviewTimeoutSeconds = loadSettings().autoReviewTimeoutSeconds;
       let outcome: AutoReviewResult;
       try {
         outcome = await (this.options.autoReviewer ?? reviewToolRequest)({
@@ -711,24 +713,26 @@ export class AgentSessionController implements AgentSessionClient {
           messages: [...this.currentReviewMessages],
           workspaceRoot: this.runtime.workspaceRoot,
           providerOptions: this.currentReviewProviderOptions,
+          ...(reviewTimeoutSeconds === undefined ? {} : { timeoutMs: reviewTimeoutSeconds * 1000 }),
           ...(this.currentReviewAuthorization ? { authorizedBackgroundTask: this.currentReviewAuthorization } : {}),
           ...(signal ? { signal } : {}),
         });
       } catch (error) {
         outcome = {
           status: 'unavailable',
+          code: 'model-error',
           reason: `Auto-review failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
       if (signal?.aborted || outcome.status === 'cancelled') return false;
       if (autoReviewFingerprint(request) !== fingerprint) {
-        outcome = { status: 'unavailable', reason: 'The pending action changed during review.' };
+        outcome = { status: 'unavailable', code: 'changed-during-review', reason: 'The pending action changed during review.' };
       }
 
       if (outcome.status === 'unavailable') {
         this.recordAutoReviewDenial(false);
         const reason = String(outcome.reason).slice(0, 500);
-        await this.recordAutoReviewState(request, 'review_unavailable', { reviewer: 'auto-review', reason });
+        await this.recordAutoReviewState(request, 'review_unavailable', { reviewer: 'auto-review', code: outcome.code, reason });
         this.addNotice(`Auto-review needs your approval: ${reason}`);
         return this.requestManualApproval(request);
       }

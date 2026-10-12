@@ -88,6 +88,15 @@ export interface ToolActionRow {
 
 export type LedgerPruneTarget = 'events' | 'actions';
 
+export interface AutoReviewSummary {
+  reviewed: number;
+  allow: number;
+  deny: number;
+  escalate: number;
+  unavailable: number;
+  unavailableByCode: Record<string, number>;
+}
+
 export interface LedgerPruneCounts {
   events: number;
   actions: number;
@@ -449,6 +458,40 @@ export class ActivityLedger {
       detail: row.detail_json === null ? null : parseJson(row.detail_json),
       createdAt: row.created_at,
     }));
+  }
+
+  /**
+   * Aggregates recorded auto-review verdicts so the mode can be inspected in
+   * production: how often it decided, how the decisions split, and — when it
+   * could not decide — why, by the machine-readable code. Reads only the
+   * annotation transitions, never the conversation.
+   */
+  autoReviewSummary(limit = 5_000): AutoReviewSummary {
+    this.assertOpen();
+    const summary: AutoReviewSummary = { reviewed: 0, allow: 0, deny: 0, escalate: 0, unavailable: 0, unavailableByCode: {} };
+    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ranite_action_transitions'").get())
+      return summary;
+    const bounded = Math.max(1, Math.min(50_000, Math.trunc(limit)));
+    const rows = this.database
+      .prepare(
+        `SELECT state, detail_json FROM ranite_action_transitions
+         WHERE state IN ('reviewed', 'review_unavailable') ORDER BY id DESC LIMIT ?`,
+      )
+      .all(bounded) as unknown as Array<{ state: ToolActionState; detail_json: string | null }>;
+    for (const row of rows) {
+      const detail = row.detail_json === null ? null : parseJson(row.detail_json);
+      const record = detail !== null && typeof detail === 'object' ? (detail as Record<string, unknown>) : {};
+      if (row.state === 'reviewed') {
+        summary.reviewed += 1;
+        const verdict = record.verdict;
+        if (verdict === 'allow' || verdict === 'deny' || verdict === 'escalate') summary[verdict] += 1;
+      } else {
+        summary.unavailable += 1;
+        const code = typeof record.code === 'string' ? record.code : 'unknown';
+        summary.unavailableByCode[code] = (summary.unavailableByCode[code] ?? 0) + 1;
+      }
+    }
+    return summary;
   }
 
   /** Counts what an explicit prune would remove, without writing anything. */

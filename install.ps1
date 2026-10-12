@@ -236,9 +236,6 @@ if ($NoModifyPath) {
 }
 
 $existing = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($existing -split ';' -contains $BinDir) {
-  Write-Host "PATH already contains $BinDir."
-} else {
-  [Environment]::SetEnvironmentVariable('Path', "$existing;$BinDir", 'User')
-  Write-Host "Added $BinDir to the user PATH. Restart your terminal, then try: ranite --version"
-}
+$parts = @($existing -split ';' | Where-Object { $_ -and $_ -ne $BinDir })
+[Environment]::SetEnvironmentVariable('Path', (@($BinDir) + $parts) -join ';', 'User')
+Write-Host "Added $BinDir to the user PATH. Restart your terminal, then try: ranite --version"
