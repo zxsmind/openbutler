@@ -1,18 +1,7 @@
 #!/bin/sh
-# Ranite installer: downloads the self-contained release archive for this
-# machine (bundled Node.js runtime, no npm needed) and sets it up under
-# ~/.ranite with a `ranite` launcher on PATH.
-#
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/zxsmind/ranite/main/install.sh | bash
-#   curl -fsSL .../install.sh | bash -s -- --version 0.1.0
-#   ./install.sh --binary ./ranite-0.1.0-linux-x64.tar.gz
-#
-# Flags: --version <x.y.z>  install a specific release (default: latest)
-#        --binary <file>    install from a local archive instead of downloading
-#        --no-modify-path   do not touch shell startup files
-# Env:   RANITE_GITHUB_REPO override the releases source (default zxsmind/ranite)
-#        RANITE_INSTALL_DIR override the install directory (default ~/.ranite)
+#   ./install.sh [--version <x.y.z>] [--binary <file>] [--no-modify-path]
 set -eu
 
 APP="ranite"
@@ -44,7 +33,7 @@ while [ $# -gt 0 ]; do
       ;;
     --no-modify-path) no_modify_path="true"; shift ;;
     --help | -h)
-      sed -n '2,14p' "$0"
+      sed -n '2,4p' "$0"
       exit 0
       ;;
     *)
@@ -66,32 +55,21 @@ say() {
   printf '%s\n' "$1"
 }
 
-# ---- One-bar progress: sequential phases, every number measured ----
-# The bar stays on a single terminal line across download and extraction.
-# Each phase shows its step (1/2, 2/2) with a measured fraction; nothing is
-# staged or estimated. Without a terminal, downloads keep curl's own meter
-# and extraction stays silent.
 BAR_TTY=""
 if [ -t 2 ]; then BAR_TTY=1; fi
 
-# Formats a byte count as megabytes with one decimal, using shell arithmetic only.
 fmt_mb() {
   printf '%d.%d' "$(( $1 / 1048576 ))" "$(( ($1 % 1048576) * 10 / 1048576 ))"
 }
 
-# render_step <step> <steps> <label> <done_bytes> <total_bytes|''>.
-# An empty total renders a measured counter with no percentage, never a guess.
-# Writes to stderr so stdout stays clean for piping.
-render_step() {
-  rs_step="$1"
-  rs_steps="$2"
+render_single() {
+  rs_done="$1"
+  rs_total="$2"
   rs_label="$3"
-  rs_done="$4"
-  rs_total="$5"
   rs_width=30
   if [ -z "$rs_total" ] || [ "$rs_total" = "0" ]; then
     rs_empty="$(printf '%30s' '')"
-    printf '\r[%s] Step %s/%s: %s (%s MB)' "$(printf '%s' "$rs_empty" | tr ' ' '-')" "$rs_step" "$rs_steps" "$rs_label" "$(fmt_mb "$rs_done")" >&2
+    printf '\r[%s] %s (%s MB)' "$(printf '%s' "$rs_empty" | tr ' ' '-')" "$rs_label" "$(fmt_mb $(( rs_done * 1024 )))" >&2
     return
   fi
   rs_percent=$(( rs_done * 100 / rs_total ))
@@ -102,36 +80,27 @@ render_step() {
   rs_bar="$(printf '%s' "$rs_bar" | tr ' ' '=')"
   rs_rest="$(printf "%${rs_empty_n}s" '')"
   rs_rest="$(printf '%s' "$rs_rest" | tr ' ' '-')"
-  printf '\r[%s%s] %3d%% Step %s/%s: %s (%s/%s MB)' "$rs_bar" "$rs_rest" "$rs_percent" "$rs_step" "$rs_steps" "$rs_label" "$(fmt_mb "$rs_done")" "$(fmt_mb "$rs_total")" >&2
+  printf '\r[%s%s] %3d%% (%s/%s MB) %s' "$rs_bar" "$rs_rest" "$rs_percent" "$(fmt_mb $(( rs_done * 1024 )))" "$(fmt_mb $(( rs_total * 1024 )))" "$rs_label" >&2
 }
 
-# File size in bytes, or 0 when unreadable.
-file_bytes() {
-  fb_out="$(wc -c <"$1" 2>/dev/null)" || {
-    echo 0
-    return
-  }
+file_kb() {
+  fb_out="$(wc -c <"$1" 2>/dev/null || true)"
   set -- $fb_out
+  case "$1" in
+    '' | *[!0-9]*) echo 0 ;;
+    *) echo $(( $1 / 1024 )) ;;
+  esac
+}
+
+dir_kb() {
+  db_out="$(du -sk "$1" 2>/dev/null || true)"
+  set -- $db_out
   case "$1" in
     '' | *[!0-9]*) echo 0 ;;
     *) echo "$1" ;;
   esac
 }
 
-# Directory size in bytes via du kilobytes, or 0 when unreadable.
-dir_bytes() {
-  db_out="$(du -sk "$1" 2>/dev/null)" || {
-    echo 0
-    return
-  }
-  set -- $db_out
-  case "$1" in
-    '' | *[!0-9]*) echo 0 ;;
-    *) echo $(( $1 * 1024 )) ;;
-  esac
-}
-
-# Archive size in bytes from a HEAD request, or empty when unavailable.
 head_bytes() {
   hb_out="$(curl -fsSLI "$1" 2>/dev/null | tr -d '\r' | grep -i -o 'content-length: *[0-9]*' | grep -o '[0-9]*' | tail -n 1)"
   case "$hb_out" in
@@ -140,57 +109,37 @@ head_bytes() {
   esac
 }
 
-# Uncompressed payload size of an archive in bytes, or empty when it cannot
-# be determined without extracting.
-archive_payload_bytes() {
-  case "$1" in
-    *.tar.gz | *.tgz)
-      set -- $(gzip -l "$1" 2>/dev/null | tail -n 1)
-      case "$2" in
-        '' | *[!0-9]*) echo '' ;;
-        *) echo "$2" ;;
-      esac
-      ;;
-    *.zip)
-      set -- $(unzip -l "$1" 2>/dev/null | tail -n 1)
-      case "$1" in
-        '' | *[!0-9]*) echo '' ;;
-        *) echo "$1" ;;
-      esac
-      ;;
-    *) echo '' ;;
+fetch_meta() {
+  META_D_KB=""
+  META_U_KB=""
+  if ! curl -fsSL -o "$2" "$1.meta" 2>/dev/null; then return; fi
+  md_d="$(grep '^archive_bytes=' "$2" 2>/dev/null | cut -d= -f2)"
+  md_u="$(grep '^payload_du_kb=' "$2" 2>/dev/null | cut -d= -f2)"
+  case "$md_d" in
+    '' | *[!0-9]* | 0) return ;;
   esac
+  case "$md_u" in
+    '' | *[!0-9]* | 0) return ;;
+  esac
+  META_D_KB=$(( (md_d + 1023) / 1024 ))
+  META_U_KB="$md_u"
 }
 
-# Downloads a file as step <step>/<steps> of the single install bar.
-# Falls back to curl's own meter when the size is unknown or stderr is not
-# a terminal. Sets DL_TOTAL to the measured archive size.
-download_phase() {
-  dl_step="$1"
-  dl_steps="$2"
-  dl_url="$3"
-  dl_output="$4"
+download_to() {
+  dl_url="$1"
+  dl_output="$2"
+  dl_total="$3"
+  dl_base="$4"
   if [ -z "$BAR_TTY" ]; then
     curl -fL --progress-bar -o "$dl_output" "$dl_url"
-    BG_RET=$?
-    DL_TOTAL="$(file_bytes "$dl_output")"
-    return "$BG_RET"
+    return $?
   fi
-  DL_TOTAL="$(head_bytes "$dl_url")"
-  case "$DL_TOTAL" in
-    '')
-      curl -fL --progress-bar -o "$dl_output" "$dl_url"
-      BG_RET=$?
-      DL_TOTAL="$(file_bytes "$dl_output")"
-      return "$BG_RET"
-      ;;
-  esac
   : >"$dl_output"
   trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
   curl -fL -s -o "$dl_output" "$dl_url" &
   BG_PID=$!
   while kill -0 "$BG_PID" 2>/dev/null; do
-    render_step "$dl_step" "$dl_steps" Downloading "$(file_bytes "$dl_output")" "$DL_TOTAL"
+    render_single $(( dl_base + $(file_kb "$dl_output") )) "$dl_total" Downloading
     sleep 1
   done
   BG_RET=0
@@ -200,17 +149,14 @@ download_phase() {
     printf '\n' >&2
     return "$BG_RET"
   fi
-  render_step "$dl_step" "$dl_steps" Downloading "$(file_bytes "$dl_output")" "$DL_TOTAL"
+  render_single $(( dl_base + $(file_kb "$dl_output") )) "$dl_total" Downloading
 }
 
-# Extracts an archive as the final step of the single install bar, measuring
-# written bytes against the payload size. Without a terminal the extractor
-# runs silently in the foreground.
-extract_phase() {
-  ex_step="$1"
-  ex_steps="$2"
-  ex_archive="$3"
-  ex_dest="$4"
+extract_to() {
+  ex_archive="$1"
+  ex_dest="$2"
+  ex_total="$3"
+  ex_base="$4"
   case "$ex_archive" in
     *.zip) archive_ext=".zip" ;;
     *) archive_ext=".tar.gz" ;;
@@ -222,7 +168,6 @@ extract_phase() {
     esac
     return $?
   fi
-  EX_TOTAL="$(archive_payload_bytes "$ex_archive")"
   trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
   case "$ex_archive" in
     *.zip) unzip -q "$ex_archive" -d "$ex_dest" & ;;
@@ -230,7 +175,7 @@ extract_phase() {
   esac
   BG_PID=$!
   while kill -0 "$BG_PID" 2>/dev/null; do
-    render_step "$ex_step" "$ex_steps" Extracting "$(dir_bytes "$ex_dest")" "$EX_TOTAL"
+    render_single $(( ex_base + $(dir_kb "$ex_dest") )) "$ex_total" Extracting
     sleep 1
   done
   BG_RET=0
@@ -241,8 +186,42 @@ extract_phase() {
     echo "Error: extraction failed." >&2
     return 1
   fi
-  render_step "$ex_step" "$ex_steps" Extracting "$(dir_bytes "$ex_dest")" "$EX_TOTAL"
-  printf '\n' >&2
+  render_single $(( ex_base + $(dir_kb "$ex_dest") )) "$ex_total" Extracting
+}
+
+copy_to() {
+  cp_src="$1"
+  cp_dest="$2"
+  cp_total="$3"
+  cp_base="$4"
+  mkdir -p "$cp_dest"
+  CP_BASE0="$(dir_kb "$cp_dest")"
+  if [ -z "$BAR_TTY" ]; then
+    cp -r "$cp_src/." "$cp_dest/"
+    return $?
+  fi
+  trap 'kill $BG_PID 2>/dev/null; rm -rf "$tmp_dir"; exit 130' INT TERM
+  cp -r "$cp_src/." "$cp_dest/" &
+  BG_PID=$!
+  while kill -0 "$BG_PID" 2>/dev/null; do
+    cp_now="$(dir_kb "$cp_dest")"
+    cp_grown=$(( cp_now - CP_BASE0 ))
+    if [ "$cp_grown" -lt 0 ]; then cp_grown=0; fi
+    render_single $(( cp_base + cp_grown )) "$cp_total" Installing
+    sleep 1
+  done
+  BG_RET=0
+  wait "$BG_PID" || BG_RET=$?
+  trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+  if [ "$BG_RET" -ne 0 ]; then
+    printf '\n' >&2
+    echo "Error: install copy failed." >&2
+    return 1
+  fi
+  cp_now="$(dir_kb "$cp_dest")"
+  cp_grown=$(( cp_now - CP_BASE0 ))
+  if [ "$cp_grown" -lt 0 ]; then cp_grown=0; fi
+  render_single $(( cp_base + cp_grown )) "$cp_total" Installing
 }
 
 installed_version() {
@@ -328,26 +307,57 @@ tmp_dir="${TMPDIR:-/tmp}/ranite_install_$$"
 mkdir -p "$tmp_dir"
 trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
-PHASE_STEPS=2
+DO_COPY=1
 if [ -n "$binary_path" ]; then
   say "Installing ranite from $binary_path"
   archive="$tmp_dir/$(basename "$binary_path")"
   cp "$binary_path" "$archive"
-  PHASE_STEPS=1
+  mkdir -p "$tmp_dir/extract"
+  extract_to "$archive" "$tmp_dir/extract" "" 0
+  if [ -n "$BAR_TTY" ]; then printf '\n' >&2; fi
 else
   say "Downloading ranite $specific_version ($target)"
   archive="$tmp_dir/$filename"
-  download_phase 1 "$PHASE_STEPS" "$url" "$archive"
+  fetch_meta "$url" "$tmp_dir/meta"
+  if [ -n "$BAR_TTY" ] && [ -n "$META_D_KB" ] && [ -n "$META_U_KB" ]; then
+    BAR_TOTAL=$(( META_D_KB + META_U_KB + META_U_KB ))
+    download_to "$url" "$archive" "$BAR_TOTAL" 0
+    BASE_D="$(file_kb "$archive")"
+    mkdir -p "$tmp_dir/extract"
+    extract_to "$archive" "$tmp_dir/extract" "$BAR_TOTAL" "$BASE_D"
+    BASE_DU=$(( BASE_D + $(dir_kb "$tmp_dir/extract") ))
+    mkdir -p "$INSTALL_DIR"
+    BASE_INST="$(dir_kb "$INSTALL_DIR")"
+    copy_to "$tmp_dir/extract/$APP" "$INSTALL_DIR" "$BAR_TOTAL" "$BASE_DU"
+    FIN_NOW="$(dir_kb "$INSTALL_DIR")"
+    FIN_GROWN=$(( FIN_NOW - BASE_INST ))
+    if [ "$FIN_GROWN" -lt 0 ]; then FIN_GROWN=0; fi
+    FIN_DONE=$(( BASE_DU + FIN_GROWN ))
+    render_single "$FIN_DONE" "$FIN_DONE" Done
+    printf '\n' >&2
+    DO_COPY=0
+  else
+    DL_KNOWN=""
+    if [ -n "$BAR_TTY" ]; then
+      DL_BYTES="$(head_bytes "$url")"
+      case "$DL_BYTES" in
+        '' | *[!0-9]* | 0) ;;
+        *) DL_KNOWN=$(( (DL_BYTES + 1023) / 1024 )) ;;
+      esac
+    fi
+    download_to "$url" "$archive" "$DL_KNOWN" 0
+    mkdir -p "$tmp_dir/extract"
+    extract_to "$archive" "$tmp_dir/extract" "" 0
+    if [ -n "$BAR_TTY" ]; then printf '\n' >&2; fi
+  fi
 fi
 
-mkdir -p "$tmp_dir/extract"
-extract_phase "$PHASE_STEPS" "$PHASE_STEPS" "$archive" "$tmp_dir/extract"
-
-mkdir -p "$INSTALL_DIR"
-cp -r "$tmp_dir/extract/$APP/." "$INSTALL_DIR/"
+if [ "$DO_COPY" = 1 ]; then
+  mkdir -p "$INSTALL_DIR"
+  cp -r "$tmp_dir/extract/$APP/." "$INSTALL_DIR/"
+fi
 mkdir -p "$BIN_DIR"
 if [ "$archive_ext" = ".zip" ]; then
-  # Windows archive: the bundled runtime is node.exe, runnable from POSIX shells too.
   cat > "$BIN_DIR/$APP" <<EOF
 #!/bin/sh
 # Generated by the ranite installer. Uses the bundled Node.js runtime.
