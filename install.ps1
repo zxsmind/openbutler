@@ -129,6 +129,14 @@ function Installed-Version {
   } catch { return '' } finally { $ErrorActionPreference = $previous }
 }
 
+function Restart-RunningHost {
+  $status = (& $Launcher daemon status 2>$null | Out-String)
+  if ($status -match 'Background host running') {
+    Write-Host 'Restarting the background host to load the new version.'
+    & $Launcher restart 2>$null | Out-Null
+  }
+}
+
 function Download-WithProgress {
   param([string]$Url, [string]$OutFile, [long]$Total, [long]$Base)
   if ($Total -le 0) {
@@ -278,6 +286,7 @@ $installed = Installed-Version
 if ([string]::IsNullOrWhiteSpace($installed)) { throw 'Installation finished but `ranite --version` does not run.' }
 if ($isUpdate) { Write-Host "Updated ranite $current -> $installed." }
 else { Write-Host "Installed ranite $installed to $InstallDir." }
+Restart-RunningHost
 
 if ($NoModifyPath) {
   Write-Host "Skipped PATH setup. Add $BinDir to PATH manually."

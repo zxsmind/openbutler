@@ -250,6 +250,13 @@ installed_version() {
   fi
 }
 
+restart_running_host() {
+  if "$BIN_DIR/$APP" daemon status 2>/dev/null | grep -q "Background host running"; then
+    say "Restarting the background host to load the new version."
+    "$BIN_DIR/$APP" restart >/dev/null 2>&1 || say "Restart it later with: ranite restart"
+  fi
+}
+
 if [ -n "$binary_path" ]; then
   if [ ! -f "$binary_path" ]; then
     echo "Error: binary archive not found at $binary_path" >&2
@@ -415,6 +422,7 @@ if [ "$is_update" = "1" ]; then
 else
   say "Installed ranite $installed to $INSTALL_DIR."
 fi
+restart_running_host
 
 if [ "$no_modify_path" = "true" ]; then
   say "Skipped PATH setup (--no-modify-path). Add $BIN_DIR to PATH manually."
