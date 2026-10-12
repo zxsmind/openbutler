@@ -13,8 +13,31 @@ if ([string]::IsNullOrWhiteSpace($Repo)) { $Repo = 'zxsmind/ranite' }
 $BinDir = Join-Path $InstallDir 'bin'
 $Launcher = Join-Path $BinDir "$App.cmd"
 
+function Show-Bar {
+  param([long]$Done, [long]$Total, [string]$Label)
+  if ($Total -le 0) { return }
+  $percent = [Math]::Min(100, [int]($Done * 100 / $Total))
+  $have = '{0:N1}' -f ($Done / 1MB)
+  $want = '{0:N1}' -f ($Total / 1MB)
+  Write-Progress -Activity 'Installing ranite' -Status "$Label $percent% ($have/$want MB)" -PercentComplete $percent
+}
+
+function Get-RemoteMeta {
+  param([string]$Url)
+  try {
+    $text = (Invoke-WebRequest -Uri "$Url.meta" -UseBasicParsing -ErrorAction Stop).Content
+    $data = ConvertFrom-StringData (($text -join "`n") -replace "`r", '')
+    $archiveBytes = [long]0
+    $payloadBytes = [long]0
+    if ("$($data['archive_bytes'])" -match '^\d+$') { $archiveBytes = [long]$data['archive_bytes'] }
+    if ("$($data['payload_bytes'])" -match '^\d+$') { $payloadBytes = [long]$data['payload_bytes'] }
+    if ($archiveBytes -le 0 -or $payloadBytes -le 0) { return $null }
+    return @{ D = $archiveBytes; U = $payloadBytes }
+  } catch { return $null }
+}
+
 function Extract-WithProgress {
-  param([string]$Archive, [string]$Destination, [int]$Step, [int]$Steps)
+  param([string]$Archive, [string]$Destination, [long]$Total, [long]$Base)
   Add-Type -AssemblyName System.IO.Compression | Out-Null
   Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
   $zip = $null
@@ -26,30 +49,31 @@ function Extract-WithProgress {
   }
   try {
     $entries = @($zip.Entries | Where-Object { $_.Name -ne '' })
-    $total = [long]($entries | Measure-Object -Property Length -Sum).Sum
-    if ($total -le 0) {
+    $sum = [long]($entries | Measure-Object -Property Length -Sum).Sum
+    if ($sum -le 0) {
       $zip.Dispose()
       $zip = $null
       Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force
       return
     }
+    $denominator = $Total
+    $offset = $Base
+    if ($denominator -le 0) { $denominator = $sum; $offset = [long]0 }
     $done = [long]0
-    $count = 0
+    $lastPercent = -1
     foreach ($entry in $entries) {
       $dest = Join-Path $Destination $entry.FullName
       $destDir = Split-Path -Parent $dest
       if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
       [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
       $done += $entry.Length
-      $count++
-      if (($count % 25) -eq 0 -or $done -ge $total) {
-        $percent = [Math]::Min(100, [int]($done * 100 / $total))
-        $have = '{0:N1}' -f ($done / 1MB)
-        $want = '{0:N1}' -f ($total / 1MB)
-        Write-Progress -Activity 'Installing ranite' -Status "Step ${Step}/${Steps}: Extracting $percent% ($have/$want MB)" -PercentComplete $percent
+      $percent = [Math]::Min(100, [int](($offset + $done) * 100 / $denominator))
+      if ($percent -ne $lastPercent) {
+        Show-Bar ($offset + $done) $denominator 'Extracting'
+        $lastPercent = $percent
       }
     }
-    Write-Progress -Activity 'Installing ranite' -Completed
+    Show-Bar ($offset + $done) $denominator 'Extracting'
   } finally {
     if ($zip -ne $null) { $zip.Dispose() }
   }
@@ -67,14 +91,15 @@ function Installed-Version {
 }
 
 function Download-WithProgress {
-  param([string]$Url, [string]$OutFile, [int]$Step, [int]$Steps)
-  $total = [long]0
-  try {
-    $head = Invoke-WebRequest -Method Head -Uri $Url -UseBasicParsing -ErrorAction Stop
-    $lengthHeader = @($head.Headers['Content-Length'])[0]
-    if ("$lengthHeader" -match '^\d+$') { $total = [long]$lengthHeader }
-  } catch { $total = [long]0 }
-  if ($total -le 0) {
+  param([string]$Url, [string]$OutFile, [long]$Total, [long]$Base)
+  if ($Total -le 0) {
+    try {
+      $head = Invoke-WebRequest -Method Head -Uri $Url -UseBasicParsing -ErrorAction Stop
+      $lengthHeader = @($head.Headers['Content-Length'])[0]
+      if ("$lengthHeader" -match '^\d+$') { $Total = [long]$lengthHeader }
+    } catch { $Total = [long]0 }
+  }
+  if ($Total -le 0) {
     Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
     return
   }
@@ -85,22 +110,24 @@ function Download-WithProgress {
     $response = $client.GetAsync($Url, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
     if (-not $response.IsSuccessStatusCode) { throw "Download failed (HTTP $([int]$response.StatusCode)): $Url" }
     $contentLength = $response.Content.Headers.ContentLength
-    if ($total -le 0 -and $contentLength -gt 0) { $total = [long]$contentLength }
+    if ($Total -le 0 -and $contentLength -gt 0) { $Total = [long]$contentLength }
     $source = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
     try {
       $target = [IO.File]::OpenWrite($OutFile)
       try {
         $buffer = New-Object byte[] 81920
         $read = [long]0
+        $lastPercent = -1
         while (($count = $source.Read($buffer, 0, $buffer.Length)) -gt 0) {
           $target.Write($buffer, 0, $count)
           $read += $count
-          $percent = [Math]::Min(100, [int]($read * 100 / $total))
-          $have = '{0:N1}' -f ($read / 1MB)
-          $want = '{0:N1}' -f ($total / 1MB)
-          Write-Progress -Activity 'Installing ranite' -Status "Step ${Step}/${Steps}: Downloading $percent% ($have/$want MB)" -PercentComplete $percent
+          $percent = [Math]::Min(100, [int](($Base + $read) * 100 / $Total))
+          if ($percent -ne $lastPercent) {
+            Show-Bar ($Base + $read) $Total 'Downloading'
+            $lastPercent = $percent
+          }
         }
-        Write-Progress -Activity 'Installing ranite' -Completed
+        Show-Bar ($Base + $read) $Total 'Downloading'
       } finally { $target.Close() }
     } finally { $source.Close() }
   } finally {
@@ -151,19 +178,47 @@ try {
   if ([string]::IsNullOrWhiteSpace($Binary)) {
     Write-Host "Downloading ranite $specific ($target)"
     $archive = Join-Path $tmp $fileName
-    Download-WithProgress -Url $url -OutFile $archive -Step 1 -Steps 2
+    $meta = Get-RemoteMeta $url
+    if ($meta -ne $null) {
+      $BarTotal = $meta.D + $meta.U + $meta.U
+      Download-WithProgress -Url $url -OutFile $archive -Total $BarTotal -Base 0
+      $baseD = (Get-Item -LiteralPath $archive).Length
+    } else {
+      Download-WithProgress -Url $url -OutFile $archive -Total 0 -Base 0
+      $baseD = (Get-Item -LiteralPath $archive).Length
+      $BarTotal = [long]0
+    }
   } else {
     Write-Host "Installing ranite from $Binary"
     $archive = Join-Path $tmp ([IO.Path]::GetFileName($Binary))
     Copy-Item -LiteralPath $Binary -Destination $archive
+    $BarTotal = [long]0
   }
   $extract = Join-Path $tmp 'extract'
   New-Item -ItemType Directory -Path $extract | Out-Null
-  if ([string]::IsNullOrWhiteSpace($Binary)) { Extract-WithProgress -Archive $archive -Destination $extract -Step 2 -Steps 2 }
-  else { Extract-WithProgress -Archive $archive -Destination $extract -Step 1 -Steps 1 }
+  if ($BarTotal -gt 0) { Extract-WithProgress -Archive $archive -Destination $extract -Total $BarTotal -Base $baseD }
+  else { Extract-WithProgress -Archive $archive -Destination $extract -Total 0 -Base 0 }
   if (-not (Test-Path -LiteralPath (Join-Path $extract $App))) { throw "Archive does not contain a '$App' directory." }
   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-  Copy-Item -Path (Join-Path $extract "$App/*") -Destination $InstallDir -Recurse -Force
+  if ($BarTotal -gt 0) {
+    $treeRoot = Join-Path $extract $App
+    $baseDU = $baseD + [long](Get-ChildItem -LiteralPath $treeRoot -Recurse -File | Measure-Object -Property Length -Sum).Sum
+    $copied = [long]0
+    foreach ($child in Get-ChildItem -LiteralPath $treeRoot) {
+      $item = Get-Item -LiteralPath $child.FullName
+      if ($item -is [IO.DirectoryInfo]) {
+        $childSize = [long](Get-ChildItem -LiteralPath $item.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+      } else {
+        $childSize = [long]$item.Length
+      }
+      Copy-Item -LiteralPath $item.FullName -Destination $InstallDir -Recurse -Force
+      $copied += $childSize
+      Show-Bar ($baseDU + $copied) $BarTotal 'Installing'
+    }
+  } else {
+    Copy-Item -Path (Join-Path $extract "$App/*") -Destination $InstallDir -Recurse -Force
+  }
+  Write-Progress -Activity 'Installing ranite' -Completed
   New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
   $launcherBody = "@echo off`r`nrem Generated by the ranite installer. Uses the bundled Node.js runtime.`r`n`"$InstallDir\node\bin\node.exe`" `"$InstallDir\app\dist\cli.js`" %*`r`n"
   [IO.File]::WriteAllText($Launcher, $launcherBody, [Text.Encoding]::ASCII)

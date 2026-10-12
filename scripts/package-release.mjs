@@ -19,7 +19,19 @@
  * (Windows 10+, macOS and Linux all ship one).
  */
 import { createHash } from 'node:crypto';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +72,33 @@ function run(command, parameters, options = {}) {
 
 function formatMB(bytes) {
   return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/**
+ * Measures a directory tree the way installers do: apparent byte size plus
+ * disk usage emulated at 4 KiB blocks (matches du on typical filesystems
+ * within a fraction of a percent, verified against GNU du).
+ */
+function measureTree(root) {
+  let apparent = 0;
+  let blocks = 0;
+  const walk = (path) => {
+    const info = lstatSync(path);
+    if (info.isSymbolicLink()) {
+      apparent += info.size;
+      blocks += 4096;
+      return;
+    }
+    if (info.isDirectory()) {
+      blocks += 4096;
+      for (const entry of readdirSync(path)) walk(join(path, entry));
+      return;
+    }
+    apparent += info.size;
+    blocks += Math.ceil(info.size / 4096) * 4096;
+  };
+  walk(root);
+  return { apparent, duKb: Math.ceil(blocks / 1024) };
 }
 
 function directoryBytes(directory) {
@@ -241,6 +280,13 @@ async function main() {
     else run('tar', ['-czf', archive, 'ranite'], { cwd: stage });
     const sizeMB = (statSync(archive).size / 1048576).toFixed(1);
     log(`Wrote ${archive} (${sizeMB} MB).`);
+
+    // 6. Describe the archive for installers: exact measured byte counts, so
+    // the progress bar never estimates. Uploaded next to the archive.
+    const tree = measureTree(join(stage, 'ranite'));
+    const meta = `archive_bytes=${statSync(archive).size}\npayload_bytes=${tree.apparent}\npayload_du_kb=${tree.duKb}\n`;
+    writeFileSync(`${archive}.meta`, meta);
+    log(`Wrote ${archive}.meta (${tree.duKb} KiB payload).`);
   } finally {
     if (KEEP_STAGE) log(`Keeping stage directory ${stage}.`);
     else rmSync(stage, { recursive: true, force: true });
