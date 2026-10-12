@@ -37,6 +37,7 @@ import {
 } from './telegram-setup.js';
 import type { McpServerState } from './settings.js';
 import { defaultModelIsUsable, readiness, summarizeProviders } from './cli/config-edit.js';
+import { runUninstall } from './uninstall.js';
 import * as ui from './cli/ui.js';
 
 import type { AgentSessionRuntimeView } from './agent-session.js';
@@ -74,6 +75,7 @@ function usage(): void {
     ['ranite workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
     ['ranite skills', 'List global and active-workspace Agent Skills.'],
     ['ranite about', 'Version, runtime, configuration paths.'],
+    ['ranite uninstall', 'Remove the installed program. Keeps data; --purge removes it too.'],
   ]);
   ui.line();
   ui.line('Options:');
@@ -1433,6 +1435,10 @@ async function main(): Promise<void> {
     }
     case 'skills': {
       await runSkills(parsed);
+      return;
+    }
+    case 'uninstall': {
+      await runUninstall(parsed);
       return;
     }
     default: {

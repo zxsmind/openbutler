@@ -89,6 +89,7 @@ ranite permissions --review-timeout 30   Raise the auto-review decision timeout 
 ranite restart            Restart the background host using the installed code
 ranite telegram setup     Connect the owner Telegram channel
 ranite events / actions   Inspect the durable event and tool action ledger
+ranite uninstall          Remove the installed program (keeps data; --purge removes it too)
 ranite --help             Show all commands
 ranite --version          Print the installed version
 ```
