@@ -802,6 +802,60 @@ describe('shared host and session IPC', () => {
     expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'owner-inbox')).toBe(true);
   }, 15_000);
 
+  it('starts a new chat from Telegram with /clear', async () => {
+    const settings = await import('../src/settings.js');
+    const store = settings.defaultSettings();
+    store.telegram = { enabled: true, tokenEnv: 'FTG_TOKEN', workspaceRoot: root, chatId: '1', userId: '2' };
+    settings.saveSettings(store);
+    const viewer = await client();
+    const before = viewer.getSnapshot().session.id;
+    await host.receiveTelegramMessage(31, '/clear');
+    await vi.waitFor(() => expect(viewer.getSnapshot().session.id).not.toBe(before));
+    expect(viewer.getSnapshot().busy).toBe(false);
+  }, 10_000);
+
+  it('lists the last 10 chats from Telegram with /sessions', async () => {
+    const settings = await import('../src/settings.js');
+    const store = settings.defaultSettings();
+    store.telegram = { enabled: true, tokenEnv: 'FTG_SESSIONS_TOKEN', workspaceRoot: root, chatId: '1', userId: '2' };
+    settings.saveSettings(store);
+    vi.stubEnv('FTG_SESSIONS_TOKEN', '123456:fixture-sessions-token-ok');
+    const sent: string[] = [];
+    const fetchStub = vi.fn(async (url: unknown, init?: RequestInit) => {
+      const method = String(url).split('/').at(-1);
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      let result: unknown = true;
+      if (method === 'getMe') result = { is_bot: true, username: 'sessions_bot' };
+      if (method === 'getWebhookInfo') result = {};
+      if (method === 'sendMessage') {
+        sent.push(String(body.text));
+        result = { message_id: sent.length };
+      }
+      if (method === 'getUpdates') {
+        result = await new Promise<unknown[]>((_resolveUpdates, rejectUpdates) => {
+          init?.signal?.addEventListener('abort', () => rejectUpdates(new Error('Fixture polling aborted.')), { once: true });
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchStub);
+    try {
+      await requestHost('settings.reload', {});
+      const viewer = await client();
+      await viewer.sendMessage({ text: 'Hello from the terminal', images: [] }, preferences);
+      await vi.waitFor(() =>
+        expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Fixture response')).toBe(
+          true,
+        ),
+      );
+      await viewer.flushSave();
+      await host.receiveTelegramMessage(41, '/sessions');
+      await vi.waitFor(() => expect(sent.some((text) => /Recent chats:\n1\. .+ — \d{4}-\d{2}-\d{2}/.test(text))).toBe(true));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15_000);
+
   it('removes the reply keyboard when the owner chat is unpaired', async () => {
     const settings = await import('../src/settings.js');
     const store = settings.defaultSettings();

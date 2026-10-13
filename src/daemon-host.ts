@@ -24,7 +24,7 @@ import {
   type SessionEntriesPatch,
   type SessionSnapshotData,
 } from './daemon-protocol.js';
-import { loadSavedSession, type SessionEntry } from './session-store.js';
+import { listSavedSessions, loadSavedSession, type SessionEntry } from './session-store.js';
 import type { McpServerRequest } from './tools/mcp.js';
 import { ActivityLedger, type ObservedEventInput, type ObservedEventRow } from './activity-ledger.js';
 import { redactSensitive, redactSensitiveText } from './sensitive-data.js';
@@ -832,6 +832,28 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       // The owner asked to stop the current work, not to lose queued messages (P3 decision).
       stopNamedRun(key, { keepQueue: true });
       await telegram?.sendOwner(active ? 'Stopping the requested run; queued messages are kept.' : 'No matching run is active.');
+      return;
+    }
+    // Telegram is a channel into the machine custodian, not a separate session. Its messages
+    // land in the custodian's current chat; these commands let the owner steer that chat.
+    if (text.trim() === '/clear') {
+      const workspace = await getCustodianWorkspace(custodianWorkspace?.runtime.workspaceRoot ?? settings.workspaceRoot);
+      if (workspace.controller.isBusy) {
+        await telegram?.sendOwner('Wait for the current run to finish before starting a new chat.');
+        return;
+      }
+      workspace.controller.createNewSession();
+      await telegram?.sendOwner('Started a new chat. Send your request whenever you are ready.');
+      return;
+    }
+    if (text.trim() === '/sessions') {
+      const recent = listSavedSessions(null).slice(0, 10);
+      if (recent.length === 0) {
+        await telegram?.sendOwner('No saved chats yet. Send a message to start one.');
+        return;
+      }
+      const lines = recent.map((session, index) => `${index + 1}. ${session.title} — ${session.updatedAt.slice(0, 16).replace('T', ' ')}`);
+      await telegram?.sendOwner(`Recent chats:\n${lines.join('\n')}`);
       return;
     }
     const inboxId = randomUUID();

@@ -66,7 +66,7 @@ export const glyphs = {
   rule: '─',
   warn: '!',
   error: '✗',
-  spinner: ['✻', '✽', '✳', '✶'],
+  spinner: ['✻', '✽', '✼', '✶'],
 } as const;
 
 /** Spacing scale: screen padding, block gap, continuation indent. */
