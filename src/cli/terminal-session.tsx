@@ -17,7 +17,6 @@ import { listSavedSessions, type SessionEntry, type SessionSummary } from '../se
 import { upsertProvider, writeSettings } from './config-edit.js';
 import { detectTerminalTheme } from './terminal-detect.js';
 import { glyphs, uiTokens, type ResolvedTheme, type UiTheme, type UiTokens } from './theme.js';
-import { advanceEyes, createEyesState, renderEyesFrame, type EyesState } from './ascii-eyes.js';
 
 type Entry = SessionEntry;
 
@@ -208,34 +207,6 @@ function RunningIndicator({ tokens }: { tokens: UiTokens }) {
         </Text>
       ))}
     </Text>
-  );
-}
-
-/** Animated ASCII eyes for the empty welcome screen; pure art, no words. */
-function AsciiEyes({ width }: { width: number }) {
-  const stateRef = useRef<EyesState | null>(null);
-  const [lines, setLines] = useState<string[]>([]);
-  useEffect(() => {
-    const state = createEyesState();
-    stateRef.current = state;
-    setLines(renderEyesFrame(state, width));
-    let last = Date.now();
-    const timer = setInterval(() => {
-      const now = Date.now();
-      advanceEyes(state, Math.min(0.5, (now - last) / 1000));
-      last = now;
-      setLines(renderEyesFrame(state, width));
-    }, 120);
-    return () => {
-      clearInterval(timer);
-      if (stateRef.current === state) stateRef.current = null;
-    };
-  }, [width]);
-  if (lines.length === 0) return null;
-  return (
-    <Box flexDirection="column" alignItems="center" flexShrink={0}>
-      <Text>{lines.join('\n')}</Text>
-    </Box>
   );
 }
 
@@ -1380,8 +1351,6 @@ function SessionScreen({
           <Text bold dimColor={popupOpen}>
             R A N I T E
           </Text>
-          <AsciiEyes width={width} />
-          <Text dimColor>an agent that knows your machine · type a message or / for commands</Text>
         </Box>
       ) : (
         <Box width="100%" marginBottom={1} flexShrink={0}>
