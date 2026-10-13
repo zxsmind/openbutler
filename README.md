@@ -87,6 +87,8 @@ ranite --c "<request>"    Run a one-shot request
 ranite permissions        Show the current permission mode and auto-review history
 ranite permissions --review-timeout 30   Raise the auto-review decision timeout (seconds)
 ranite restart            Restart the background host using the installed code
+ranite stop               Stop the background host
+ranite daemon autostart on|off   Toggle automatic startup at user login
 ranite telegram setup     Connect the owner Telegram channel
 ranite events / actions   Inspect the durable event and tool action ledger
 ranite uninstall          Remove the installed program (keeps data; --purge removes it too)
@@ -94,7 +96,7 @@ ranite --help             Show all commands
 ranite --version          Print the installed version
 ```
 
-`ranite restart` stops active runs, saves sessions, and waits for the previous host to exit before starting the replacement. Open sessions reconnect and restore their history. Closing the TUI only detaches it; use this command after updating Ranite to reload the background host.
+`ranite restart` stops active runs, saves sessions, and waits for the previous host to exit before starting the replacement. Open sessions reconnect and restore their history. Closing the TUI only detaches it; use this command after updating Ranite to reload the background host. `ranite` narrates the lifecycle on launch (workspace, host pid, automatic-startup state) and on exit (whether the host keeps running).
 
 ## Building release archives
 
@@ -131,9 +133,9 @@ The host tells the agent which channel supplied a request, where its answer belo
 
 Further commands: `ranite telegram status`, `ranite telegram pair` (fresh pairing code), `ranite telegram unpair` (forget the chat, keep the channel polling), `ranite telegram disable` (stop the channel, keep the settings), `ranite telegram reset` (remove the channel, settings, and — with `--remove-env` — the token from the user environment).
 
-The bot registers a command menu (`/start`, `/approvals`, `/stop`) in the paired chat, formats notices and approval previews as HTML (falling back to plain text if Telegram rejects the markup), and pins an Approvals/Stop reply keyboard that is removed again on unpair, disable, or reset.
+The bot registers a command menu (`/start`, `/approvals`, `/stop`, `/clear`, `/sessions`) in the paired chat, formats notices and approval previews as HTML (falling back to plain text if Telegram rejects the markup), and pins an Approvals/Stop reply keyboard that is removed again on unpair, disable, or reset.
 
-Login startup (`ranite daemon install`) carries the token too: on macOS it is embedded in the managed LaunchAgent (written 0600), on Linux the unit reads an optional 0600 env file, on Windows the user environment already covers logon. Rewiring happens automatically during setup; `reset` unwires it again.
+Login startup (`ranite daemon autostart on`; `ranite daemon install` also works) carries the token too: on macOS it is embedded in the managed LaunchAgent (written 0600), on Linux the unit reads an optional 0600 env file, on Windows the user environment already covers logon. Rewiring happens automatically during setup; `reset` unwires it again.
 
 On servers, provide the token through the service manager (systemd `EnvironmentFile`, Docker `-e`, Task Scheduler environment) and run non-interactively:
 

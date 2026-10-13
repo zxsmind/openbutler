@@ -63,7 +63,8 @@ function usage(): void {
       'ranite permissions [workspace|auto-review|full-access]',
       'Choose the tool approval mode; --review-timeout <seconds> tunes auto-review.',
     ],
-    ['ranite daemon', 'Start, inspect, stop, or install the background host.'],
+    ['ranite daemon', 'Start, inspect, stop, or toggle automatic startup of the background host.'],
+    ['ranite stop', 'Stop the background host.'],
     ['ranite restart', 'Restart the background host and reconnect open sessions.'],
     ['ranite mcp', 'Manage global MCP servers.'],
     ['ranite tasks', 'List, add, run, and open explicitly configured background tasks.'],
@@ -619,8 +620,33 @@ async function runSession(workspaceRoot: string): Promise<void> {
     if (!(await prepareLocalMemoryModel())) return;
   }
 
-  await startDaemon();
-  const controller = await connectDaemonSession(workspaceRoot, approveMcpServer, { custodian: true });
+  ui.kv('Workspace', workspaceRoot);
+  const alreadyRunning = await getDaemonStatus();
+  if (alreadyRunning && !alreadyRunning.legacy && !alreadyRunning.unresponsive) {
+    ui.info(`Background host running (pid ${alreadyRunning.pid}).`);
+  } else {
+    const starting = ui.spinner({ text: 'Starting background host…', discardStdin: false }).start();
+    try {
+      const status = await startDaemon();
+      starting.succeed(`Background host ready (pid ${status.pid}).`);
+    } catch (error) {
+      starting.fail('Background host failed to start.');
+      throw error;
+    }
+  }
+  ui.kv(
+    'Automatic startup',
+    isAutostartInstalled() ? `installed (${autostartDescription()})` : 'not installed (enable with `ranite daemon autostart on`)',
+  );
+  let controller;
+  const connecting = ui.spinner({ text: 'Connecting to host…', discardStdin: false }).start();
+  try {
+    controller = await connectDaemonSession(workspaceRoot, approveMcpServer, { custodian: true });
+    connecting.succeed('Connected to host.');
+  } catch (error) {
+    connecting.fail('Could not connect to host.');
+    throw error;
+  }
   try {
     const { runTerminalSession } = await import('./cli/terminal-session.js');
     await runTerminalSession(controller);
@@ -631,6 +657,12 @@ async function runSession(workspaceRoot: string): Promise<void> {
       /* the host keeps its own save error in the session */
     }
     await controller.close();
+  }
+  const after = await getDaemonStatus();
+  if (after && !after.legacy && !after.unresponsive) {
+    ui.info(`Detached. Background host keeps running (pid ${after.pid}). Stop it with \`ranite daemon stop\`.`);
+  } else {
+    ui.info('Detached. Background host is not running.');
   }
 }
 
@@ -1011,7 +1043,9 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
     }
   }
   ui.info('Done. Message the bot any time; it shares one thread with this terminal.');
-  ui.info('In the chat: /approvals re-sends pending approvals, /stop stops the current run.');
+  ui.info(
+    'In the chat: /approvals re-sends pending approvals, /stop stops the current run, /clear starts a new chat, /sessions lists the last 10 chats.',
+  );
 }
 
 /** Read the settled Telegram state, waiting out a fresh host boot or restart. */
@@ -1265,7 +1299,7 @@ async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Pr
   }
 }
 
-async function runDaemonCommand(action: string): Promise<void> {
+async function runDaemonCommand(action: string, sub?: string): Promise<void> {
   if (action === 'run') {
     await runDaemonProcess();
     return;
@@ -1276,12 +1310,32 @@ async function runDaemonCommand(action: string): Promise<void> {
       return;
     }
     ui.success(installAutostart());
-    ui.info('Ranite will start at your next user login. Remove it with `ranite daemon uninstall`.');
+    ui.info('Ranite will start at your next user login. Remove it with `ranite daemon autostart off`.');
     return;
   }
   if (action === 'uninstall') {
     ui.info(uninstallAutostart());
     return;
+  }
+  if (action === 'autostart') {
+    const mode = sub ?? 'status';
+    if (mode === 'status') {
+      ui.info(
+        isAutostartInstalled() ? `Automatic startup is installed: ${autostartDescription()}.` : 'Automatic startup is not installed.',
+      );
+      return;
+    }
+    if (mode === 'on') {
+      if (isAutostartInstalled()) ui.info(`Automatic startup is already installed: ${autostartDescription()}.`);
+      else ui.success(installAutostart());
+      ui.info('Ranite will start at your next user login. Remove it with `ranite daemon autostart off`.');
+      return;
+    }
+    if (mode === 'off') {
+      ui.info(uninstallAutostart());
+      return;
+    }
+    throw new Error('Usage: ranite daemon autostart [on|off|status]');
   }
   if (action === 'autostart-status') {
     ui.info(isAutostartInstalled() ? `Automatic startup is installed: ${autostartDescription()}.` : 'Automatic startup is not installed.');
@@ -1323,7 +1377,7 @@ async function runDaemonCommand(action: string): Promise<void> {
     else ui.info('Background host is not running.');
     return;
   }
-  throw new Error('Usage: ranite daemon [start|status|stop|install|uninstall|autostart-status]');
+  throw new Error('Usage: ranite daemon [start|status|stop|install|uninstall|autostart [on|off|status]|autostart-status]');
 }
 
 async function main(): Promise<void> {
@@ -1397,7 +1451,11 @@ async function main(): Promise<void> {
       return;
     }
     case 'daemon': {
-      await runDaemonCommand(parsed.words[0] ?? 'status');
+      await runDaemonCommand(parsed.words[0] ?? 'status', parsed.words[1]);
+      return;
+    }
+    case 'stop': {
+      await runDaemonCommand('stop');
       return;
     }
     case 'restart': {
