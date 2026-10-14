@@ -7,7 +7,9 @@ import {
   listReasoningVariants,
   modelInputModalities,
   modelSupportsVision,
+  normalizeReasoningVariantId,
   providerIsConfigured,
+  reasoningSupportStatus,
   supportsImageToolResult,
   withReasoningVisibility,
 } from './provider/registry.js';
@@ -66,6 +68,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   let workspaceRoot = canonicalWorkspaceRoot(options.workspaceRoot ?? process.cwd());
   const { ToolRegistry } = await import('./tools/registry.js');
   let memoryIndex = new MemoryIndex(workspaceRoot);
+  let workspaceSwitch = Promise.resolve();
   let activeInputModalities = modelInputModalities(providerId, modelId, resolved.resolved);
   let mcp: Awaited<ReturnType<(typeof import('./tools/mcp.js'))['connectMcpServers']>> | null = null;
 
@@ -125,12 +128,13 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       },
       reasoningVariants,
       reasoningMetadataSource: activeCatalog.inferred ? activeCatalog.sourceProviderId : null,
-      reasoningDefault: settings.reasoning ?? 'auto',
+      reasoningSupport: reasoningSupportStatus(resolved.resolved, reasoningCatalog.model),
+      reasoningDefault: normalizeReasoningVariantId(settings.reasoning ?? 'default'),
       saveReasoningPreference: (variantId) => {
         const latest = loadSettings();
-        latest.reasoning = variantId;
+        latest.reasoning = normalizeReasoningVariantId(variantId);
         saveSettings(latest);
-        runtime.reasoningDefault = variantId;
+        runtime.reasoningDefault = latest.reasoning;
       },
       showReasoningDefault: settings.showReasoning === true,
       approvalMode: settings.approvalMode,
@@ -147,24 +151,32 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         runtime.showReasoningDefault = visible;
       },
       getReasoningProviderOptions: (variantId, visible) =>
-        withReasoningVisibility(activeResolved, activeVariants.find((variant) => variant.id === variantId)?.providerOptions ?? {}, visible),
+        withReasoningVisibility(
+          activeResolved,
+          activeVariants.find((variant) => variant.id === normalizeReasoningVariantId(variantId))?.providerOptions ?? {},
+          visible,
+        ),
       registry: createRegistry(activeInputModalities),
       selectWorkspaceRoot: async (path) => {
-        const nextRoot = canonicalWorkspaceRoot(path);
-        if (nextRoot === workspaceRoot) return;
-        const nextMemoryIndex = new MemoryIndex(nextRoot);
-        let nextRegistry: ReturnType<typeof createRegistry>;
-        try {
-          nextRegistry = createRegistry(activeInputModalities, nextRoot, nextMemoryIndex);
-        } catch (error) {
-          await nextMemoryIndex.close();
-          throw error;
-        }
-        const previousMemoryIndex = memoryIndex;
-        workspaceRoot = nextRoot;
-        memoryIndex = nextMemoryIndex;
-        runtime.registry = nextRegistry;
-        await previousMemoryIndex.close();
+        const run = workspaceSwitch.then(async () => {
+          const nextRoot = canonicalWorkspaceRoot(path);
+          if (nextRoot === workspaceRoot) return;
+          const nextMemoryIndex = new MemoryIndex(nextRoot);
+          let nextRegistry: ReturnType<typeof createRegistry>;
+          try {
+            nextRegistry = createRegistry(activeInputModalities, nextRoot, nextMemoryIndex);
+          } catch (error) {
+            await nextMemoryIndex.close();
+            throw error;
+          }
+          const previousMemoryIndex = memoryIndex;
+          workspaceRoot = nextRoot;
+          memoryIndex = nextMemoryIndex;
+          runtime.registry = nextRegistry;
+          await previousMemoryIndex.close();
+        });
+        workspaceSwitch = run.catch(() => {});
+        await run;
       },
       selectModel: async (nextProviderId, nextModelId) => {
         const nextSettings = loadSettings();
@@ -201,9 +213,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         runtime.supportsImageToolResult = supportsImageToolResult(next.resolved, nextModelId);
         runtime.reasoningVariants = nextVariants;
         runtime.reasoningMetadataSource = nextCatalog.inferred ? nextCatalog.sourceProviderId : null;
-        runtime.reasoningDefault = nextVariants.some((variant) => variant.id === (nextSettings.reasoning ?? 'auto'))
-          ? (nextSettings.reasoning ?? 'auto')
-          : 'auto';
+        runtime.reasoningSupport = reasoningSupportStatus(next.resolved, nextCatalog.model);
+        runtime.reasoningDefault = nextVariants.some(
+          (variant) => variant.id === normalizeReasoningVariantId(nextSettings.reasoning ?? 'default'),
+        )
+          ? normalizeReasoningVariantId(nextSettings.reasoning ?? 'default')
+          : 'default';
         runtime.registry = nextRegistry;
       },
       close: async () => {

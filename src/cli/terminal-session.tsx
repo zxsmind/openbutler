@@ -248,7 +248,7 @@ function SessionScreen({
   const pendingQuestionOptions = pendingQuestion?.options ?? [];
   const busy = snapshot.busy;
   const queuedMessageCount = snapshot.queuedMessageCount;
-  const firstQueuedMessage = snapshot.firstQueuedMessage;
+  const queuedMessages = snapshot.queuedMessages ?? (snapshot.firstQueuedMessage ? [snapshot.firstQueuedMessage] : []);
   const sessionSaveError = snapshot.sessionSaveError;
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
@@ -285,7 +285,7 @@ function SessionScreen({
   const [selectedTheme, setSelectedTheme] = useState<UiTheme>(initialTheme);
   const [settingsSelection, setSettingsSelection] = useState(0);
   const [reasoningVariantId, setReasoningVariantId] = useState(() =>
-    runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault) ? runtime.reasoningDefault : 'auto',
+    runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault) ? runtime.reasoningDefault : 'default',
   );
   const [reasoningSelection, setReasoningSelection] = useState(0);
   const [thinkingSelection, setThinkingSelection] = useState(runtime.showReasoningDefault ? 1 : 0);
@@ -387,7 +387,10 @@ function SessionScreen({
     sessionSaveError,
   ]);
   const slashMenuHeight = slashSuggestions.length + 2;
-  const queuedMessageCardHeight = 1;
+  const queuedPreviews = queuedMessages.slice(0, QUEUED_CARD_PREVIEW_LIMIT).map(formatQueuedPreview);
+  const queuedOverflowCount = Math.max(0, queuedMessageCount - queuedPreviews.length);
+  // Header row + preview rows + overflow row + top/bottom borders.
+  const queuedMessageCardHeight = queuedMessageCount > 0 ? queuedPreviews.length + (queuedOverflowCount > 0 ? 1 : 0) + 3 : 0;
   const queuedMessageCardTop = Math.max(0, layoutMetrics.composerTop - queuedMessageCardHeight - 1);
   const slashMenuTop = layoutMetrics.hasMeasured
     ? Math.max(0, layoutMetrics.composerTop - slashMenuHeight - 1 - (queuedMessageCount > 0 ? queuedMessageCardHeight + 1 : 0))
@@ -512,6 +515,20 @@ function SessionScreen({
     return () => clearTimeout(timer);
   }, [composerNotice]);
 
+  // Global rule for the top banner: no transient notice sticks. The stop
+  // confirmation clears as soon as the run is no longer busy, and any
+  // lingering banner is force-cleared after a timeout.
+  useEffect(() => {
+    if (busy) return;
+    setEscapeWarning(null);
+  }, [busy]);
+
+  useEffect(() => {
+    if (!escapeWarning) return;
+    const timer = setTimeout(() => setEscapeWarning(null), 5_000);
+    return () => clearTimeout(timer);
+  }, [escapeWarning]);
+
   const addEntry = useCallback(
     (entry: Entry) => {
       controller.addEntry(entry);
@@ -563,7 +580,7 @@ function SessionScreen({
       writeSettings(settings);
       const reasoning = runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault)
         ? runtime.reasoningDefault
-        : 'auto';
+        : 'default';
       setReasoningVariantId(reasoning);
       setReasoningSelection(
         Math.max(
@@ -813,11 +830,7 @@ function SessionScreen({
       setApprovalPanelHeight((previous) => (previous === height ? previous : height));
     }
   }, [pending, approvalNote, approvalPreview, composerWidth]);
-  const queuedMessagePreview = firstQueuedMessage
-    ? [firstQueuedMessage.text, ...Array.from({ length: firstQueuedMessage.imageCount }, (_, index) => `[Image attached #${index + 1}]`)]
-        .filter(Boolean)
-        .join(' ')
-    : '';
+  const queuedCardTitle = queuedMessageCount === 1 ? '1 queued message' : `${queuedMessageCount} queued messages`;
 
   const transcriptLayout = useMemo(() => {
     const heights: number[] = [];
@@ -1497,10 +1510,20 @@ function SessionScreen({
       )}
       {queuedMessageCount > 0 && !pending ? (
         <Box position="absolute" top={queuedMessageCardTop} left={0} width="100%" justifyContent="center">
-          <Text dimColor>
-            {`${glyphs.dot} ${queuedMessageCount} queued`}
-            {queuedMessagePreview ? `: ${clipped(queuedMessagePreview, Math.max(8, width - 20))}` : ''}
-          </Text>
+          <Box flexDirection="column" borderStyle="single" borderColor="gray" backgroundColor={tokens.surface} paddingX={1} flexShrink={0}>
+            <Box flexDirection="row" flexShrink={0}>
+              <Text color={tokens.accent} bold>
+                {`${glyphs.dot} ${queuedCardTitle}`}
+              </Text>
+              <Text dimColor> · sends on next gap</Text>
+            </Box>
+            {queuedPreviews.map((preview, index) => (
+              <Text key={index} dimColor>
+                {`${index + 1}. ${clipped(preview, Math.max(8, width - 12))}`}
+              </Text>
+            ))}
+            {queuedOverflowCount > 0 ? <Text dimColor>{`+${queuedOverflowCount} more…`}</Text> : null}
+          </Box>
         </Box>
       ) : null}
       <Box width="100%" flexDirection="row" justifyContent="space-between" flexShrink={0}>
@@ -1653,13 +1676,12 @@ function SessionScreen({
             <Text dimColor>
               {runtime.providerId}/{runtime.modelId}
             </Text>
-            {runtime.reasoningMetadataSource ? (
-              <Text color={tokens.warning} dimColor>
-                Catalog match: {runtime.reasoningMetadataSource}; custom endpoint support is unverified.
-              </Text>
-            ) : null}
             {runtime.reasoningVariants.length <= 1 ? (
-              <Text dimColor>No selectable reasoning variants are listed for this model.</Text>
+              <Text dimColor>
+                {(runtime.reasoningSupport ?? 'model-unsupported') === 'adapter-unmapped'
+                  ? 'This model lists reasoning support, but Ranite has no reasoning mapping for this adapter yet.'
+                  : 'No selectable reasoning variants are listed for this model.'}
+              </Text>
             ) : (
               runtime.reasoningVariants.map((variant, index) => (
                 <Box key={variant.id} width="100%" {...(reasoningSelection === index ? { backgroundColor: tokens.accent } : {})}>
@@ -2842,6 +2864,17 @@ function clipTerminalWidth(text: string, width: number): string {
 
 function clipped(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+const QUEUED_CARD_PREVIEW_LIMIT = 3;
+
+function formatQueuedPreview(message: { text: string; imageCount: number }): string {
+  return [
+    message.text.replace(/\s+/g, ' ').trim(),
+    ...Array.from({ length: message.imageCount }, (_, index) => `[Image attached #${index + 1}]`),
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function formatContextIndicator(tokens?: number, contextLimit?: number): string {

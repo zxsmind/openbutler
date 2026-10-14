@@ -94,7 +94,8 @@ class DaemonSessionClient implements AgentSessionClient {
       supportsVision: false,
       reasoningVariants: [],
       reasoningMetadataSource: null,
-      reasoningDefault: 'auto',
+      reasoningSupport: 'model-unsupported',
+      reasoningDefault: 'default',
       saveReasoningPreference: (variantId) => {
         this.runtime.reasoningDefault = variantId;
         void this.request('runtime.save-reasoning', { variantId }).catch(() => {});
@@ -339,6 +340,7 @@ class DaemonSessionClient implements AgentSessionClient {
       pendingQuestion: event.patch.pendingQuestion ?? null,
       queuedMessageCount: event.patch.queuedMessageCount,
       firstQueuedMessage: event.patch.firstQueuedMessage,
+      queuedMessages: event.patch.queuedMessages ?? (event.patch.firstQueuedMessage ? [event.patch.firstQueuedMessage] : []),
       sessionSaveError: event.patch.sessionSaveError,
       streamingAssistantEntry: streamingIndex === null ? null : (session.entries[streamingIndex] ?? null),
     };
@@ -461,6 +463,7 @@ function snapshotFromData(data: SessionSnapshotData): AgentSessionSnapshot {
     pendingQuestion: data.pendingQuestion ?? null,
     queuedMessageCount: data.queuedMessageCount,
     firstQueuedMessage: data.firstQueuedMessage,
+    queuedMessages: data.queuedMessages ?? (data.firstQueuedMessage ? [data.firstQueuedMessage] : []),
     sessionSaveError: data.sessionSaveError,
     streamingAssistantEntry: index === null ? null : (data.session.entries[index] ?? null),
   };

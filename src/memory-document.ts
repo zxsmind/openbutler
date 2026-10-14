@@ -1,7 +1,7 @@
 import { JSON_SCHEMA, load } from 'js-yaml';
 import { basename } from 'node:path';
 
-export const MEMORY_DOCUMENT_REVISION = 'markdown-v2';
+export const MEMORY_DOCUMENT_REVISION = 'markdown-v3';
 export const MEMORY_INDEX_MAX_LINES = 200;
 export const MEMORY_INDEX_MAX_BYTES = 25 * 1024;
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
@@ -21,39 +21,38 @@ export interface MemoryDocument {
   type: MemoryType;
   title: string;
   description: string;
+  updated: string;
   chunks: MemoryChunk[];
 }
 
-export const MEMORY_DOCUMENT_GUIDANCE = `Memory is Markdown under the persistent memory root: shared user facts in user/profile.md and user/notes/, active-workspace facts in workspaces/<workspace-key>/profile.md and its notes/. Folder placement defines scope; frontmatter cannot change it. Profiles collect stable facts; topic notes hold explanations, decisions, recurring issues, and reference material. Do not create extra indexes or empty placeholder notes. MEMORY.md is the single cross-workspace index, capped at ${MEMORY_INDEX_MAX_LINES} lines and ${Math.floor(MEMORY_INDEX_MAX_BYTES / 1024)} KB.
+export const MEMORY_DOCUMENT_GUIDANCE = `Memory is Markdown under the persistent memory root. The user scope holds how to respond (user/preferences.md), who the user is (user/profile.md), durable topics (topics/*.md), and project areas (areas/*.md). The active workspace holds only its own profile (workspaces/<workspace-key>/profile.md). Folder placement defines scope; frontmatter cannot change it. MEMORY.md is the single cross-workspace index over the user scope only, capped at ${MEMORY_INDEX_MAX_LINES} lines and ${Math.floor(MEMORY_INDEX_MAX_BYTES / 1024)} KB; the workspace profile is discovered through the active workspace path and is never linked from this index.
 
-Every profile and topic note is a Markdown document:
+Every memory note is flat:
 
     ---
-    type: feedback
-    title: <document title>
-    description: <what this document covers>
+    title: <document title, at most 160 characters>
+    description: <what this document covers, at most 500 characters>
+    updated: <YYYY-MM-DD, stamped by the write path>
+    type: user
     ---
-    # <document title>
-    ## <subject area>
-    ### <memory title>
-    #### Summary
-    <the fact and when it applies>
-    #### Details
-    <concrete scope, conditions, identifiers, reasons, current state, and open questions, when known>
-    #### Evidence
-    <the source, date, or correction that grounds it; omit when unavailable>
+    # <same as title>
 
-- type is user (personal facts and preferences), feedback (corrections and confirmed approaches), project (project or workspace state), or reference (useful external locations). A user profile uses type: user; a workspace profile uses type: project.
-- title is required, at most 160 characters; description is required, at most 500 characters. The H1 must equal title, every H3 entry needs a non-empty #### Summary, H4 sections only belong inside an H3 entry, and heading levels never skip.
-- Filenames are descriptive English kebab-case, for example user/notes/workspace-file-hygiene.md; subdirectories under notes/ follow the same style, and profile.md is reserved for profiles.
-- Write bodies in English so the local embedding model can find them, preserving exact identifiers and user quotations as written. The placeholders above describe structure, not facts to save.
+    <One short summary paragraph: what this note says and why it matters.>
 
-Writing rules:
-- Read a document before changing it. When a fact or preference changes, update the entry it affects, merge duplicates, say what the change supersedes, and split unrelated subjects into separate topic files.
-- Save only durable information that cannot be derived from the current repository or reread from a primary source.
-- Record uncertainty and provenance instead of guessing, keep an explicit preference, a verified fact, a historical observation, and an unresolved assumption distinct, and never assume an imported project fact with no recorded workspace describes the active workspace.
-- Never store credentials, secrets, raw file contents, image data, transient chat, or raw tool output.
-- MEMORY.md entries are one line each: - [<title>](<user-scope path>) — <brief signal>, linking only user/profile.md or existing user/notes/*.md files. The signal is the short phrase needed in ordinary replies; detailed facts stay in the linked note. Workspace facts stay in the active workspace scope and are never linked from this index. A native write adds the entry for a new user-scope document automatically; do not duplicate it.`;
+    - <One durable fact per bullet: facts, decisions, rules, dated numbers.>
+    - <Uncertain or unresolved items are marked as such, never stated as fact.>
+
+- The single H1 matches the title exactly. Filenames are descriptive English kebab-case; preferences.md and profile.md are reserved names. Frontmatter values are plain text without colons, so they stay valid YAML.
+- Write the summary so it can be acted on without reading the bullets. Evidence travels with the fact (session id, date, brief command), never in a separate section.
+- The profile holds what will still be true in three months: name, occupation, location, main projects. Tastes, states, and incidents belong in topics; ongoing work belongs in areas. If it expires in weeks, it is not profile material.
+- Sub-headings are optional and never a substitute for content: a note with headings but no text has nothing to retrieve.
+- Memory is written entirely in English: titles, descriptions, signals, summaries, and bullets. The local embedding model is English-based; other languages retrieve poorly. Translate user quotations into English; exact identifiers (paths, folder names, codes, UI labels) stay verbatim.
+- Save only durable information that cannot be derived from the current repository or reread from a primary source. No progress logs, no run transcripts, no raw tool output; what happened lives in session transcripts.
+- Durable information includes numbers, identifiers, and decisions with their dates, and tricks that took debugging to find, with proof. Do not save run progress, per-item statuses, fixed-bug archaeology, or anything the repository already records (commit history, README, configs). Durable: "Staging deploys run weekdays at 09:00 UTC from the main branch (confirmed 2026-10-01, deploy log)." Transient: "Deploy running, 3 steps left, will update when done."
+- One fact has one canonical home. Standing rules go in preferences or a single topic; project areas go in areas/ so every workspace sees them; directory-local workings go in the workspace profile. Never copy a fact into two notes; point at it.
+- Maintain, do not append: edit the bullet a changed fact lives in. Delete completed status. Notes carry an updated date; before relying on an old note, reverify it, refresh the date when confirmed, fix or delete when wrong.
+- Never store credentials, secrets, identity or payment numbers, health information, political views, raw file contents, image data, or conversation transcripts. The only exception is the user explicitly asking to remember something sensitive, recorded plainly as their request.
+- A native write stamps updated with today's date and adds the MEMORY.md entry for a new user-scope document automatically; do not duplicate it. MEMORY.md entries are one line each: a title link, a short signal, and the date.`;
 
 function frontmatter(lines: string[]): { metadata: Record<string, unknown>; bodyStart: number; error: string | null } {
   if (lines[0]?.trim() !== '---') return { metadata: {}, bodyStart: 0, error: 'YAML frontmatter is required.' };
@@ -90,52 +89,32 @@ export function validateMemoryDocument(content: string, expectedProfileType?: 'u
   const parsed = frontmatter(lines);
   if (parsed.error) return [parsed.error];
   const errors: string[] = [];
-  const { type, title, description } = parsed.metadata;
+  const { type, title, description, updated } = parsed.metadata;
   if (typeof type !== 'string' || !TYPES.includes(type as MemoryType)) errors.push('type must be user, feedback, project, or reference.');
   if (expectedProfileType && type !== expectedProfileType) errors.push(`This profile requires type: ${expectedProfileType}.`);
   if (typeof title !== 'string' || !title.trim() || title.length > 160)
     errors.push('title must be a non-empty string of at most 160 characters.');
   if (typeof description !== 'string' || !description.trim() || description.length > 500)
     errors.push('description must be a non-empty string of at most 500 characters.');
+  if (typeof updated !== 'string' || !isCalendarDate(updated))
+    errors.push('updated must be a calendar date as YYYY-MM-DD; the write path stamps it, so keep the line and let it be refreshed.');
   const readHeading = headingReader();
-  let previousLevel = 0;
   let documentTitles = 0;
-  let topicSeen = false;
-  let item: { title: string; hasSummary: boolean; summaryHasContent: boolean } | null = null;
-  let inSummary = false;
-  let itemCount = 0;
-  const finishItem = () => {
-    if (item && (!item.hasSummary || !item.summaryHasContent)) errors.push(`Memory "${item.title}" requires a non-empty #### Summary.`);
-    item = null;
-    inSummary = false;
-  };
+  let hasContent = false;
   for (let index = parsed.bodyStart; index < lines.length; index++) {
     const line = lines[index]!;
     const heading = readHeading(line);
     if (!heading) {
-      if (inSummary && item && line.trim() && !/^\s*(`{3,}|~{3,})/.test(line)) item.summaryHasContent = true;
+      if (line.trim()) hasContent = true;
       continue;
     }
-    if (heading.level > previousLevel + 1) errors.push(`Line ${index + 1}: headings must not skip a level.`);
-    previousLevel = heading.level;
-    if (heading.level <= 3) finishItem();
     if (heading.level === 1) {
       documentTitles++;
       if (heading.title !== title) errors.push('The H1 must match the frontmatter title.');
-    } else if (heading.level === 2) topicSeen = true;
-    else if (heading.level === 3) {
-      if (!topicSeen) errors.push('Each H3 memory must be inside an H2 subject area.');
-      item = { title: heading.title, hasSummary: false, summaryHasContent: false };
-      itemCount++;
-    } else if (heading.level === 4) {
-      if (!item) errors.push(`Line ${index + 1}: H4 sections must belong to an H3 memory.`);
-      inSummary = heading.title === 'Summary';
-      if (inSummary && item) item.hasSummary = true;
-    } else inSummary = false;
+    }
   }
-  finishItem();
   if (documentTitles !== 1) errors.push('Use exactly one H1 document title.');
-  if (!itemCount) errors.push('Add at least one H3 memory item under an H2 subject area.');
+  if (!hasContent) errors.push('Write the summary and facts, not just headings: the body needs text outside headings.');
   return [...new Set(errors)];
 }
 
@@ -159,20 +138,40 @@ export function validateMemoryIndex(content: string): string[] {
       continue;
     }
     if (/^#{2,6}\s+/.test(line)) continue;
-    const entry = /^-\s+\[([^\]]+)\]\(([^)\s]+)\)\s*(?:—|-|:)\s+(.+)$/.exec(line);
+    const entry = /^-\s+\[([^\]]+)\]\(([^)\s]+)\)\s*(?:—|-|:)\s+(.+?)\s*$/.exec(line);
     if (!entry) {
-      errors.push(`Line ${index + 1}: use one Markdown link and a brief user signal per index entry.`);
+      errors.push(`Line ${index + 1}: use one Markdown link, a brief signal, and the updated date per index entry.`);
       continue;
     }
     const path = entry[2]!;
-    if (path !== 'user/profile.md' && !(path.startsWith('user/notes/') && validateMemoryNoteName(path.slice('user/notes/'.length)))) {
+    if (!isIndexableUserPath(path)) {
       errors.push(
-        `Line ${index + 1}: index links must target user/profile.md or user/notes/*.md. Workspace notes are discovered through the active workspace path.`,
+        `Line ${index + 1}: index links must target user/preferences.md, user/profile.md, topics/*.md, or areas/*.md. The workspace profile is discovered through the active workspace path.`,
       );
+      continue;
     }
+    const date = /\((\d{4}-\d{2}-\d{2})\)\s*$/.exec(entry[3]!);
+    if (!date || !isCalendarDate(date[1]!)) errors.push(`Line ${index + 1}: end the signal with the note's updated date as (YYYY-MM-DD).`);
   }
   if (titles !== 1) errors.push('The memory index requires exactly one H1 title.');
   return errors;
+}
+
+function isIndexableUserPath(path: string): boolean {
+  if (path === 'user/profile.md' || path === 'user/preferences.md') return true;
+  if (path.startsWith('topics/')) return validateMemoryNoteName(path.slice('topics/'.length));
+  return path.startsWith('areas/') && validateMemoryNoteName(path.slice('areas/'.length));
+}
+
+export function isCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]!);
+  const month = Number(match[2]!);
+  const day = Number(match[3]!);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 /** Reading remains compatible with legacy notes; new native writes use the validator above. */
@@ -196,6 +195,7 @@ export function parseMemoryDocument(content: string, path: string, scope: Memory
       ? metadata.title.trim()
       : (legacyTitle ?? basename(path, '.md').replace(/[-_]+/g, ' '));
   const description = typeof metadata.description === 'string' ? metadata.description.trim() : '';
+  const updated = typeof metadata.updated === 'string' ? metadata.updated.trim() : '';
   const chunks: MemoryChunk[] = [];
   const headings: string[] = [];
   const readHeading = headingReader();
@@ -245,5 +245,5 @@ export function parseMemoryDocument(content: string, path: string, scope: Memory
     length += line.length + 1;
   }
   flush();
-  return { type, title, description, chunks };
+  return { type, title, description, updated, chunks };
 }

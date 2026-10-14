@@ -437,6 +437,110 @@ export interface ReasoningVariant {
   providerOptions: Record<string, Record<string, JSONValue>>;
 }
 
+/**
+ * The reasoning wire format of one runtime package.
+ *
+ * Adapter knowledge lives here and only here: one table entry per npm
+ * package. The exported helpers below delegate to this table so a newly
+ * added adapter cannot end up half-mapped (model creation works, reasoning
+ * silently degrades to Auto) the way a forgotten switch-case allows.
+ */
+interface ReasoningAdapter {
+  /** providerOptions namespace, mirroring providerOptionsKey. */
+  optionsKey: (provider: ResolvedProvider) => string | null;
+  /** Effort value to request options, or null when the adapter has no effort control. */
+  effort: (effort: string) => Record<string, unknown> | null;
+  /** On/off toggle to request options, or null when the adapter has no toggle. */
+  toggle: (enabled: boolean) => Record<string, unknown> | null;
+  /** Token budget to request options, or null when the adapter has no budget control. */
+  budget: (tokens: number) => Record<string, unknown> | null;
+  /** Extra request options merged when reasoning is shown, or null for none. */
+  display: (current: Record<string, unknown>) => Record<string, unknown> | null;
+}
+
+/** OpenAI-vocabulary efforts, shared by the OpenAI-parity adapters. */
+const OPENAI_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+const REASONING_ADAPTERS: Record<string, ReasoningAdapter> = {
+  '@ai-sdk/openai-compatible': {
+    optionsKey: (provider) => provider.id.split('.')[0] ?? provider.id,
+    effort: (effort) => ({ reasoningEffort: effort }),
+    toggle: () => null,
+    budget: () => null,
+    // OpenAI-compatible endpoints may stream reasoning_content without a
+    // standard request flag; their selected models.dev effort stays in force.
+    display: () => null,
+  },
+  '@ai-sdk/openai': {
+    optionsKey: () => 'openai',
+    effort: (effort) => (OPENAI_EFFORT_VALUES.includes(effort) ? { reasoningEffort: effort } : null),
+    toggle: (enabled) => ({ reasoningEffort: enabled ? 'high' : 'none' }),
+    budget: () => null,
+    display: () => ({ reasoningSummary: 'auto' }),
+  },
+  '@ai-sdk/anthropic': {
+    optionsKey: () => 'anthropic',
+    effort: (effort) => {
+      if (effort === 'none') return { thinking: { type: 'disabled' } };
+      return ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)
+        ? { thinking: { type: 'adaptive', display: 'omitted' }, effort }
+        : null;
+    },
+    toggle: (enabled) => ({ thinking: enabled ? { type: 'adaptive', display: 'omitted' } : { type: 'disabled' } }),
+    budget: (tokens) => ({ thinking: { type: 'enabled', budgetTokens: tokens } }),
+    display: (current) => {
+      const thinking =
+        typeof current.thinking === 'object' && current.thinking !== null ? (current.thinking as Record<string, unknown>) : null;
+      if (thinking?.type === 'disabled') return null;
+      return { sendReasoning: true, ...(thinking ? { thinking: { ...thinking, display: 'summarized' } } : {}) };
+    },
+  },
+  '@ai-sdk/google': {
+    optionsKey: () => 'google',
+    effort: (effort) => (['minimal', 'low', 'medium', 'high'].includes(effort) ? { thinkingConfig: { thinkingLevel: effort } } : null),
+    toggle: (enabled) => (enabled ? null : { thinkingConfig: { thinkingBudget: 0 } }),
+    budget: (tokens) => ({ thinkingConfig: { thinkingBudget: tokens } }),
+    display: (current) => {
+      const thinkingConfig =
+        typeof current.thinkingConfig === 'object' && current.thinkingConfig !== null
+          ? (current.thinkingConfig as Record<string, unknown>)
+          : {};
+      return { thinkingConfig: { ...thinkingConfig, includeThoughts: true } };
+    },
+  },
+  '@openrouter/ai-sdk-provider': {
+    optionsKey: () => 'openrouter',
+    effort: (effort) => (['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort) ? { reasoning: { effort } } : null),
+    toggle: (enabled) => ({ reasoning: { enabled, effort: enabled ? 'high' : 'none' } }),
+    budget: (tokens) => ({ reasoning: { max_tokens: tokens } }),
+    display: (current) => {
+      const reasoning =
+        typeof current.reasoning === 'object' && current.reasoning !== null ? (current.reasoning as Record<string, unknown>) : {};
+      return { reasoning: { ...reasoning, exclude: false } };
+    },
+  },
+  '@ai-sdk/gateway': {
+    // UNVERIFIED live: @ai-sdk/gateway forwards providerOptions to the
+    // Gateway API, which applies the serving provider's native entry, and
+    // GatewayProviderOptions itself is routing-only (no reasoning field).
+    // The vercel catalog entries use the OpenAI effort vocabulary, so effort
+    // is sent OpenAI-parity and left to the gateway's cross-provider
+    // translation. If the server ignores it, the server default applies and
+    // nothing breaks; verify against a live gateway call before relying on
+    // exact effort levels.
+    optionsKey: () => 'openai',
+    effort: (effort) => (OPENAI_EFFORT_VALUES.includes(effort) ? { reasoningEffort: effort } : null),
+    toggle: (enabled) => ({ reasoningEffort: enabled ? 'high' : 'none' }),
+    budget: () => null,
+    display: () => null,
+  },
+};
+
+/** The table entry for a runtime package, or null when the adapter has no reasoning mapping. */
+function reasoningAdapter(npm: string): ReasoningAdapter | null {
+  return REASONING_ADAPTERS[npm] ?? null;
+}
+
 /** Adds adapter-specific request options needed to receive visible reasoning. */
 export function withReasoningVisibility(
   provider: ResolvedProvider,
@@ -444,44 +548,13 @@ export function withReasoningVisibility(
   visible: boolean,
 ): ReasoningVariant['providerOptions'] {
   if (!visible) return base;
-  const key = providerOptionsKey(provider);
-  if (!key) return base;
+  const adapter = reasoningAdapter(provider.npm);
+  const key = adapter?.optionsKey(provider) ?? null;
+  if (!adapter || !key) return base;
 
   const current = base[key] ?? {};
-  let display: Record<string, unknown> | null = null;
-  switch (provider.npm) {
-    case '@ai-sdk/openai':
-      display = { reasoningSummary: 'auto' };
-      break;
-    case '@ai-sdk/anthropic': {
-      const thinking =
-        typeof current.thinking === 'object' && current.thinking !== null ? (current.thinking as Record<string, unknown>) : null;
-      if (thinking?.type !== 'disabled') {
-        display = { sendReasoning: true, ...(thinking ? { thinking: { ...thinking, display: 'summarized' } } : {}) };
-      }
-      break;
-    }
-    case '@ai-sdk/google': {
-      const thinkingConfig =
-        typeof current.thinkingConfig === 'object' && current.thinkingConfig !== null
-          ? (current.thinkingConfig as Record<string, unknown>)
-          : {};
-      display = { thinkingConfig: { ...thinkingConfig, includeThoughts: true } };
-      break;
-    }
-    case '@openrouter/ai-sdk-provider': {
-      const reasoning =
-        typeof current.reasoning === 'object' && current.reasoning !== null ? (current.reasoning as Record<string, unknown>) : {};
-      display = { reasoning: { ...reasoning, exclude: false } };
-      break;
-    }
-    // OpenAI-compatible endpoints may stream reasoning_content without a
-    // standard request flag; their selected models.dev effort stays in force.
-    case '@ai-sdk/openai-compatible':
-      return base;
-  }
-
-  return display ? { ...base, [key]: { ...current, ...display } as Record<string, JSONValue> } : base;
+  const display = adapter.display(current);
+  return display ? { ...base, [key]: { ...current, ...display } as Record<string, Record<string, JSONValue>> } : base;
 }
 
 export interface ReasoningCatalogMatch {
@@ -533,9 +606,20 @@ export function modelSupportsVision(providerId: string, modelId: string, provide
   return modelInputModalities(providerId, modelId, provider).includes('image');
 }
 
+/**
+ * Maps a stored reasoning preference to a current variant id.
+ *
+ * The implicit variant used to be `auto`; it is `default` now. Stored
+ * settings may still say `auto`, so normalize at every read instead of
+ * migrating user files.
+ */
+export function normalizeReasoningVariantId(variantId: string): string {
+  return variantId === 'auto' ? 'default' : variantId;
+}
+
 /** Builds selectable settings from models.dev and the installed AI SDK adapter. */
 export function listReasoningVariants(provider: ResolvedProvider, model: CatalogModel | null): ReasoningVariant[] {
-  const variants: ReasoningVariant[] = [{ id: 'auto', label: 'Auto', providerOptions: {} }];
+  const variants: ReasoningVariant[] = [{ id: 'default', label: 'Default', providerOptions: {} }];
   if (model?.reasoning !== true || !model.reasoning_options?.length) return variants;
 
   const key = providerOptionsKey(provider);
@@ -573,68 +657,34 @@ export function listReasoningVariants(provider: ResolvedProvider, model: Catalog
 }
 
 function providerOptionsKey(provider: ResolvedProvider): string | null {
-  switch (provider.npm) {
-    case '@ai-sdk/openai-compatible':
-      return provider.id.split('.')[0] ?? provider.id;
-    case '@ai-sdk/openai':
-      return 'openai';
-    case '@ai-sdk/anthropic':
-      return 'anthropic';
-    case '@ai-sdk/google':
-      return 'google';
-    case '@openrouter/ai-sdk-provider':
-      return 'openrouter';
-    default:
-      return null;
-  }
+  return reasoningAdapter(provider.npm)?.optionsKey(provider) ?? null;
 }
 
 function effortOptions(npm: string, effort: string): Record<string, unknown> | null {
-  switch (npm) {
-    case '@ai-sdk/openai-compatible':
-      return { reasoningEffort: effort };
-    case '@ai-sdk/openai':
-      return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) ? { reasoningEffort: effort } : null;
-    case '@ai-sdk/anthropic':
-      if (effort === 'none') return { thinking: { type: 'disabled' } };
-      return ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)
-        ? { thinking: { type: 'adaptive', display: 'omitted' }, effort }
-        : null;
-    case '@ai-sdk/google':
-      return ['minimal', 'low', 'medium', 'high'].includes(effort) ? { thinkingConfig: { thinkingLevel: effort } } : null;
-    case '@openrouter/ai-sdk-provider':
-      return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort) ? { reasoning: { effort } } : null;
-    default:
-      return null;
-  }
+  return reasoningAdapter(npm)?.effort(effort) ?? null;
 }
 
 function toggleOptions(npm: string, enabled: boolean): Record<string, unknown> | null {
-  switch (npm) {
-    case '@ai-sdk/openai':
-      return { reasoningEffort: enabled ? 'high' : 'none' };
-    case '@ai-sdk/anthropic':
-      return { thinking: enabled ? { type: 'adaptive', display: 'omitted' } : { type: 'disabled' } };
-    case '@ai-sdk/google':
-      return enabled ? null : { thinkingConfig: { thinkingBudget: 0 } };
-    case '@openrouter/ai-sdk-provider':
-      return { reasoning: { enabled, effort: enabled ? 'high' : 'none' } };
-    default:
-      return null;
-  }
+  return reasoningAdapter(npm)?.toggle(enabled) ?? null;
 }
 
 function budgetOptions(npm: string, budgetTokens: number): Record<string, unknown> | null {
-  switch (npm) {
-    case '@ai-sdk/anthropic':
-      return { thinking: { type: 'enabled', budgetTokens } };
-    case '@ai-sdk/google':
-      return { thinkingConfig: { thinkingBudget: budgetTokens } };
-    case '@openrouter/ai-sdk-provider':
-      return { reasoning: { max_tokens: budgetTokens } };
-    default:
-      return null;
-  }
+  return reasoningAdapter(npm)?.budget(budgetTokens) ?? null;
+}
+
+/**
+ * Why the reasoning picker shows variants or not.
+ *
+ * `model-unsupported` means the catalog carries no reasoning metadata for
+ * this model; `adapter-unmapped` means the metadata exists but Ranite has no
+ * wire mapping for the runtime package yet. They used to share one message,
+ * which made a missing adapter mapping look like a missing model.
+ */
+export type ReasoningSupport = 'available' | 'model-unsupported' | 'adapter-unmapped';
+
+export function reasoningSupportStatus(provider: ResolvedProvider, model: CatalogModel | null): ReasoningSupport {
+  if (model?.reasoning !== true || !model.reasoning_options?.length) return 'model-unsupported';
+  return listReasoningVariants(provider, model).length > 1 ? 'available' : 'adapter-unmapped';
 }
 
 function capitalize(value: string): string {

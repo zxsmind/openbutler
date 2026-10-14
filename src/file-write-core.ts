@@ -6,6 +6,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MemoryIndex } from './memory-index.js';
 import {
+  isCalendarDate,
   MEMORY_INDEX_MAX_BYTES,
   MEMORY_INDEX_MAX_LINES,
   parseMemoryDocument,
@@ -107,7 +108,7 @@ export function validateTextWrite(content: string, path: string, workspaceRoot: 
         failure: {
           status: 'invalid_memory_path',
           path,
-          error: `Memory profiles belong at ${paths.userFile} or ${paths.workspaceFile}; topic notes belong in their notes/ directories with descriptive English kebab-case .md names.`,
+          error: `Memory files belong at user/preferences.md, user/profile.md, topics/*.md, areas/*.md, or ${paths.workspaceFile} with descriptive English kebab-case .md names.`,
         },
       };
     }
@@ -122,12 +123,48 @@ export function validateTextWrite(content: string, path: string, workspaceRoot: 
           status: 'invalid_memory_format',
           path,
           errors,
-          error:
-            'Use YAML type/title/description, one matching H1, H2 subjects, H3 memories, and a non-empty H4 Summary for each memory. Add Details and Evidence when known.',
+          error: 'Use YAML title/description/updated/type, one matching H1, a summary paragraph, and one durable fact per bullet.',
         },
       };
   }
   return { ok: true, sizeBytes, sha256: createHash('sha256').update(content, 'utf8').digest('hex') };
+}
+
+/** Local calendar date; memory notes carry the user's day, not UTC. */
+export function todayLocalDate(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Refresh the frontmatter updated line so every native memory write carries an
+ * honest date without the agent hand-writing one. Content without frontmatter
+ * passes through untouched for the validator to reject.
+ */
+export function stampMemoryDocumentDate(content: string): string {
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
+  const lines = content.split(/\r?\n/);
+  if (lines[0]?.trim() !== '---') return content;
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  if (end < 0) return content;
+  const today = todayLocalDate();
+  let stamped = false;
+  for (let index = 1; index < end; index++) {
+    if (/^\s*updated\s*:/.test(lines[index]!)) {
+      lines[index] = `updated: ${today}`;
+      stamped = true;
+    }
+  }
+  if (!stamped) lines.splice(1, 0, `updated: ${today}`);
+  return lines.join(eol);
+}
+
+/** Shorten an index signal at a word boundary instead of mid-word. */
+export function truncateSignal(text: string, maxLength = 160): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= maxLength) return collapsed;
+  const cut = collapsed.lastIndexOf(' ', maxLength);
+  return `${collapsed.slice(0, cut > 0 ? cut : maxLength).trimEnd()}…`;
 }
 
 /** Temp-file plus rename so a crash cannot leave a half-written target. */
@@ -179,41 +216,68 @@ export async function ensureMemoryIndexEntry(path: string, workspaceRoot: string
   const document = getMemoryDocumentPath(path, workspaceRoot);
   if (!document || document.scope !== 'user') return {};
   const paths = getMemoryPaths(workspaceRoot);
-  let index = '';
+  return withIndexLock(paths.indexFile, async () => {
+    let index = '';
+    try {
+      index = await readFile(paths.indexFile, 'utf8');
+    } catch (error) {
+      if (!isMissingPath(error)) return { memoryIndexEntryError: error instanceof Error ? error.message : String(error) };
+    }
+    const linked = new Set<string>();
+    for (const match of index.matchAll(/^\s*-\s+\[[^\]]+\]\(([^)\s]+)\)/gm)) {
+      const link = match[1]!.replace(/^<|>$/g, '').split('#', 1)[0]!;
+      linked.add(normalizePath(resolve(dirname(paths.indexFile), link)));
+    }
+    if (linked.has(normalizePath(path))) return {};
+    let content: string;
+    try {
+      content = await readFile(path, 'utf8');
+    } catch {
+      return {};
+    }
+    const parsed = parseMemoryDocument(content, path, 'user');
+    const title =
+      parsed.title
+        .replace(/[[\]\r\n]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || basename(path, '.md');
+    const signal = truncateSignal(parsed.description || title);
+    const date = isCalendarDate(parsed.updated) ? parsed.updated : todayLocalDate();
+    const link = relative(dirname(paths.indexFile), path).replace(/\\/g, '/');
+    const updated = index.trim()
+      ? `${index.replace(/\s*$/, '')}\n- [${title}](${link}) — ${signal} (${date})\n`
+      : `# Memory\n- [${title}](${link}) — ${signal} (${date})\n`;
+    if (updated.split(/\r?\n/).length > MEMORY_INDEX_MAX_LINES || Buffer.byteLength(updated, 'utf8') > MEMORY_INDEX_MAX_BYTES)
+      return { memoryIndexEntry: 'skipped_index_full' };
+    const validation = validateTextWrite(updated, paths.indexFile, workspaceRoot);
+    if (!validation.ok) return { memoryIndexEntry: 'skipped_invalid_index' };
+    await writeTextAtomically(paths.indexFile, updated);
+    return { memoryIndexEntry: 'added' };
+  });
+}
+
+const indexLockChains = new Map<string, Promise<void>>();
+
+/**
+ * Serialize concurrent MEMORY.md read-modify-write cycles per index file, so
+ * parallel sessions appending entries cannot silently lose each other's lines.
+ */
+async function withIndexLock<T>(indexFile: string, task: () => Promise<T>): Promise<T> {
+  const previous = indexLockChains.get(indexFile);
+  let release: () => void = () => {};
+  const turn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  indexLockChains.set(
+    indexFile,
+    (previous ?? Promise.resolve()).then(() => turn),
+  );
+  if (previous) await previous;
   try {
-    index = await readFile(paths.indexFile, 'utf8');
-  } catch (error) {
-    if (!isMissingPath(error)) return { memoryIndexEntryError: error instanceof Error ? error.message : String(error) };
+    return await task();
+  } finally {
+    release();
   }
-  const linked = new Set<string>();
-  for (const match of index.matchAll(/^\s*-\s+\[[^\]]+\]\(([^)\s]+)\)/gm)) {
-    const link = match[1]!.replace(/^<|>$/g, '').split('#', 1)[0]!;
-    linked.add(normalizePath(resolve(dirname(paths.indexFile), link)));
-  }
-  if (linked.has(normalizePath(path))) return {};
-  let content: string;
-  try {
-    content = await readFile(path, 'utf8');
-  } catch {
-    return {};
-  }
-  const parsed = parseMemoryDocument(content, path, 'user');
-  const title =
-    parsed.title
-      .replace(/[[\]\r\n]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim() || basename(path, '.md');
-  const signal = (parsed.description || title).replace(/\s+/g, ' ').trim().slice(0, 160);
-  const link = relative(dirname(paths.indexFile), path).replace(/\\/g, '/');
-  const updated = index.trim()
-    ? `${index.replace(/\s*$/, '')}\n- [${title}](${link}) — ${signal}\n`
-    : `# Memory\n- [${title}](${link}) — ${signal}\n`;
-  if (updated.split(/\r?\n/).length > MEMORY_INDEX_MAX_LINES || Buffer.byteLength(updated, 'utf8') > MEMORY_INDEX_MAX_BYTES)
-    return { memoryIndexEntry: 'skipped_index_full' };
-  const validation = validateTextWrite(updated, paths.indexFile, workspaceRoot);
-  if (!validation.ok) return { memoryIndexEntry: 'skipped_invalid_index' };
-  await writeTextAtomically(paths.indexFile, updated);
-  return { memoryIndexEntry: 'added' };
 }
 
 function normalizePath(path: string): string {

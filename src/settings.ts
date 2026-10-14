@@ -71,7 +71,7 @@ export interface SettingsStore {
    */
   defaultProvider: string;
   defaultModel: string;
-  /** Preferred reasoning variant id; unsupported choices fall back to Auto per model. */
+  /** Preferred reasoning variant id; unsupported choices fall back to Default per model. */
   reasoning?: string;
   /** Whether reasoning deltas are shown in the session transcript. */
   showReasoning?: boolean;

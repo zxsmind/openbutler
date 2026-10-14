@@ -7,6 +7,7 @@ import {
   MAX_WRITE_BYTES,
   resolveFilePath,
   resolveFileTarget,
+  stampMemoryDocumentDate,
   validateTextWrite,
   writeTextAtomically,
 } from '../file-write-core.js';
@@ -29,7 +30,7 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
     providerId: 'host',
     name: 'file_write',
     description:
-      'Create or replace a local UTF-8 text file with the supplied content; this replaces the entire file. A successful write returns sha256 for the exact UTF-8 bytes written, the line counts, and added/removed line stats; file_read.sha256 reports the current on-disk file hash. Workspace writes follow the active permission mode. Ranite-owned memory paths are pre-authorized. For memory, use the paths and the YAML plus H1/H2/H3/H4 schema in the system instructions; keep MEMORY.md as one concise index and edit existing scoped notes instead of making duplicate indexes.',
+      'Create or replace a local UTF-8 text file with the supplied content; this replaces the entire file. A successful write returns sha256 for the exact UTF-8 bytes written, the line counts, and added/removed line stats; file_read.sha256 reports the current on-disk file hash. Workspace writes follow the active permission mode. Ranite-owned memory paths are pre-authorized. For memory, use the paths and the flat summary-plus-bullets schema in the system instructions; keep MEMORY.md as one concise index and edit existing scoped notes instead of making duplicate indexes.',
     maxInputChars: MAX_WRITE_BYTES + 100_000,
     inputSchema: {
       type: 'object',
@@ -69,7 +70,9 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
       if (!source) return { status: 'invalid', error: 'path must be a non-empty string.' };
       if (content === null) return { status: 'invalid', error: 'content must be a string.' };
       const path = context?.target ?? resolveFilePath(source, workspaceRoot);
-      const validation = validateTextWrite(content, path, workspaceRoot);
+      const text =
+        isMemoryDocumentPath(path, workspaceRoot) && !isMemoryIndexPath(path, workspaceRoot) ? stampMemoryDocumentDate(content) : content;
+      const validation = validateTextWrite(text, path, workspaceRoot);
       if (!validation.ok) return validation.failure;
       const leaseDenied = context?.guardWrite?.(path);
       if (leaseDenied) return { status: 'denied', path: path.slice(0, 512), error: leaseDenied };
@@ -83,9 +86,9 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
           previous = null;
         }
       }
-      await writeTextAtomically(path, content);
-      const lineCount = content.split(/\r?\n/).length;
-      const stat = !existed ? { addedLines: lineCount, removedLines: 0 } : previous === null ? null : diffStat(previous, content);
+      await writeTextAtomically(path, text);
+      const lineCount = text.split(/\r?\n/).length;
+      const stat = !existed ? { addedLines: lineCount, removedLines: 0 } : previous === null ? null : diffStat(previous, text);
       return {
         status: 'completed',
         path: path.slice(0, 512),

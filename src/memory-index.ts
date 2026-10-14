@@ -262,8 +262,9 @@ export class MemoryIndex {
       if (!isMissingPath(error)) throw error;
     }
     const linked = new Set<string>();
-    for (const match of index.matchAll(/^\s*-\s+\[[^\]]+\]\(([^)\s]+)\)/gm)) {
+    for (const match of index.matchAll(/^\s*-\s+\[[^\]]+\]\(([^)\s]+)\)(.*)$/gm)) {
       const link = match[1]!.replace(/^<|>$/g, '').split('#', 1)[0]!;
+      if (!/\(\d{4}-\d{2}-\d{2}\)\s*$/.test(match[2]!)) issues.push(`MEMORY.md entry has no updated date: ${link}`);
       const target = resolve(dirname(this.paths.indexFile), link);
       linked.add(normalizePath(target));
       let regular = false;
@@ -340,22 +341,31 @@ export class MemoryIndex {
     const workspaceFiles: MemorySourceFile[] = [];
     const owned = (path: string) => classifyWorkspacePath(path, this.paths.root) === 'workspace';
     if (owned(this.paths.userFile)) await addMarkdownFile(userFiles, this.paths.userFile, 'user');
-    if (owned(this.paths.userTopicsDirectory)) await addMarkdownTree(userFiles, this.paths.userTopicsDirectory, 'user');
+    if (owned(this.paths.topicsDirectory)) await addMarkdownTree(userFiles, this.paths.topicsDirectory, 'user');
+    if (owned(this.paths.areasDirectory)) await addMarkdownTree(userFiles, this.paths.areasDirectory, 'user');
     if (owned(this.paths.workspaceFile)) await addMarkdownFile(workspaceFiles, this.paths.workspaceFile, this.workspaceScope);
-    if (owned(this.paths.workspaceTopicsDirectory))
-      await addMarkdownTree(workspaceFiles, this.paths.workspaceTopicsDirectory, this.workspaceScope);
     return [...userFiles, ...workspaceFiles].sort((left, right) => left.path.localeCompare(right.path));
   }
 
+  /**
+   * Drop indexed sources whose file is gone from disk, in every scope: the
+   * active scopes re-add live files below, while deleted or moved workspaces
+   * would otherwise leave orphan vectors behind forever. Unreadable files are
+   * kept; only confirmed-missing paths are removed.
+   */
   private async removeMissingSources(files: MemorySourceFile[]): Promise<void> {
     const database = this.getDatabase();
     const currentPaths = new Set(files.map(({ path }) => normalizePath(path)));
-    const knownSources = database
-      .prepare('SELECT path FROM memory_sources WHERE scope IN (?, ?)')
-      .all('user', this.workspaceScope) as unknown as Array<{ path: string }>;
+    const knownSources = database.prepare('SELECT path FROM memory_sources').all() as unknown as Array<{ path: string }>;
     const removeSource = database.prepare('DELETE FROM memory_sources WHERE path = ?');
     for (const source of knownSources) {
-      if (!currentPaths.has(normalizePath(source.path))) removeSource.run(source.path);
+      if (currentPaths.has(normalizePath(source.path))) continue;
+      try {
+        await lstat(source.path);
+      } catch (error) {
+        if (!isMissingPath(error)) continue;
+        removeSource.run(source.path);
+      }
     }
   }
 
@@ -646,9 +656,21 @@ function normalizePath(path: string): string {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
-function isUserScopedPath(target: string, paths: { userFile: string; userTopicsDirectory: string }): boolean {
+function isUserScopedPath(
+  target: string,
+  paths: {
+    preferencesFile: string;
+    userFile: string;
+    topicsDirectory: string;
+    areasDirectory: string;
+  },
+): boolean {
   const normalizedTarget = normalizePath(target);
+  if (normalizedTarget === normalizePath(paths.preferencesFile)) return true;
   if (normalizedTarget === normalizePath(paths.userFile)) return true;
-  const difference = relative(normalizePath(paths.userTopicsDirectory), normalizedTarget);
-  return difference !== '' && !isAbsolute(difference) && !difference.startsWith('..');
+  for (const directory of [paths.topicsDirectory, paths.areasDirectory]) {
+    const difference = relative(normalizePath(directory), normalizedTarget);
+    if (difference !== '' && !isAbsolute(difference) && !difference.startsWith('..')) return true;
+  }
+  return false;
 }

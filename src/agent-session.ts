@@ -12,7 +12,7 @@ import {
   type SessionSummary,
 } from './session-store.js';
 import { isToolRequestWhitelisted, rememberToolRequest } from './tool-permissions.js';
-import type { ReasoningVariant } from './provider/registry.js';
+import type { ReasoningSupport, ReasoningVariant } from './provider/registry.js';
 import { loadSettings, type ApprovalMode } from './settings.js';
 import { autoReviewFingerprint, reviewToolRequest, type AutoReviewOptions, type AutoReviewResult } from './auto-review.js';
 import type { ToolApprovalOutcome, ToolCallRequest, ToolRegistry, ToolUserQuestion } from './tools/registry.js';
@@ -55,6 +55,7 @@ export interface AgentSessionRuntimeView {
   supportsVision: boolean;
   reasoningVariants: ReasoningVariant[];
   reasoningMetadataSource: string | null;
+  reasoningSupport: ReasoningSupport;
   reasoningDefault: string;
   saveReasoningPreference: (variantId: string) => void;
   showReasoningDefault: boolean;
@@ -85,6 +86,7 @@ export interface AgentSessionSnapshot {
   pendingQuestion: { id: string; question: string; options: string[] | null } | null;
   queuedMessageCount: number;
   firstQueuedMessage: { text: string; imageCount: number } | null;
+  queuedMessages: { text: string; imageCount: number }[];
   sessionSaveError: string | null;
   streamingAssistantEntry: SessionEntry | null;
 }
@@ -239,7 +241,8 @@ export class AgentSessionController implements AgentSessionClient {
   };
 
   private makeSnapshot(): AgentSessionSnapshot {
-    const first = this.queuedMessages[0];
+    const queuedMessages = this.queuedMessages.map((turn) => ({ text: turn.message.text, imageCount: turn.message.images.length }));
+    const first = queuedMessages[0] ?? null;
     const { conversation, conversationArchive, ...session } = this.session;
     void conversation;
     void conversationArchive;
@@ -250,7 +253,8 @@ export class AgentSessionController implements AgentSessionClient {
       pendingApprovalId: this.pendingApprovalId,
       pendingQuestion: this.pendingQuestion,
       queuedMessageCount: this.queuedMessages.length,
-      firstQueuedMessage: first ? { text: first.message.text, imageCount: first.message.images.length } : null,
+      firstQueuedMessage: first,
+      queuedMessages,
       sessionSaveError: this.sessionSaveError,
       streamingAssistantEntry: this.streamedAssistantEntry,
     };
@@ -1066,23 +1070,28 @@ export class AgentSessionController implements AgentSessionClient {
               takeQueuedMessages: () => {
                 // Steering is admitted only at SDK prepareStep, after the prior tool batch.
                 // Scope/route changes remain FIFO followups so they cannot borrow an active binding.
-                const next = this.queuedMessages[0];
-                if (
-                  this.options.sessionWorkspaceRoot !== null ||
-                  !next ||
-                  (next.message.communication?.source !== 'owner-inbox' &&
-                    !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
-                  (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
-                  next.preferences.reasoningVariantId !== preferences.reasoningVariantId ||
-                  next.preferences.showReasoning !== preferences.showReasoning
-                )
-                  return [];
-                this.queuedMessages.shift();
-                this.flushStreamedEntries();
-                this.flushEventAssistantText();
-                this.addUserEntry(next.message);
-                steeredTurns.push(next);
-                return [queuedUserMessageToModelMessage(next.message)];
+                // Drain every compatible queued message so a burst of user input all lands in the same gap.
+                const admitted: ReturnType<typeof queuedUserMessageToModelMessage>[] = [];
+                for (;;) {
+                  const next = this.queuedMessages[0];
+                  if (
+                    this.options.sessionWorkspaceRoot !== null ||
+                    !next ||
+                    (next.message.communication?.source !== 'owner-inbox' &&
+                      !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
+                    (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
+                    next.preferences.reasoningVariantId !== preferences.reasoningVariantId ||
+                    next.preferences.showReasoning !== preferences.showReasoning
+                  )
+                    break;
+                  this.queuedMessages.shift();
+                  this.flushStreamedEntries();
+                  this.flushEventAssistantText();
+                  this.addUserEntry(next.message);
+                  steeredTurns.push(next);
+                  admitted.push(queuedUserMessageToModelMessage(next.message));
+                }
+                return admitted;
               },
               getProviderOptions: () => this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning),
               onTextDelta: (delta) => {

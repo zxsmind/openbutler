@@ -125,17 +125,18 @@ describe('relevance gates', () => {
 describe('search over the derived index', () => {
   it('finds a related note, reports no matches honestly, and never returns another workspace', async () => {
     const paths = getMemoryPaths(workspace);
-    put(join(paths.userTopicsDirectory, 'subtitle-pipeline.md'), subtitleNote);
+    put(join(paths.topicsDirectory, 'subtitle-pipeline.md'), subtitleNote);
     const other = join(root, 'other-workspace');
     mkdirSync(other);
-    put(join(getMemoryPaths(other).workspaceTopicsDirectory, 'foreign.md'), subtitleNote.replace('Subtitle Pipeline', 'Foreign Copy'));
+    const foreignProfile = getMemoryPaths(other).workspaceFile;
+    put(foreignProfile, subtitleNote.replace('Subtitle Pipeline', 'Foreign Copy'));
     const index = new MemoryIndex(workspace);
     try {
       const related = await index.search('subtitle extraction timing', 5);
       expect(related.matches.length).toBeGreaterThan(0);
-      expect(related.matches[0]!.path).toBe(join(paths.userTopicsDirectory, 'subtitle-pipeline.md'));
+      expect(related.matches[0]!.path).toBe(join(paths.topicsDirectory, 'subtitle-pipeline.md'));
       expect(related.matches[0]!.heading).toContain('Timing Rules');
-      expect(related.matches.every((match) => !match.path.includes('other-workspace'))).toBe(true);
+      expect(related.matches.every((match) => match.path !== foreignProfile)).toBe(true);
       const unrelated = await index.search('kubernetes ingress certificate renewal', 5);
       expect(unrelated.matches).toEqual([]);
       expect(unrelated.indexedChunks).toBeGreaterThan(0);
@@ -146,7 +147,7 @@ describe('search over the derived index', () => {
 
   it('reindexes changed and deleted notes on the next search without a filesystem watcher', async () => {
     const paths = getMemoryPaths(workspace);
-    const notePath = join(paths.userTopicsDirectory, 'pipeline-step.md');
+    const notePath = join(paths.topicsDirectory, 'pipeline-step.md');
     put(notePath, subtitleNote);
     const index = new MemoryIndex(workspace);
     try {
@@ -175,7 +176,7 @@ Rendered audio uses loudness normalization to minus fourteen loudness units.
 
   it('reports MEMORY.md gaps and dangling links as index issues, repaired by the next native note write', async () => {
     const paths = getMemoryPaths(workspace);
-    const notePath = join(paths.userTopicsDirectory, 'subtitle-pipeline.md');
+    const notePath = join(paths.topicsDirectory, 'subtitle-pipeline.md');
     put(notePath, subtitleNote);
     const index = new MemoryIndex(workspace);
     try {
@@ -184,10 +185,43 @@ Rendered audio uses loudness normalization to minus fourteen loudness units.
       const writeTool = createWriteTool(workspace);
       expect(await writeTool.execute({ path: notePath, content: subtitleNote })).toMatchObject({ memoryIndexEntry: 'added' });
       expect((await index.search('subtitle extraction timing', 5)).indexIssues).toBeUndefined();
-      put(paths.indexFile, `${readFileSync(paths.indexFile, 'utf8')}- [Gone](user/notes/gone.md) — removed note\n`);
+      put(paths.indexFile, `${readFileSync(paths.indexFile, 'utf8')}- [Gone](topics/gone.md) — removed note (2026-10-11)\n`);
       expect((await index.search('subtitle extraction timing', 5)).indexIssues).toContain(
-        'MEMORY.md links a missing document: user/notes/gone.md',
+        'MEMORY.md links a missing document: topics/gone.md',
       );
+    } finally {
+      await index.close();
+    }
+  });
+
+  it('prunes vectors of deleted files in every scope, not just the active one', async () => {
+    const paths = getMemoryPaths(workspace);
+    const doomedProfile = paths.workspaceFile;
+    put(doomedProfile, subtitleNote.replace('Subtitle Pipeline', 'Doomed Workspace Copy'));
+    const other = join(root, 'other-workspace');
+    mkdirSync(other);
+    const otherPaths = getMemoryPaths(other);
+    put(otherPaths.workspaceFile, subtitleNote.replace('Subtitle Pipeline', 'Other Workspace Copy'));
+    const index = new MemoryIndex(workspace);
+    try {
+      expect((await index.search('subtitle extraction timing', 5)).matches.length).toBeGreaterThan(0);
+      rmSync(doomedProfile);
+      const foreign = new MemoryIndex(other);
+      try {
+        await foreign.search('subtitle extraction timing', 5);
+      } finally {
+        await foreign.close();
+      }
+      const { DatabaseSync } = await import('node:sqlite');
+      const database = new DatabaseSync(join(process.env.RANITE_DATA_DIR!, 'state.db'));
+      try {
+        const rows = database.prepare('SELECT path FROM memory_sources WHERE path = ?').all(doomedProfile) as unknown[];
+        expect(rows).toEqual([]);
+        const kept = database.prepare('SELECT path FROM memory_sources WHERE path = ?').all(otherPaths.workspaceFile) as unknown[];
+        expect(kept.length).toBe(1);
+      } finally {
+        database.close();
+      }
     } finally {
       await index.close();
     }

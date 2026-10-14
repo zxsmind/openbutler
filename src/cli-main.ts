@@ -21,7 +21,7 @@ import { connectDaemonSession } from './daemon-client.js';
 import { parseRetentionDuration, selectFilesToPrune } from './retention.js';
 import { getRaniteVersion } from './version.js';
 import { getCatalogIndex } from './provider/catalog.js';
-import { listToolCapableModels, listSupportedPackages, providerIsConfigured } from './provider/registry.js';
+import { listToolCapableModels, listSupportedPackages, normalizeReasoningVariantId, providerIsConfigured } from './provider/registry.js';
 import { getSettingsPath, loadSettings, parseTelegramSettings, saveSettings } from './settings.js';
 import { getDataPath } from './paths.js';
 import type { TelegramStatus } from './telegram.js';
@@ -130,7 +130,7 @@ async function runConfig(): Promise<void> {
   );
   ui.line();
   ui.kv('Default', settings.defaultProvider ? `${settings.defaultProvider} / ${settings.defaultModel || '(none)'}` : '(none)');
-  ui.kv('Reasoning', settings.reasoning ?? 'auto');
+  ui.kv('Reasoning', normalizeReasoningVariantId(settings.reasoning ?? 'default'));
   ui.kv('Show reasoning', settings.showReasoning ? 'on' : 'off');
   ui.line();
   const report = readiness(settings);
@@ -593,7 +593,7 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
       {
         reasoningVariantId: runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault)
           ? runtime.reasoningDefault
-          : 'auto',
+          : 'default',
         showReasoning: loadSettings().showReasoning === true,
       },
     );

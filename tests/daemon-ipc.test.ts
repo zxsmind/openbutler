@@ -21,7 +21,7 @@ const usage = {
   inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 20, text: 20, reasoning: 0 },
 };
-const preferences = { reasoningVariantId: 'auto', showReasoning: false };
+const preferences = { reasoningVariantId: 'default', showReasoning: false };
 let root: string;
 let host: DaemonHost;
 let server: Server;
@@ -148,7 +148,8 @@ async function createFixtureHost(): Promise<DaemonHost> {
         supportsImageToolResult: true,
         reasoningVariants: [],
         reasoningMetadataSource: null,
-        reasoningDefault: 'auto',
+        reasoningSupport: 'model-unsupported',
+        reasoningDefault: 'default',
         showReasoningDefault: false,
         saveReasoningPreference: () => {},
         saveShowReasoningPreference: () => {},

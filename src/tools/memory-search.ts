@@ -21,7 +21,7 @@ export function createMemorySearchTool(index: MemoryIndex): ToolDefinition {
     providerId: 'host',
     name: 'memory_search',
     description:
-      'Search durable Markdown memory with the local embedding model. Searches the shared user scope and the active workspace only, never session transcripts or other workspaces. Results mix meaning with exact term and identifier matches; unrelated queries return no_matches instead of weak rows. Each match cites the canonical path, title, description, full heading hierarchy, and exact 1-based lines; use file_read around the citation before relying on conditions. Statuses: completed, no_matches, empty_memory (no notes saved), empty_notes (notes without searchable text), model_preparing (first-time local model download in progress), model_unavailable (with the reason), invalid. indexIssues reports MEMORY.md links that need fixing.',
+      'Search durable Markdown memory with the local embedding model. Searches the shared user scope (preferences, profile, topics, areas) and the active workspace profile only, never session transcripts or other workspaces. Results mix meaning with exact term and identifier matches; unrelated queries return no_matches instead of weak rows. Each match cites the canonical path, title, description, full heading hierarchy, and exact 1-based lines; use file_read around the citation before relying on conditions. Statuses: completed, no_matches, empty_memory (no notes saved), empty_notes (notes without searchable text), model_preparing (first-time local model download in progress), model_unavailable (with the reason), invalid. indexIssues reports MEMORY.md links that need fixing.',
     inputSchema: {
       type: 'object',
       properties: {

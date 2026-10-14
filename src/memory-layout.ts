@@ -9,9 +9,18 @@ export interface MemoryLayoutMigration {
   conflicts: string[];
 }
 
-/** Idempotent, synchronous initialization: profiles and topic files retain their contents and scopes. */
+const migratedRoots = new Set<string>();
+
+/**
+ * Idempotent, synchronous initialization: profiles and topic files retain their
+ * contents and scopes. Runs once per data root per process; every MemoryIndex
+ * construction would otherwise re-walk the whole tree on each session start
+ * and each custodian scope switch.
+ */
 export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayoutMigration {
   const paths = getMemoryPaths(workspaceRoot);
+  if (migratedRoots.has(paths.root)) return { moved: [], conflicts: [] };
+  migratedRoots.add(paths.root);
   mkdirSync(paths.root, { recursive: true });
   const report: MemoryLayoutMigration = { moved: [], conflicts: [] };
   const safe = (path: string) => {
@@ -30,6 +39,7 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
   };
   const linkTargets = new Map<string, string>();
   const moveFile = (from: string, requested: string) => {
+    if (pathKey(from) === pathKey(requested)) return;
     if (!regular(from) || !lstatSync(from).isFile()) return;
     safe(from);
     safe(requested);
@@ -62,6 +72,7 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
     report.moved.push({ from, to });
   };
   const moveTree = (from: string, to: string): void => {
+    if (pathKey(from) === pathKey(to)) return;
     if (!regular(from) || !lstatSync(from).isDirectory()) return;
     safe(from);
     safe(to);
@@ -78,9 +89,9 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
     const directory = resolve(paths.root, 'user');
     if (!regular(directory) || !lstatSync(directory).isDirectory()) return;
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (['profile.md', 'notes'].includes(entry.name.toLowerCase())) continue;
+      if (['profile.md', 'preferences.md', 'notes', 'topics'].includes(entry.name.toLowerCase())) continue;
       const from = resolve(directory, entry.name);
-      const to = resolve(paths.userTopicsDirectory, entry.name);
+      const to = resolve(paths.topicsDirectory, entry.name);
       if (entry.isDirectory() && !entry.isSymbolicLink()) moveTree(from, to);
       else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) moveFile(from, to);
     }
@@ -92,15 +103,27 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
     if (!entry.isDirectory() || entry.isSymbolicLink() || !/^[a-f0-9]{24}$/.test(workspaceKey)) continue;
     const old = resolve(paths.root, entry.name);
     const next = resolve(paths.root, 'workspaces', workspaceKey);
-    const notes = resolve(next, 'notes');
+    const areas = resolve(next, 'areas');
     moveFile(resolve(old, 'workspace.md'), resolve(next, 'profile.md'));
-    moveTree(resolve(old, 'topics'), notes);
-    moveTree(old, notes);
+    moveTree(resolve(old, 'topics'), areas);
+    moveTree(old, areas);
   }
+  migrateNotesToTopicsAndAreas(paths, moveTree);
   if (!report.moved.length) return report;
 
   const moves = linkTargets;
   const archivedPaths = new Set(report.conflicts.map(pathKey));
+  const resolveMoved = (target: string): string | undefined => {
+    let current = moves.get(pathKey(target));
+    const seen = new Set<string>();
+    while (current && !seen.has(pathKey(current))) {
+      seen.add(pathKey(current));
+      const next = moves.get(pathKey(current));
+      if (!next) break;
+      current = next;
+    }
+    return current;
+  };
   const updateLinks = (content: string, from: string, to: string) =>
     rewriteMarkdownOutsideCode(content, (line) =>
       line.replace(/(\[[^\]\n]*\]\()(<[^>]+>|[^)\s]+)(\))/g, (whole, start: string, link: string, end: string) => {
@@ -108,7 +131,7 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
         if (/^[a-z]+:\/\//i.test(target) || target.startsWith('#')) return whole;
         const [path, anchor] = target.split('#', 2);
         const oldTarget = resolve(dirname(from), path!);
-        const moved = moves.get(pathKey(oldTarget));
+        const moved = resolveMoved(oldTarget);
         const retained =
           moved ?? (classifyWorkspacePath(oldTarget, paths.root) === 'workspace' && existsSync(oldTarget) ? oldTarget : null);
         if (!retained) return whole;
@@ -118,6 +141,7 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
     );
   for (const move of report.moved) {
     if (archivedPaths.has(pathKey(move.to))) continue;
+    if (!entryExists(move.to)) continue;
     const content = readFileSync(move.to, 'utf8');
     const updated = updateLinks(content, move.from, move.to);
     if (updated !== content) atomicWrite(move.to, updated);
@@ -135,6 +159,30 @@ export function migrateMemoryLayout(workspaceRoot = process.cwd()): MemoryLayout
     }
   }
   return report;
+}
+
+/**
+ * Layout v3: topics and areas are siblings of user/, not nested inside scopes.
+ * user/notes/** and user/topics/** consolidate into topics/; every workspace's
+ * notes/** and areas/** consolidate into areas/. Files already at the canonical
+ * path win; same-name arrivals archive instead of overwriting.
+ */
+function migrateNotesToTopicsAndAreas(paths: ReturnType<typeof getMemoryPaths>, moveTree: (from: string, to: string) => void): void {
+  moveTree(resolve(paths.root, 'user', 'notes'), paths.topicsDirectory);
+  moveTree(resolve(paths.root, 'user', 'topics'), paths.topicsDirectory);
+  const workspaces = resolve(paths.root, 'workspaces');
+  let entries;
+  try {
+    entries = readdirSync(workspaces, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !/^[a-f0-9]{24}$/i.test(entry.name)) continue;
+    const scope = resolve(workspaces, entry.name);
+    moveTree(resolve(scope, 'notes'), paths.areasDirectory);
+    moveTree(resolve(scope, 'areas'), paths.areasDirectory);
+  }
 }
 
 function atomicWrite(path: string, content: string): void {

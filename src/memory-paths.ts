@@ -8,11 +8,12 @@ export interface MemoryPaths {
   root: string;
   indexFile: string;
   workspaceKey: string;
+  preferencesFile: string;
   userFile: string;
-  userTopicsDirectory: string;
+  topicsDirectory: string;
+  areasDirectory: string;
   workspaceDirectory: string;
   workspaceFile: string;
-  workspaceTopicsDirectory: string;
 }
 
 /** Shared path contract for the agent prompt and the session runtime. */
@@ -33,11 +34,12 @@ export function getMemoryPaths(workspaceRoot = process.cwd()): MemoryPaths {
     root,
     indexFile: resolve(root, 'MEMORY.md'),
     workspaceKey: key,
+    preferencesFile: resolve(root, 'user', 'preferences.md'),
     userFile: resolve(root, 'user', 'profile.md'),
-    userTopicsDirectory: resolve(root, 'user', 'notes'),
+    topicsDirectory: resolve(root, 'topics'),
+    areasDirectory: resolve(root, 'areas'),
     workspaceDirectory,
     workspaceFile: resolve(workspaceDirectory, 'profile.md'),
-    workspaceTopicsDirectory: resolve(workspaceDirectory, 'notes'),
   };
 }
 
@@ -65,16 +67,17 @@ export function getMemoryDocumentPath(source: string, workspaceRoot = process.cw
   const target = resolveMemoryPath(source, workspaceRoot);
   if (target === null || !target.toLowerCase().endsWith('.md')) return null;
   if (!isWithin(target, paths.root) || hasLinkedComponent(paths.root, target)) return null;
+  if (samePath(target, paths.preferencesFile)) return { path: target, kind: 'profile', scope: 'user', notePath: null };
   if (samePath(target, paths.userFile)) return { path: target, kind: 'profile', scope: 'user', notePath: null };
-  if (isWithin(target, paths.userTopicsDirectory))
-    return { path: target, kind: 'note', scope: 'user', notePath: relative(paths.userTopicsDirectory, target) };
+  if (isWithin(target, paths.topicsDirectory))
+    return { path: target, kind: 'note', scope: 'user', notePath: relative(paths.topicsDirectory, target) };
+  if (isWithin(target, paths.areasDirectory))
+    return { path: target, kind: 'note', scope: 'user', notePath: relative(paths.areasDirectory, target) };
   const parts = relative(paths.root, target).split(sep);
   const workspaceKey = parts[1]?.toLowerCase() ?? '';
   if (parts[0]?.toLowerCase() !== 'workspaces' || !/^[a-f0-9]{24}$/.test(workspaceKey)) return null;
   const scope = `workspace:${workspaceKey}` as const;
   if (parts.length === 3 && parts[2]?.toLowerCase() === 'profile.md') return { path: target, kind: 'profile', scope, notePath: null };
-  if (parts[2]?.toLowerCase() === 'notes' && parts.length >= 4)
-    return { path: target, kind: 'note', scope, notePath: parts.slice(3).join(sep) };
   return null;
 }
 

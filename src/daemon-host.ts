@@ -2265,6 +2265,7 @@ function makeSessionEvent(
       pendingQuestion: next.pendingQuestion,
       queuedMessageCount: next.queuedMessageCount,
       firstQueuedMessage: next.firstQueuedMessage,
+      queuedMessages: next.queuedMessages,
       sessionSaveError: next.sessionSaveError,
       streamingAssistantIndex: streamingAssistantIndex(next),
       runtime: runtimeView,
@@ -2312,6 +2313,7 @@ function toSnapshotData(snapshot: AgentSessionSnapshot): SessionSnapshotData {
     pendingQuestion: snapshot.pendingQuestion,
     queuedMessageCount: snapshot.queuedMessageCount,
     firstQueuedMessage: snapshot.firstQueuedMessage,
+    queuedMessages: snapshot.queuedMessages,
     sessionSaveError: snapshot.sessionSaveError,
     streamingAssistantIndex: streamingAssistantIndex(snapshot),
   };
@@ -2345,6 +2347,7 @@ function toRuntimeView(runtime: AgentEnvironment, workspaceRoot = runtime.worksp
     supportsVision: runtime.supportsVision,
     reasoningVariants: runtime.reasoningVariants,
     reasoningMetadataSource: runtime.reasoningMetadataSource,
+    reasoningSupport: runtime.reasoningSupport,
     reasoningDefault: runtime.reasoningDefault,
     showReasoningDefault: runtime.showReasoningDefault,
     approvalMode: runtime.approvalMode ?? 'workspace',

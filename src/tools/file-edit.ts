@@ -7,6 +7,7 @@ import {
   memoryIndexOutcome,
   resolveFileTarget,
   resolveFilePath,
+  stampMemoryDocumentDate,
   validateTextWrite,
   writeTextAtomically,
 } from '../file-write-core.js';
@@ -130,7 +131,9 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
       }
 
       const position = positions[occurrence - 1]!;
-      const next = content.slice(0, position) + replacement + content.slice(position + old.length);
+      const edited = content.slice(0, position) + replacement + content.slice(position + old.length);
+      const next =
+        isMemoryDocumentPath(path, workspaceRoot) && !isMemoryIndexPath(path, workspaceRoot) ? stampMemoryDocumentDate(edited) : edited;
       const validation = validateTextWrite(next, path, workspaceRoot);
       if (!validation.ok) return validation.failure;
       const leaseDenied = context?.guardWrite?.(path);

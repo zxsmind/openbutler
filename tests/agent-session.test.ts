@@ -53,7 +53,8 @@ function runtimeFor(model: MockLanguageModelV3, registry = new ToolRegistry()): 
     supportsImageToolResult: true,
     reasoningVariants: [],
     reasoningMetadataSource: null,
-    reasoningDefault: 'auto',
+    reasoningSupport: 'model-unsupported',
+    reasoningDefault: 'default',
     saveReasoningPreference: () => {},
     showReasoningDefault: true,
     saveShowReasoningPreference: () => {},
@@ -95,7 +96,7 @@ afterEach(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-const preferences = { reasoningVariantId: 'auto', showReasoning: true };
+const preferences = { reasoningVariantId: 'default', showReasoning: true };
 
 function fixtureText(text: string, finishReason: 'stop' | 'length' = 'stop', inputTokens = 100) {
   return delayedStream(
@@ -175,6 +176,62 @@ describe('owner replies and safe steering', () => {
       ],
     });
     expect(session.takeEventRunResult('second')).toEqual({ error: null, outputs: [], replyHandledByEventId: 'first' });
+  });
+
+  it('drains every compatible queued message in the same steering gap', async () => {
+    let started = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registry = new ToolRegistry();
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'Fixture',
+      inputSchema: { type: 'object', properties: {} },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => {
+        started = true;
+        await gate;
+        return { message: 'Tool completed' };
+      },
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi
+        .fn()
+        .mockImplementationOnce(async () =>
+          delayedStream(
+            [
+              { type: 'text-start', id: 'before' },
+              { type: 'text-delta', id: 'before', delta: 'Looking into it.' },
+              { type: 'text-end', id: 'before' },
+              { type: 'tool-call', toolCallId: 'one', toolName: 'inspect', input: '{}' },
+            ],
+            'tool-calls',
+          ),
+        )
+        .mockImplementationOnce(async () => fixtureText('All three requests have been taken into account.')),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
+    const terminal = { source: 'terminal' as const, replyTo: { channel: 'terminal' as const } };
+    const first = session.sendMessage({ text: 'First task.', images: [], communication: terminal }, preferences);
+    await vi.waitFor(() => expect(started).toBe(true));
+    const second = session.sendMessage({ text: 'Second note alpha.', images: [], communication: terminal }, preferences);
+    const third = session.sendMessage({ text: 'Third note beta.', images: [], communication: terminal }, preferences);
+    const fourth = session.sendMessage({ text: 'Fourth note gamma.', images: [], communication: terminal }, preferences);
+    release();
+    await Promise.all([first, second, third, fourth]);
+    // One initial step plus a single steered step carrying the whole burst.
+    expect(model.doStreamCalls).toHaveLength(2);
+    const prompt = JSON.stringify(model.doStreamCalls[1]!.prompt);
+    expect(prompt).toContain('Second note alpha.');
+    expect(prompt).toContain('Third note beta.');
+    expect(prompt).toContain('Fourth note gamma.');
+    expect(session.getSnapshot().queuedMessageCount).toBe(0);
   });
 
   it('finalizes an empty direct reply once without repeating tools', async () => {
