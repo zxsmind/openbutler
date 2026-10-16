@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ackInbox, fetchGroup, fetchInbox, postMessage, readGroup, setGroupCursor } from '../src/team/client.js';
+import { ackInbox, fetchGroup, fetchHistory, fetchInbox, postMessage, readGroup, setGroupCursor } from '../src/team/client.js';
 import { startTeamServer, type StartedTeamServer } from '../src/team/server.js';
 import { hashTicket, makeTicket } from '../src/team/service.js';
 import { localChannel, remoteChannel } from '../src/team/session.js';
@@ -93,6 +93,29 @@ describe('team messaging over the hub', () => {
     const group = await fetchGroup(target, murphyTicket, 0);
     expect(group.messages.filter((message) => message.msgId === 'm_fixed')).toHaveLength(1);
     void first;
+  });
+});
+
+describe('persistent history', () => {
+  it('pages older group and direct messages without consuming anything', async () => {
+    const hub = localChannel(store, 'Atreus-Ranite');
+    await hub.send('group', 'g1');
+    await hub.send('Murphy-Ranite', 'dm1');
+    await hub.send('group', 'g2');
+    await hub.send('Murphy-Ranite', 'dm2');
+
+    const group = await fetchHistory(target, murphyTicket, { scope: 'group', limit: 10 });
+    expect(group.messages.map((message) => message.body)).toEqual(['g2', 'g1']);
+
+    const dm = await fetchHistory(target, murphyTicket, { scope: 'dm', peer: 'atreus-ranite', limit: 10 });
+    expect(dm.messages.map((message) => message.body)).toEqual(['dm2', 'dm1']);
+
+    // History is read-only: the messages are still unread for Murphy.
+    expect((await fetchInbox(target, murphyTicket)).count).toBe(2);
+
+    // `before` pages further back.
+    const older = await fetchHistory(target, murphyTicket, { scope: 'group', before: group.messages[0]!.seq, limit: 10 });
+    expect(older.messages.map((message) => message.body)).toEqual(['g1']);
   });
 });
 

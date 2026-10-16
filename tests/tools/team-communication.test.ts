@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTeamGroupTool, createTeamInboxTool, createTeamSendTool, createTeamStatusTool } from '../../src/tools/team-communication.js';
+import {
+  createTeamGroupTool,
+  createTeamHistoryTool,
+  createTeamInboxTool,
+  createTeamSendTool,
+  createTeamStatusTool,
+} from '../../src/tools/team-communication.js';
 import { shouldWakeForTeamDms } from '../../src/team/service.js';
 
 describe('team_send tool', () => {
@@ -53,6 +59,21 @@ describe('team_status tool', () => {
     const result = (await tool.execute!({})) as { memberCount: number };
     expect(result.memberCount).toBe(2);
     expect(status).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('team_history tool', () => {
+  it('reads the group and a dm conversation, requiring a peer for dm', async () => {
+    const history = vi.fn(async () => ({ status: 'ok', messages: [] }));
+    const tool = createTeamHistoryTool(history);
+    await tool.execute!({ scope: 'group', limit: 10 });
+    expect(history).toHaveBeenLastCalledWith({ scope: 'group', limit: 10 });
+    await tool.execute!({ scope: 'dm', peer: 'Atreus-Ranite' });
+    expect(history).toHaveBeenLastCalledWith({ scope: 'dm', peer: 'Atreus-Ranite' });
+
+    const bad = (await tool.execute!({ scope: 'dm' })) as { status: string };
+    expect(bad.status).toBe('invalid');
+    expect(history).toHaveBeenCalledTimes(2);
   });
 });
 

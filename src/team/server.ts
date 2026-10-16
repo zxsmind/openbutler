@@ -8,6 +8,7 @@ const MAX_BODY_BYTES = 65_536;
 const MAX_GROUP_PAGE = 200;
 const MAX_INBOX_PAGE = 200;
 const MAX_MEMORY_PAGE = 500;
+const MAX_HISTORY_PAGE = 200;
 /** How long an approved ticket may be re-fetched before it is forgotten. */
 const JOIN_TICKET_TTL_MS = 60 * 60_000;
 const PROTOCOL_VERSION = 'ranite-team/1';
@@ -286,6 +287,30 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
     if (request.method === 'GET' && url.pathname === '/v1/inbox') {
       const messages = store.unreadDms(member.name, MAX_INBOX_PAGE);
       sendJson(response, 200, { count: store.unreadDmCount(member.name), messages });
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/history') {
+      const scope = url.searchParams.get('scope');
+      const beforeRaw = url.searchParams.get('before');
+      const before = beforeRaw === null ? 0 : Number(beforeRaw);
+      const limitRaw = url.searchParams.get('limit');
+      const limit = limitRaw === null ? 50 : Number(limitRaw);
+      if ((scope !== 'group' && scope !== 'dm') || !Number.isInteger(before) || before < 0 || !Number.isInteger(limit) || limit < 1) {
+        sendJson(response, 400, { error: 'history needs scope=group|dm and non-negative before, positive limit.' });
+        return;
+      }
+      const page = Math.min(limit, MAX_HISTORY_PAGE);
+      if (scope === 'group') {
+        sendJson(response, 200, { messages: store.groupHistory(before, page) });
+        return;
+      }
+      const peer = (url.searchParams.get('peer') ?? '').trim();
+      const canonical = peer ? store.canonicalMemberName(peer) : null;
+      if (!canonical) {
+        sendJson(response, 404, { error: `No member named "${peer}" in this team.` });
+        return;
+      }
+      sendJson(response, 200, { messages: store.dmHistory(member.name, canonical, before, page) });
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/inbox/read') {

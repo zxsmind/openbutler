@@ -207,6 +207,23 @@ export async function readGroup(
   return body as unknown as { messages: TeamMessage[]; cursor: number; latestSeq: number };
 }
 
+/** Authenticated: page older messages from the group or a DM conversation, newest first. */
+export async function fetchHistory(
+  target: JoinTarget,
+  ticket: string,
+  query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number },
+): Promise<{ messages: TeamMessage[] }> {
+  const params = new URLSearchParams({ scope: query.scope });
+  if (query.peer) params.set('peer', query.peer);
+  if (query.before) params.set('before', String(query.before));
+  if (query.limit) params.set('limit', String(query.limit));
+  const { status, body } = await requestJson(`${baseUrl(target)}/v1/history?${params.toString()}`, {
+    headers: { authorization: `Bearer ${ticket}` },
+  });
+  if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'History read failed.');
+  return body as unknown as { messages: TeamMessage[] };
+}
+
 /** Authenticated: unread DMs for this member. */
 export async function fetchInbox(target: JoinTarget, ticket: string): Promise<{ count: number; messages: TeamMessage[] }> {
   const { status, body } = await requestJson(`${baseUrl(target)}/v1/inbox`, { headers: { authorization: `Bearer ${ticket}` } });

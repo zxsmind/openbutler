@@ -45,6 +45,7 @@ const ALWAYS_OFFERED = [
   'team_send',
   'team_inbox',
   'team_group',
+  'team_history',
   'team_status',
   'team_remember',
   'session_message',

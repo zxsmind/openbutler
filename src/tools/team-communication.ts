@@ -5,6 +5,7 @@ type TeamSend = (input: { recipient: string; text: string; replyTo?: string }) =
 type TeamInbox = (limit: number) => Promise<unknown>;
 type TeamGroup = (limit: number) => Promise<unknown>;
 type TeamStatus = () => Promise<unknown>;
+type TeamHistory = (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
 type TeamRemember = (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
 
 /**
@@ -117,6 +118,44 @@ export function createTeamStatusTool(status: TeamStatus): ToolDefinition {
     autoApprove: () => true,
     toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
     execute: () => status(),
+  };
+}
+
+/**
+ * Persistent history: page older group messages or a direct-message
+ * conversation at any time. This is a read-only view of the hub's log; it never
+ * changes what is unread, so a ranite can look back without consuming anything.
+ */
+export function createTeamHistoryTool(history: TeamHistory): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_history',
+    maxInputChars: 256,
+    description:
+      'Read older messages from the shared group or a direct-message conversation, newest first. Use scope "group" for the shared channel, or scope "dm" with peer set to a member name for your conversation with that member. Pass before as a message id sequence to page further back. This is a read-only look at the persistent log: it never marks anything read, so use team_inbox or team_group to catch up on new messages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        scope: { type: 'string', enum: ['group', 'dm'], description: 'Read the shared group, or a direct-message conversation.' },
+        peer: { type: 'string', description: 'The member to read a conversation with (required for scope "dm").' },
+        before: { type: 'integer', minimum: 1, description: 'Page older messages before this message sequence number.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Maximum messages to read; defaults to 50.' },
+      },
+      required: ['scope'],
+    },
+    effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
+    autoApprove: () => true,
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: (input) => {
+      const scope = input.scope;
+      if (scope !== 'group' && scope !== 'dm') return Promise.resolve({ status: 'invalid', error: 'scope must be "group" or "dm".' });
+      const peer = typeof input.peer === 'string' && input.peer.trim() ? input.peer.trim() : undefined;
+      if (scope === 'dm' && !peer) return Promise.resolve({ status: 'invalid', error: 'scope "dm" needs a peer member name.' });
+      const before = typeof input.before === 'number' ? input.before : undefined;
+      const limit = typeof input.limit === 'number' ? input.limit : undefined;
+      return history({ scope, ...(peer ? { peer } : {}), ...(before ? { before } : {}), ...(limit ? { limit } : {}) });
+    },
   };
 }
 

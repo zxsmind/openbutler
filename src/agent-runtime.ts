@@ -31,6 +31,7 @@ export interface CreateAgentRuntimeOptions {
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
   teamInbox?: (limit: number) => Promise<unknown>;
   teamGroup?: (limit: number) => Promise<unknown>;
+  teamHistory?: (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
@@ -126,6 +127,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         ...(options.teamSend ? { teamSend: options.teamSend } : {}),
         ...(options.teamInbox ? { teamInbox: options.teamInbox } : {}),
         ...(options.teamGroup ? { teamGroup: options.teamGroup } : {}),
+        ...(options.teamHistory ? { teamHistory: options.teamHistory } : {}),
         ...(options.teamStatus ? { teamStatus: options.teamStatus } : {}),
         ...(options.teamRemember ? { teamRemember: options.teamRemember } : {}),
         ...(options.sessionMessage ? { sessionMessage: options.sessionMessage } : {}),

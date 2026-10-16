@@ -40,7 +40,8 @@ const USAGE = `Usage:
   ranite team say <message>
   ranite team dm <member> <message>
   ranite team inbox
-  ranite team read [--group] [--from <member>]`;
+  ranite team read [--group] [--from <member>]
+  ranite team history [--group | --with <member>] [--before <seq>] [--limit <n>]`;
 
 function words(parsed: Parsed): string[] {
   return parsed.words;
@@ -543,6 +544,30 @@ async function runRejoin(parsed: Parsed): Promise<void> {
   ui.success(`Hub address updated to ${target.host}:${target.port}.`);
 }
 
+async function runHistory(parsed: Parsed): Promise<void> {
+  const group = parsed.booleans.has('group');
+  const peer = flag(parsed, 'with')?.trim();
+  if (!group && !peer) throw new Error('Usage: ranite team history [--group | --with <member>] [--before <seq>] [--limit <n>]');
+  const before = Number(flag(parsed, 'before') ?? '0');
+  const limit = Number(flag(parsed, 'limit') ?? '50');
+  if (!Number.isInteger(before) || before < 0) throw new Error('--before must be a non-negative integer.');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('--limit must be 1-200.');
+  const { channel, close } = openChannel();
+  try {
+    const result = await channel.history({ scope: group ? 'group' : 'dm', ...(peer ? { peer } : {}), before, limit });
+    if (result.messages.length === 0) {
+      ui.info('No messages found.');
+      return;
+    }
+    // Newest first from the hub; show oldest-first for reading.
+    renderMessages([...result.messages].reverse());
+    const oldest = result.messages.at(-1);
+    if (oldest) ui.info(`Page back with: ranite team history ${group ? '--group' : `--with ${peer}`} --before ${oldest.seq}`);
+  } finally {
+    close();
+  }
+}
+
 /** Usage: ranite team <subcommand> … (see USAGE). */
 export async function runTeamCommand(parsed: Parsed): Promise<void> {
   const action = words(parsed)[0] ?? 'status';
@@ -603,6 +628,9 @@ export async function runTeamCommand(parsed: Parsed): Promise<void> {
       return;
     case 'read':
       await runRead(parsed);
+      return;
+    case 'history':
+      await runHistory(parsed);
       return;
     default:
       throw new Error(USAGE);

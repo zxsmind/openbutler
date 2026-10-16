@@ -84,6 +84,8 @@ export interface TeamChannel {
   setGroupCursor(seq: number): Promise<void>;
   /** Read new group messages after this member's cursor, advancing it. */
   groupRead(limit: number): Promise<{ messages: TeamMessage[]; cursor: number; latestSeq: number }>;
+  /** Page older messages from the group or a DM conversation, newest first. */
+  history(query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }): Promise<{ messages: TeamMessage[] }>;
   /** Team roster with presence and last activity. */
   status(): Promise<TeamStatusView>;
   inbox(): Promise<{ count: number; messages: TeamMessage[] }>;
@@ -123,6 +125,14 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
       const messages = store.groupMessages(cursor, limit);
       if (messages.length > 0) store.setGroupCursor(memberName, messages.at(-1)!.seq);
       return { messages, cursor: store.getGroupCursor(memberName), latestSeq: store.groupLatestSeq() };
+    },
+    async history(query) {
+      const before = query.before ?? 0;
+      const limit = query.limit ?? 50;
+      if (query.scope === 'group') return { messages: store.groupHistory(before, limit) };
+      const canonical = query.peer ? store.canonicalMemberName(query.peer) : null;
+      if (!canonical) throw new Error(`No member named "${query.peer ?? ''}" in this team.`);
+      return { messages: store.dmHistory(memberName, canonical, before, limit) };
     },
     async status() {
       return {
@@ -181,6 +191,9 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
     },
     groupRead(limit) {
       return client.readGroup(target, ticket, limit);
+    },
+    history(query) {
+      return client.fetchHistory(target, ticket, query);
     },
     async status() {
       const live = await client.fetchHubStatus(target, ticket);

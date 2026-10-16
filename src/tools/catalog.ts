@@ -20,6 +20,7 @@ import type { ToolDefinition } from './registry.js';
 import { createReadOwnerMessagesTool, createSendMessageToOwnerTool } from './owner-communication.js';
 import {
   createTeamGroupTool,
+  createTeamHistoryTool,
   createTeamInboxTool,
   createTeamRememberTool,
   createTeamSendTool,
@@ -39,6 +40,7 @@ export interface ToolCatalogueOptions {
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
   teamInbox?: (limit: number) => Promise<unknown>;
   teamGroup?: (limit: number) => Promise<unknown>;
+  teamHistory?: (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
@@ -88,6 +90,7 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
       options.teamInbox ?? (async () => ({ status: 'unavailable' as const, error: 'team_inbox is not available in this session.' })),
     ),
     createTeamGroupTool(options.teamGroup ?? unavailable('team_group')),
+    createTeamHistoryTool(options.teamHistory ?? unavailable('team_history')),
     createTeamStatusTool(options.teamStatus ?? unavailable('team_status')),
     createTeamRememberTool(
       options.teamRemember ?? (async () => ({ status: 'unavailable' as const, error: 'team_remember is not available in this session.' })),

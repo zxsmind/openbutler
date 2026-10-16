@@ -390,6 +390,27 @@ export class TeamStore {
       .all(sinceSeq, limit) as unknown as TeamMessage[];
   }
 
+  /** Group history page: messages before `beforeSeq` (0 = newest), newest first. */
+  groupHistory(beforeSeq: number, limit: number): TeamMessage[] {
+    const ceiling = beforeSeq > 0 ? beforeSeq : Number.MAX_SAFE_INTEGER;
+    return this.database
+      .prepare(
+        "SELECT seq, msg_id AS msgId, sender, recipient, body, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE recipient = 'group' AND seq < ? ORDER BY seq DESC LIMIT ?",
+      )
+      .all(ceiling, limit) as unknown as TeamMessage[];
+  }
+
+  /** Direct-message history between two members, newest first, before `beforeSeq`. */
+  dmHistory(memberA: string, memberB: string, beforeSeq: number, limit: number): TeamMessage[] {
+    const ceiling = beforeSeq > 0 ? beforeSeq : Number.MAX_SAFE_INTEGER;
+    return this.database
+      .prepare(
+        'SELECT seq, msg_id AS msgId, sender, recipient, body, created_at AS createdAt, reply_to AS replyTo FROM team_messages ' +
+          'WHERE ((sender = ? AND recipient = ?) OR (sender = ? AND recipient = ?)) AND seq < ? ORDER BY seq DESC LIMIT ?',
+      )
+      .all(memberA, memberB, memberB, memberA, ceiling, limit) as unknown as TeamMessage[];
+  }
+
   groupLatestSeq(): number {
     const row = this.database.prepare("SELECT MAX(seq) AS seq FROM team_messages WHERE recipient = 'group'").get() as
       { seq: number | null } | undefined;
