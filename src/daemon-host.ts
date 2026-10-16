@@ -67,6 +67,8 @@ import { TeamStore, type JoinRequest } from './team/store.js';
 import { localChannel, remoteChannel, type TeamChannel } from './team/session.js';
 import { shouldWakeForTeamDms } from './team/service.js';
 import { materializeTeamMemory } from './team/memory-mirror.js';
+import { teamSlug } from './memory-paths.js';
+import { readAllTeamMemory } from './team/session.js';
 import { TeamOutbox } from './team/outbox.js';
 import { HubUnreachableError } from './team/client.js';
 import { todayLocalDate } from './file-write-core.js';
@@ -402,10 +404,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   async function refreshTeamMemory(force = false): Promise<void> {
     const team = loadSettings().team;
     if (!team) return;
-    const memory = await withTeamChannel((channel) => channel.memory(0));
-    if (!force && memory.latestSeq === teamMemorySeq) return;
-    materializeTeamMemory(team.teamName, memory.entries, todayLocalDate());
-    teamMemorySeq = memory.latestSeq;
+    const teamKey = team.teamId || teamSlug(team.teamName);
+    // Page through the whole log so a team with more than one page of entries
+    // is mirrored completely, not just its first page.
+    const { entries, latestSeq } = await withTeamChannel(readAllTeamMemory);
+    if (!force && latestSeq === teamMemorySeq) return;
+    materializeTeamMemory(teamKey, entries, todayLocalDate());
+    teamMemorySeq = latestSeq;
   }
 
   /**

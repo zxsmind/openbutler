@@ -24,18 +24,19 @@ describe('self and team memory scopes', () => {
     const paths = getMemoryPaths(workspace);
     expect(getMemoryDocumentPath(paths.identityFile, workspace)?.scope).toBe('self');
     expect(getMemoryDocumentPath(join(paths.peersDirectory, 'atreus.md'), workspace)?.scope).toBe('self');
-    expect(getMemoryDocumentPath(getTeamMemoryPaths('MyTeam', workspace).decisionsFile, workspace)?.scope).toBe('team:myteam');
-    expect(getMemoryDocumentPath(getTeamMemoryPaths('MyTeam', workspace).sharedFile, workspace)?.scope).toBe('team:myteam');
+    expect(getMemoryDocumentPath(getTeamMemoryPaths('myteam', workspace).decisionsFile, workspace)?.scope).toBe('team:myteam');
+    expect(getMemoryDocumentPath(getTeamMemoryPaths('myteam', workspace).sharedFile, workspace)?.scope).toBe('team:myteam');
   });
 
-  it('recognizes them as writable memory documents, but not arbitrary paths under the root', () => {
+  it('keeps self writable but the shared team mirror read-only', () => {
     const paths = getMemoryPaths(workspace);
     expect(isMemoryDocumentPath(paths.identityFile, workspace)).toBe(true);
     expect(isMemoryDocumentPath(join(paths.peersDirectory, 'murphy.md'), workspace)).toBe(true);
-    expect(isMemoryDocumentPath(getTeamMemoryPaths('MyTeam', workspace).sharedFile, workspace)).toBe(true);
-    // A stray file directly under team/ (no team slug) is not a memory document.
+    // The shared team mirror is never a writable memory document.
+    expect(isMemoryDocumentPath(getTeamMemoryPaths('myteam', workspace).sharedFile, workspace)).toBe(false);
+    // A stray file directly under team/ (no team key) is not a memory document.
     expect(isMemoryDocumentPath(join(paths.teamRoot, 'stray.md'), workspace)).toBe(false);
-    // Deep nesting under a team slug is not a memory document either.
+    // Deep nesting under a team key is not a memory document either.
     expect(isMemoryDocumentPath(join(paths.teamRoot, 'myteam', 'nested', 'x.md'), workspace)).toBe(false);
   });
 
@@ -43,7 +44,7 @@ describe('self and team memory scopes', () => {
     // The firewall is structural: team memory lives only under team/, and the
     // sync reads only the hub's log. A user-scope path is never a team path.
     const paths = getMemoryPaths(workspace);
-    const team = getTeamMemoryPaths('MyTeam', workspace);
+    const team = getTeamMemoryPaths('myteam', workspace);
     expect(paths.userFile.startsWith(team.directory)).toBe(false);
     expect(paths.topicsDirectory.startsWith(team.directory)).toBe(false);
     expect(paths.identityFile.startsWith(team.directory)).toBe(false);
@@ -55,5 +56,13 @@ describe('self and team memory scopes', () => {
     mkdirSync(paths.peersDirectory, { recursive: true });
     writeFileSync(join(paths.peersDirectory, 'atreus.md'), '---\ntitle: Atreus\n---\n# Atreus\n\nHandles deploys.\n', 'utf8');
     expect(isMemoryDocumentPath(join(paths.peersDirectory, 'atreus.md'), workspace)).toBe(true);
+  });
+
+  it('refuses a file write to the shared team mirror', async () => {
+    const { validateTextWrite } = await import('../src/file-write-core.js');
+    const team = getTeamMemoryPaths('myteam', workspace);
+    const result = validateTextWrite('---\ntitle: X\n---\n# X\n\nbody\n', team.decisionsFile, workspace);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.status).toBe('read_only_memory');
   });
 });

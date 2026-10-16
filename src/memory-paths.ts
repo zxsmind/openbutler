@@ -39,10 +39,14 @@ export interface TeamMemoryPaths {
   sharedFile: string;
 }
 
-/** Where one team's shared, hub-synced memory materializes on this machine. */
-export function getTeamMemoryPaths(teamName: string, workspaceRoot = process.cwd()): TeamMemoryPaths {
+/**
+ * Where one team's shared, hub-synced memory materializes on this machine. The
+ * key is the team's stable id (falling back to a slug of its name), so two
+ * different teams never collide on one folder.
+ */
+export function getTeamMemoryPaths(teamKey: string, workspaceRoot = process.cwd()): TeamMemoryPaths {
   const root = getMemoryPaths(workspaceRoot).teamRoot;
-  const directory = resolve(root, teamSlug(teamName));
+  const directory = resolve(root, teamKey);
   return { directory, decisionsFile: resolve(directory, 'decisions.md'), sharedFile: resolve(directory, 'shared.md') };
 }
 
@@ -111,11 +115,11 @@ export function getMemoryDocumentPath(source: string, workspaceRoot = process.cw
   if (samePath(target, paths.identityFile)) return { path: target, kind: 'profile', scope: 'self', notePath: null };
   if (isWithin(target, paths.peersDirectory))
     return { path: target, kind: 'note', scope: 'self', notePath: relative(paths.peersDirectory, target) };
-  // Shared team scope: <root>/team/<slug>/<file>.md. The slug is structural.
+  // Shared team scope: <root>/team/<team-key>/<file>.md. The key is structural.
   if (isWithin(target, paths.teamRoot)) {
     const parts = relative(paths.teamRoot, target).split(sep);
     const slug = parts[0]?.toLowerCase() ?? '';
-    if (parts.length === 2 && /^[a-z0-9-]+$/.test(slug)) return { path: target, kind: 'note', scope: `team:${slug}`, notePath: parts[1]! };
+    if (parts.length === 2 && /^[a-z0-9_-]+$/.test(slug)) return { path: target, kind: 'note', scope: `team:${slug}`, notePath: parts[1]! };
     return null;
   }
   const parts = relative(paths.root, target).split(sep);
@@ -131,15 +135,16 @@ export function isWithinMemoryRoot(source: string, workspaceRoot = process.cwd()
   return target !== null && isWithin(target, getMemoryPaths(workspaceRoot).root);
 }
 
-/** Source notes live only in Ranite's user, self, team, or active-workspace memory scopes. */
+/**
+ * Source notes live only in Ranite's user, self, or active-workspace memory
+ * scopes. The shared team scope is deliberately excluded: it is a read-only
+ * mirror of the hub's log, written only by the daemon, never by a file tool.
+ */
 export function isMemoryDocumentPath(source: string, workspaceRoot = process.cwd()): boolean {
   const document = getMemoryDocumentPath(source, workspaceRoot);
   return (
     document !== null &&
-    (document.scope === 'user' ||
-      document.scope === 'self' ||
-      document.scope.startsWith('team:') ||
-      document.scope === `workspace:${getMemoryPaths(workspaceRoot).workspaceKey}`)
+    (document.scope === 'user' || document.scope === 'self' || document.scope === `workspace:${getMemoryPaths(workspaceRoot).workspaceKey}`)
   );
 }
 

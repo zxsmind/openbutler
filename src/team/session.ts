@@ -53,6 +53,25 @@ export interface TeamStatusView {
 const PRESENCE_WINDOW_MS = 15_000;
 
 /**
+ * Reads the whole shared-memory log, paging until caught up. A single call is
+ * capped, so a team with more than one page of entries must loop or the mirror
+ * silently loses the tail; this is the one place that loops.
+ */
+export async function readAllTeamMemory(channel: TeamChannel): Promise<{ entries: TeamMemoryEntry[]; latestSeq: number }> {
+  const entries: TeamMemoryEntry[] = [];
+  let since = 0;
+  let latestSeq = 0;
+  for (;;) {
+    const page = await channel.memory(since);
+    latestSeq = page.latestSeq;
+    entries.push(...page.entries);
+    const last = page.entries.at(-1);
+    if (!last || last.seq >= page.latestSeq) return { entries, latestSeq };
+    since = last.seq;
+  }
+}
+
+/**
  * One way to talk to a team, whether this machine is the hub or a member.
  * The hub reads and writes its own store directly (no network to itself);
  * a member goes through the hub's HTTP surface with its ticket.

@@ -4,8 +4,9 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { AllTasks, PretrainedModelOptions, ProgressCallback } from '@huggingface/transformers';
-import { getMemoryPaths } from './memory-paths.js';
+import { getMemoryPaths, teamSlug } from './memory-paths.js';
 import { getDataPath } from './paths.js';
+import { loadSettings } from './settings.js';
 import { migrateMemoryLayout } from './memory-layout.js';
 import { gateByRelevance, tokenizeTerms, type RelevanceGate } from './relevance-gate.js';
 import { MEMORY_DOCUMENT_REVISION, parseMemoryDocument, type MemoryScope, type MemoryType } from './memory-document.js';
@@ -175,10 +176,9 @@ export class MemoryIndex {
    */
   private searchScopeFilter(alias: string): { clause: string; params: string[] } {
     const params = ['user', 'self', this.workspaceScope];
-    return {
-      clause: `(${alias}.scope IN (${params.map(() => '?').join(', ')}) OR ${alias}.scope LIKE 'team:%')`,
-      params,
-    };
+    const teamKey = activeTeamKey();
+    if (teamKey) params.push(`team:${teamKey}`);
+    return { clause: `${alias}.scope IN (${params.map(() => '?').join(', ')})`, params };
   }
 
   async reindexPath(path: string): Promise<void> {
@@ -358,26 +358,14 @@ export class MemoryIndex {
     if (owned(this.paths.userFile)) await addMarkdownFile(userFiles, this.paths.userFile, 'user');
     if (owned(this.paths.topicsDirectory)) await addMarkdownTree(userFiles, this.paths.topicsDirectory, 'user');
     if (owned(this.paths.areasDirectory)) await addMarkdownTree(userFiles, this.paths.areasDirectory, 'user');
-    // Per-agent self scope and the shared team scope are always searchable.
+    // Per-agent self scope and the ACTIVE team scope are searchable; other
+    // teams' folders (from a left team) are never indexed or searched.
     if (owned(this.paths.identityFile)) await addMarkdownFile(userFiles, this.paths.identityFile, 'self');
     if (owned(this.paths.peersDirectory)) await addMarkdownTree(userFiles, this.paths.peersDirectory, 'self');
-    if (owned(this.paths.teamRoot)) await this.addTeamTrees(userFiles);
+    const teamKey = activeTeamKey();
+    if (teamKey && owned(this.paths.teamRoot)) await addMarkdownTree(userFiles, join(this.paths.teamRoot, teamKey), `team:${teamKey}`);
     if (owned(this.paths.workspaceFile)) await addMarkdownFile(workspaceFiles, this.paths.workspaceFile, this.workspaceScope);
     return [...userFiles, ...workspaceFiles].sort((left, right) => left.path.localeCompare(right.path));
-  }
-
-  /** Every `<teamRoot>/<slug>/*.md` file, each indexed under its own `team:<slug>` scope. */
-  private async addTeamTrees(target: MemorySourceFile[]): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(this.paths.teamRoot, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !/^[a-z0-9-]+$/.test(entry.name)) continue;
-      await addMarkdownTree(target, join(this.paths.teamRoot, entry.name), `team:${entry.name}`);
-    }
   }
 
   /**
@@ -663,6 +651,21 @@ async function addMarkdownTree(output: MemorySourceFile[], directory: string, sc
 
 function isMissingPath(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
+/**
+ * The folder key of the team this machine is currently in, or null. Only that
+ * team's shared memory is indexed and searched; a left team's folder stays on
+ * disk but never leaks into later work.
+ */
+function activeTeamKey(): string | null {
+  try {
+    const team = loadSettings().team;
+    if (!team) return null;
+    return team.teamId || teamSlug(team.teamName);
+  } catch {
+    return null;
+  }
 }
 
 export function encodeEmbedding(embedding: Float32Array): Buffer {

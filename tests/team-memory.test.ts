@@ -6,7 +6,7 @@ import { fetchTeamMemory, postTeamMemory } from '../src/team/client.js';
 import { materializeTeamMemory, renderTeamMemoryFile } from '../src/team/memory-mirror.js';
 import { startTeamServer, type StartedTeamServer } from '../src/team/server.js';
 import { hashTicket, makeTicket } from '../src/team/service.js';
-import { localChannel, remoteChannel } from '../src/team/session.js';
+import { localChannel, readAllTeamMemory, remoteChannel, type TeamChannel } from '../src/team/session.js';
 import { TeamStore } from '../src/team/store.js';
 import type { JoinTarget } from '../src/team/tailnet.js';
 
@@ -88,7 +88,7 @@ describe('team memory mirror', () => {
 
   it('materializes both topic files under the team folder on disk', () => {
     materializeTeamMemory(
-      'MyTeam',
+      'myteam',
       [
         { seq: 1, topic: 'decisions', author: 'Atreus-Ranite', body: 'Decision A.', createdAt: Date.UTC(2026, 9, 14) },
         { seq: 2, topic: 'shared', author: 'Murphy-Ranite', body: 'Fact B.', createdAt: Date.UTC(2026, 9, 15) },
@@ -102,5 +102,19 @@ describe('team memory mirror', () => {
     expect(decisions).not.toContain('Fact B.');
     expect(shared).toContain('Fact B.');
     expect(shared).not.toContain('Decision A.');
+  });
+
+  it('pages the whole log, so a mirror past one page is complete', async () => {
+    const entry = (seq: number) => ({ seq, topic: 'decisions' as const, author: 'Atreus-Ranite', body: `e${seq}`, createdAt: 0 });
+    const pages = [
+      { entries: [entry(1), entry(2)], latestSeq: 3 },
+      { entries: [entry(3)], latestSeq: 3 },
+    ];
+    let call = 0;
+    const channel = { memory: async () => pages[call++]! } as unknown as TeamChannel;
+    const result = await readAllTeamMemory(channel);
+    expect(result.entries.map((item) => item.seq)).toEqual([1, 2, 3]);
+    expect(result.latestSeq).toBe(3);
+    expect(call).toBe(2);
   });
 });

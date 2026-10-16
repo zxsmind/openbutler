@@ -101,6 +101,19 @@ export function validateTextWrite(content: string, path: string, workspaceRoot: 
   }
   if (isWithinMemoryRoot(path, workspaceRoot) && !isMemoryIndexPath(path, workspaceRoot)) {
     const document = getMemoryDocumentPath(path, workspaceRoot);
+    // The shared team scope is a read-only mirror of the hub's log. A file tool
+    // must never write it; the only writer is the daemon's materializer, and the
+    // only way to record shared memory is team_remember.
+    if (document && document.scope.startsWith('team:')) {
+      return {
+        ok: false,
+        failure: {
+          status: 'read_only_memory',
+          path,
+          error: 'Shared team memory is a read-only mirror of the hub log. Record an entry with team_remember, not a file write.',
+        },
+      };
+    }
     if (!document || (document.notePath !== null && !validateMemoryNoteName(document.notePath))) {
       const paths = getMemoryPaths(workspaceRoot);
       return {

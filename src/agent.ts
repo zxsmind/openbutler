@@ -12,7 +12,7 @@ import {
   summarizeImageToolResult,
   summarizeOwnerInboxToolResult,
 } from './image.js';
-import { getMemoryPaths, getTeamMemoryPaths, isMemoryDocumentPath } from './memory-paths.js';
+import { getMemoryPaths, getTeamMemoryPaths, isMemoryDocumentPath, teamSlug } from './memory-paths.js';
 import { getScratchRoot } from './paths.js';
 import { getConfigPath, loadSettings } from './settings.js';
 import { MEMORY_DOCUMENT_GUIDANCE, MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES } from './memory-document.js';
@@ -144,7 +144,7 @@ function buildTeamIdentityBlock(workspaceRoot: string): string {
   const paths = getMemoryPaths(workspaceRoot);
   const identity = readMemoryFile(paths.identityFile, 8192);
   const peers = readMemoryDirectory(paths.peersDirectory);
-  const teamPaths = getTeamMemoryPaths(team.teamName, workspaceRoot);
+  const teamPaths = getTeamMemoryPaths(team.teamId || teamSlug(team.teamName), workspaceRoot);
   const decisions = readMemoryFile(teamPaths.decisionsFile, 8192);
   const shared = readMemoryFile(teamPaths.sharedFile, 8192);
   const sections: string[] = [

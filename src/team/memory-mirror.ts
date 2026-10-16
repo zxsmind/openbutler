@@ -52,8 +52,8 @@ function atomicWrite(path: string, content: string): void {
  * Called on the member poll and after a local write, so the local files the
  * agent reads and searches always reflect the shared truth.
  */
-export function materializeTeamMemory(teamName: string, entries: TeamMemoryEntry[], updated: string, workspaceRoot = process.cwd()): void {
-  const paths = getTeamMemoryPaths(teamName, workspaceRoot);
+export function materializeTeamMemory(teamKey: string, entries: TeamMemoryEntry[], updated: string, workspaceRoot = process.cwd()): void {
+  const paths = getTeamMemoryPaths(teamKey, workspaceRoot);
   atomicWrite(paths.decisionsFile, renderTeamMemoryFile('decisions', entries, updated));
   atomicWrite(paths.sharedFile, renderTeamMemoryFile('shared', entries, updated));
 }
