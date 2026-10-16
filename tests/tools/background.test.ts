@@ -31,6 +31,7 @@ const task = (trigger: BackgroundTaskState['trigger']): BackgroundTaskState => (
   name: 'Explicit user task',
   enabled: true,
   workspaceRoot: root,
+  originSessionId: '',
   instruction: 'Notify me only if something requires attention.',
   trigger,
 });
@@ -136,7 +137,17 @@ describe('explicit background subscriptions', () => {
     expect(() => validateBackgroundTrigger({ adapter: 'interval', options: { everySeconds: 10, typo: true } })).toThrow(
       'not a trigger option',
     );
-    expect(() => validateBackgroundTrigger({ adapter: 'at', options: { at: '2030-01-01T12:00:00' } })).toThrow('timezone');
+    /* Server-local wall time needs no offset; an offset is converted at creation, not rejected here. */
+    expect(() => validateBackgroundTrigger({ adapter: 'at', options: { at: 'not-a-time' } })).toThrow('server-local ISO');
+    expect(validateBackgroundTrigger({ adapter: 'at', options: { at: '2030-01-01T12:00:00' } })).toBeUndefined();
+    expect(() =>
+      validateBackgroundTrigger({ adapter: 'window', options: { from: '2030-01-01T12:00:00', to: '2030-01-01T11:00:00' } }),
+    ).toThrow('later than window.from');
+    expect(() => validateBackgroundTrigger({ adapter: 'daily', options: { at: '2am' } })).toThrow('"HH:MM"');
+    expect(() => validateBackgroundTrigger({ adapter: 'daily', options: { at: '02:00', days: ['funday'] } })).toThrow(
+      'mon,tue,wed,thu,fri,sat,sun',
+    );
+    expect(validateBackgroundTrigger({ adapter: 'daily', options: { at: '02:00', days: ['mon', 'wed'] } })).toBeUndefined();
   });
 
   it('recovers one overdue interval, then resumes the requested cadence without replaying missed intervals', async () => {
