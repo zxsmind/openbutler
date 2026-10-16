@@ -22,11 +22,11 @@ describe('team_send tool', () => {
 });
 
 describe('team_inbox tool', () => {
-  it('acknowledges then reads, and validates its inputs', async () => {
+  it('reads and consumes with a limit, and validates the limit', async () => {
     const inbox = vi.fn(async () => ({ status: 'ok', count: 0, messages: [] }));
     const tool = createTeamInboxTool(inbox);
-    await tool.execute!({ limit: 5, acknowledge: ['m_1'] });
-    expect(inbox).toHaveBeenCalledWith(5, ['m_1']);
+    await tool.execute!({ limit: 5 });
+    expect(inbox).toHaveBeenCalledWith(5);
 
     const bad = (await tool.execute!({ limit: 999 })) as { status: string };
     expect(bad.status).toBe('invalid');

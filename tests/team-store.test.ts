@@ -85,9 +85,9 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 1_000;
-    store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
     expect(store.isInitialized()).toBe(true);
-    expect(() => store.initHub('other', 'X', 'Y', now)).toThrow('already initialized');
+    expect(() => store.initHub('other', 'team-2', 'X', 'Y', now)).toThrow('already initialized');
     expect(store.nameTaken('atreus-ranite')).toBe(true);
 
     store.createInvite('kartal-1234', 60_000, now);
@@ -106,7 +106,7 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 5_000;
-    store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
     store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
     expect(store.listPendingJoins()).toHaveLength(1);
 
@@ -124,7 +124,7 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 9_000;
-    store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
     store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
     const ticket = makeTicket();
     store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now);
@@ -147,7 +147,7 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 10_000;
-    store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
     store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-1', now);
     const ticket = makeTicket();
     store.decideJoin('jr_m', true, ticket, hashTicket(ticket), now);

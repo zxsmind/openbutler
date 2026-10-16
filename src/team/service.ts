@@ -1,5 +1,15 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 
+/** The reserved recipient name for the shared group channel. */
+export const GROUP_RECIPIENT = 'group';
+
+/**
+ * Names a member may never take, case-insensitively. `group` is the group
+ * channel's reserved recipient; letting a member take it would collapse the
+ * direct-message and group channels into one.
+ */
+export const RESERVED_MEMBER_NAMES: ReadonlySet<string> = new Set([GROUP_RECIPIENT]);
+
 /**
  * Member names are shown to humans and used as file names, so they stay
  * conservative: letters, digits, dash, underscore, 1-64 chars. Uniqueness is
@@ -9,6 +19,7 @@ export function validateMemberName(raw: string): string {
   const name = raw.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name))
     throw new Error(`"${raw}" is not a valid member name. Use 1-64 letters, digits, dashes, or underscores.`);
+  if (RESERVED_MEMBER_NAMES.has(name.toLowerCase())) throw new Error(`"${name}" is reserved and cannot be used as a member name.`);
   return name;
 }
 
@@ -67,6 +78,11 @@ export function makeHubId(): string {
   return randomBytes(16).toString('hex');
 }
 
+/** The team's stable public id. It keys shared memory and scopes local state. */
+export function makeTeamId(): string {
+  return `t_${randomBytes(12).toString('hex')}`;
+}
+
 /** Unguessable join-request id. Knowing it is the only credential for polling that request. */
 export function makeRequestId(): string {
   return `jr_${randomBytes(12).toString('hex')}`;
@@ -77,11 +93,8 @@ export function makeMessageId(): string {
   return `m_${randomBytes(12).toString('hex')}`;
 }
 
-/** The reserved recipient name for the shared group channel. */
-export const GROUP_RECIPIENT = 'group';
-
 export function isGroupRecipient(value: string): boolean {
-  return value === GROUP_RECIPIENT;
+  return value.trim().toLowerCase() === GROUP_RECIPIENT;
 }
 
 /**

@@ -2,7 +2,16 @@ import { confirm } from '@inquirer/prompts';
 import type { Parsed } from './args.js';
 import { loadSecrets, loadSettings, saveSecrets, saveSettings } from '../settings.js';
 import { fetchHubFingerprint, fetchHubStatus, pollJoin, postJoin, postLeave, type JoinPollResult } from '../team/client.js';
-import { fingerprintOf, hashTicket, makeHubId, makeInviteCode, makeTicket, validateMemberName, validateTeamName } from '../team/service.js';
+import {
+  fingerprintOf,
+  hashTicket,
+  makeHubId,
+  makeInviteCode,
+  makeTeamId,
+  makeTicket,
+  validateMemberName,
+  validateTeamName,
+} from '../team/service.js';
 import { localChannel, remoteChannel, type TeamChannel, type TeamMessage } from '../team/session.js';
 import { TeamStore } from '../team/store.js';
 import { TEAM_DEFAULT_PORT, findTailnetAddress, parseJoinTarget, type JoinTarget } from '../team/tailnet.js';
@@ -65,12 +74,13 @@ async function runInit(parsed: Parsed): Promise<void> {
   if (settings.team)
     throw new Error(`This machine is already in team "${settings.team.teamName}" as ${settings.team.memberName}. Leave it first.`);
   const store = openStore();
+  const teamId = makeTeamId();
   try {
-    store.initHub(makeHubId(), teamName, memberName, Date.now());
+    store.initHub(makeHubId(), teamId, teamName, memberName, Date.now());
   } finally {
     store.close();
   }
-  settings.team = { role: 'hub', teamName, memberName, hubHost: address, hubPort: port };
+  settings.team = { role: 'hub', teamName, memberName, hubHost: address, hubPort: port, teamId };
   saveSettings(settings);
   ui.success(`Team "${teamName}" created. This machine is the hub as ${memberName}.`);
   ui.info(`Hub address: ${address}:${port}`);
@@ -172,6 +182,7 @@ async function runJoin(parsed: Parsed): Promise<void> {
     hubHost: target.host,
     hubPort: target.port,
     hubFingerprint: hub.fingerprint,
+    teamId: approved.teamId,
   };
   saveSettings(next);
   ui.success(`Joined "${approved.team}" as ${approved.memberName}.`);
@@ -213,6 +224,7 @@ async function runJoinStatus(parsed: Parsed): Promise<void> {
     hubHost: target.host,
     hubPort: target.port,
     hubFingerprint: hub.fingerprint,
+    teamId: result.teamId,
   };
   saveSettings(settings);
   ui.success(`Joined "${result.team}" as ${result.memberName}.`);
@@ -447,8 +459,10 @@ async function runRead(parsed: Parsed): Promise<void> {
   const { channel, close } = openChannel();
   try {
     if (group) {
-      const result = await channel.groupRead(100);
-      const messages = from ? result.messages.filter((message) => message.sender.toLowerCase() === from) : result.messages;
+      // A filtered read is a peek: it never consumes messages it does not show.
+      const messages = from
+        ? (await channel.group(0)).messages.filter((message) => message.sender.toLowerCase() === from)
+        : (await channel.groupRead(100)).messages;
       if (messages.length === 0) {
         ui.info('No new group messages.');
         return;
@@ -456,15 +470,15 @@ async function runRead(parsed: Parsed): Promise<void> {
       renderMessages(messages);
       return;
     }
-    const inbox = await channel.inbox();
+    // Reading consumes: a read direct message is handled.
+    const inbox = from ? await channel.inbox() : await channel.readInbox(100);
     const messages = from ? inbox.messages.filter((message) => message.sender.toLowerCase() === from) : inbox.messages;
     if (messages.length === 0) {
       ui.info('No unread DMs.');
       return;
     }
     renderMessages(messages);
-    const acked = await channel.ack(messages.map((message) => message.msgId));
-    ui.info(`Acknowledged ${acked.acknowledged}. ${acked.remaining} DM${acked.remaining === 1 ? '' : 's'} left unread.`);
+    if (!from) ui.info(`Read ${messages.length}. ${'remaining' in inbox ? inbox.remaining : 0} DM(s) left unread.`);
   } finally {
     close();
   }

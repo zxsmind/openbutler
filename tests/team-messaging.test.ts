@@ -19,7 +19,7 @@ beforeEach(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-msg-'));
   store = new TeamStore(join(dataDir, 'team.db'));
   const now = Date.now();
-  store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', now);
+  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
   store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-2222', now);
   murphyTicket = makeTicket();
   store.decideJoin('jr_m', true, murphyTicket, hashTicket(murphyTicket), now);

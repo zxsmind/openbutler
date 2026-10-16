@@ -16,7 +16,7 @@ let target: JoinTarget;
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-server-'));
   store = new TeamStore(join(dataDir, 'team.db'));
-  store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', Date.now());
+  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', Date.now());
 });
 
 afterEach(async () => {

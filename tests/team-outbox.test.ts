@@ -2,49 +2,68 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { enqueueOutbox, readOutbox, replaceOutbox, TEAM_OUTBOX_LIMIT } from '../src/team/outbox.js';
+import { TeamOutbox, TEAM_OUTBOX_LIMIT } from '../src/team/outbox.js';
 
-let dataDir: string;
+let dir: string;
+let path: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-outbox-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dir = mkdtempSync(join(tmpdir(), 'ranite-outbox-'));
+  path = join(dir, 'team-outbox.json');
 });
 
 afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true });
-  delete process.env.RANITE_DATA_DIR;
+  rmSync(dir, { recursive: true, force: true });
 });
 
 describe('team outbox', () => {
-  it('reads empty when there is no file, and round-trips queued messages', () => {
-    expect(readOutbox()).toEqual([]);
-    enqueueOutbox({ recipient: 'group', body: 'hello' });
-    enqueueOutbox({ recipient: 'Atreus-Ranite', body: 'psst', replyTo: 'm_1' });
-    const entries = readOutbox();
+  it('queues, lists, and removes entries with stable identities', () => {
+    const outbox = new TeamOutbox(path);
+    outbox.enqueue({ teamId: 't_a', recipient: 'group', body: 'hello' });
+    outbox.enqueue({ teamId: 't_a', recipient: 'Atreus-Ranite', body: 'psst', replyTo: 'm_1' });
+    const entries = outbox.list('t_a');
     expect(entries).toHaveLength(2);
-    expect(entries[0]).toMatchObject({ recipient: 'group', body: 'hello' });
-    expect(entries[1]).toMatchObject({ recipient: 'Atreus-Ranite', body: 'psst', replyTo: 'm_1' });
-    // Each entry carries a unique message id so a flush is idempotent.
+    expect(entries[1]).toMatchObject({ recipient: 'Atreus-Ranite', replyTo: 'm_1' });
     expect(new Set(entries.map((entry) => entry.msgId)).size).toBe(2);
+
+    outbox.remove(entries[0]!.msgId);
+    expect(outbox.list('t_a').map((entry) => entry.body)).toEqual(['psst']);
   });
 
-  it('drops the oldest entries past the cap so the queue stays bounded', () => {
-    for (let index = 0; index < TEAM_OUTBOX_LIMIT + 5; index++) enqueueOutbox({ recipient: 'group', body: `msg ${index}` });
-    const entries = readOutbox();
+  it('never loses a message enqueued while another is being removed', () => {
+    const outbox = new TeamOutbox(path);
+    outbox.enqueue({ teamId: 't_a', recipient: 'group', body: 'A' });
+    const [a] = outbox.list('t_a');
+    // A flush is mid-flight on A when B is enqueued; removing A must not drop B.
+    outbox.enqueue({ teamId: 't_a', recipient: 'group', body: 'B' });
+    outbox.remove(a!.msgId);
+    expect(outbox.list('t_a').map((entry) => entry.body)).toEqual(['B']);
+  });
+
+  it('drops the oldest entries past the cap', () => {
+    const outbox = new TeamOutbox(path);
+    for (let index = 0; index < TEAM_OUTBOX_LIMIT + 5; index++) outbox.enqueue({ teamId: 't_a', recipient: 'group', body: `msg ${index}` });
+    const entries = outbox.list('t_a');
     expect(entries).toHaveLength(TEAM_OUTBOX_LIMIT);
-    // The five oldest were dropped; the newest is present.
     expect(entries[0]?.body).toBe('msg 5');
     expect(entries.at(-1)?.body).toBe(`msg ${TEAM_OUTBOX_LIMIT + 4}`);
   });
 
-  it('replaces the queue wholesale after a partial flush', () => {
-    enqueueOutbox({ recipient: 'group', body: 'a' });
-    enqueueOutbox({ recipient: 'group', body: 'b' });
-    const [first] = readOutbox();
-    replaceOutbox([first!]);
-    expect(readOutbox().map((entry) => entry.body)).toEqual(['a']);
-    replaceOutbox([]);
-    expect(readOutbox()).toEqual([]);
+  it('keeps teams separate so a message never lands in the wrong team', () => {
+    const outbox = new TeamOutbox(path);
+    outbox.enqueue({ teamId: 't_a', recipient: 'group', body: 'for A' });
+    outbox.enqueue({ teamId: 't_b', recipient: 'group', body: 'for B' });
+    expect(outbox.list('t_a').map((entry) => entry.body)).toEqual(['for A']);
+    expect(outbox.list('t_b').map((entry) => entry.body)).toEqual(['for B']);
+    outbox.clearTeam('t_a');
+    expect(outbox.list('t_a')).toEqual([]);
+    expect(outbox.list('t_b')).toHaveLength(1);
+  });
+
+  it('survives a restart by reloading from disk', () => {
+    const first = new TeamOutbox(path);
+    first.enqueue({ teamId: 't_a', recipient: 'group', body: 'persisted' });
+    const second = new TeamOutbox(path);
+    expect(second.list('t_a').map((entry) => entry.body)).toEqual(['persisted']);
   });
 });

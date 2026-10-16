@@ -1,18 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { isTailnetAddress } from './tailnet.js';
-import {
-  fingerprintOf,
-  GROUP_RECIPIENT,
-  hashTicket,
-  isGroupRecipient,
-  makeMessageId,
-  makeRequestId,
-  validateMemberName,
-} from './service.js';
+import { fingerprintOf, hashTicket, makeRequestId, validateMemberName } from './service.js';
+import { TeamOperations, TeamError } from './operations.js';
 import { TeamStore, type JoinRequest } from './store.js';
 
 const MAX_BODY_BYTES = 65_536;
-const MAX_MESSAGE_CHARS = 8000;
 const MAX_GROUP_PAGE = 200;
 const MAX_INBOX_PAGE = 200;
 const MAX_MEMORY_PAGE = 500;
@@ -104,6 +96,7 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
   const teamName = store.getMeta('team_name') ?? 'team';
   if (!hubId) throw new Error('Team store is not initialized. Run team init first.');
   const fingerprint = fingerprintOf(hubId);
+  const operations = new TeamOperations(store);
   const clock = options.now ?? Date.now;
   // Per-source-address join failures; cleared on a successful request.
   const joinFailures = new Map<string, { count: number; blockedUntil: number }>();
@@ -129,7 +122,7 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
     const url = new URL(request.url ?? '/', 'http://team');
     const now = clock();
     if (request.method === 'GET' && url.pathname === '/v1/fingerprint') {
-      sendJson(response, 200, { team: teamName, fingerprint });
+      sendJson(response, 200, { team: teamName, fingerprint, teamId: store.teamId() });
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/join') {
@@ -196,7 +189,7 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
         sendJson(response, 410, { error: 'This approval was already picked up.' });
         return;
       }
-      sendJson(response, 200, { status: 'approved', ticket, team: teamName, memberName: entry.name });
+      sendJson(response, 200, { status: 'approved', ticket, team: teamName, teamId: store.teamId(), memberName: entry.name });
       return;
     }
     // Everything below needs a member ticket. The database lookup on the
@@ -226,45 +219,25 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
         sendJson(response, 400, { error: 'Sending needs { recipient, body }.' });
         return;
       }
-      const recipient = body.recipient.trim();
-      const text = body.body;
-      if (!text.trim()) {
-        sendJson(response, 400, { error: 'A message body cannot be empty.' });
-        return;
-      }
-      if (text.length > MAX_MESSAGE_CHARS) {
-        sendJson(response, 400, { error: `A message body is limited to ${MAX_MESSAGE_CHARS} characters.` });
-        return;
-      }
-      if (!isGroupRecipient(recipient)) {
-        let valid: string;
-        try {
-          valid = validateMemberName(recipient);
-        } catch {
-          sendJson(response, 400, { error: `"${recipient}" is not a valid recipient.` });
+      try {
+        const result = operations.postMessage(member.name, {
+          recipient: body.recipient,
+          body: body.body,
+          ...(typeof body.replyTo === 'string' && body.replyTo ? { replyTo: body.replyTo } : {}),
+          ...(typeof body.msgId === 'string' ? { msgId: body.msgId } : {}),
+        });
+        if (result.duplicate) {
+          sendJson(response, 200, { msgId: result.msgId, duplicate: true });
           return;
         }
-        if (!store.listMembers().some((entry) => entry.name.toLowerCase() === valid.toLowerCase())) {
-          sendJson(response, 404, { error: `No member named "${valid}" in this team.` });
+        sendJson(response, 200, { msgId: result.message.msgId, seq: result.message.seq, createdAt: result.message.createdAt });
+      } catch (error) {
+        if (error instanceof TeamError) {
+          sendJson(response, error.status, { error: error.message });
           return;
         }
+        throw error;
       }
-      const msgId = typeof body.msgId === 'string' && body.msgId ? body.msgId : makeMessageId();
-      if (store.hasMessage(msgId)) {
-        // Idempotent retry: report the stored message rather than duplicating it.
-        sendJson(response, 200, { msgId, duplicate: true });
-        return;
-      }
-      const replyTo = typeof body.replyTo === 'string' && body.replyTo ? body.replyTo : null;
-      const stored = store.postMessage({
-        msgId,
-        sender: member.name,
-        recipient: isGroupRecipient(recipient) ? GROUP_RECIPIENT : recipient,
-        body: text,
-        createdAt: now,
-        replyTo,
-      });
-      sendJson(response, 200, { msgId: stored.msgId, seq: stored.seq, createdAt: stored.createdAt });
       return;
     }
     if (request.method === 'GET' && url.pathname === '/v1/group') {
@@ -305,6 +278,22 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
       sendJson(response, 200, { count: store.unreadDmCount(member.name), messages });
       return;
     }
+    if (request.method === 'POST' && url.pathname === '/v1/inbox/read') {
+      const body = (await readJson(request)) as { limit?: unknown };
+      const limit =
+        typeof body?.limit === 'number' && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), MAX_INBOX_PAGE) : 20;
+      // Read and consume in one step: a read direct message is handled, so it
+      // never returns on a later wake.
+      const messages = store.unreadDms(member.name, limit);
+      if (messages.length > 0)
+        store.ackDms(
+          member.name,
+          messages.map((message) => message.msgId),
+          now,
+        );
+      sendJson(response, 200, { count: messages.length, messages, remaining: store.unreadDmCount(member.name) });
+      return;
+    }
     if (request.method === 'POST' && url.pathname === '/v1/inbox/ack') {
       const body = (await readJson(request)) as { msgIds?: unknown };
       const ids = Array.isArray(body?.msgIds) ? body.msgIds.filter((id): id is string => typeof id === 'string') : null;
@@ -332,17 +321,17 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
         sendJson(response, 400, { error: 'Remembering needs { topic: "decisions"|"shared", body }.' });
         return;
       }
-      if (!body.body.trim()) {
-        sendJson(response, 400, { error: 'A memory entry cannot be empty.' });
-        return;
+      try {
+        const seq = operations.appendMemory(member.name, body.topic, body.body);
+        store.appendAudit({ kind: 'memory.appended', actor: member.name, detail: body.topic, createdAt: now });
+        sendJson(response, 200, { seq, latestSeq: store.memoryLatestSeq() });
+      } catch (error) {
+        if (error instanceof TeamError) {
+          sendJson(response, error.status, { error: error.message });
+          return;
+        }
+        throw error;
       }
-      if (body.body.length > MAX_MESSAGE_CHARS) {
-        sendJson(response, 400, { error: `A memory entry is limited to ${MAX_MESSAGE_CHARS} characters.` });
-        return;
-      }
-      const seq = store.appendMemory({ topic: body.topic, author: member.name, body: body.body, createdAt: now });
-      store.appendAudit({ kind: 'memory.appended', actor: member.name, detail: body.topic, createdAt: now });
-      sendJson(response, 200, { seq, latestSeq: store.memoryLatestSeq() });
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/leave') {

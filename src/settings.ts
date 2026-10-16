@@ -74,6 +74,8 @@ export interface TeamSettings {
   hubPort: number;
   /** Hub fingerprint captured at join, so a rejoin can prove it is the same hub. */
   hubFingerprint?: string;
+  /** The team's stable public id; keys shared memory and scopes local state. */
+  teamId?: string;
 }
 
 export type ApprovalMode = 'workspace' | 'auto-review' | 'full-access';
@@ -481,7 +483,7 @@ export function loadSettings(): SettingsStore {
 
 export function parseTeamSettings(raw: unknown): TeamSettings {
   if (!isRecord(raw)) throw new Error('team must be a mapping.');
-  const allowed = new Set(['role', 'teamName', 'memberName', 'hubHost', 'hubPort', 'hubFingerprint']);
+  const allowed = new Set(['role', 'teamName', 'memberName', 'hubHost', 'hubPort', 'hubFingerprint', 'teamId']);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) throw new Error(`team.${key} is not a supported setting.`);
   if (raw.role !== 'hub' && raw.role !== 'member') throw new Error('team.role must be hub or member.');
   if (typeof raw.teamName !== 'string' || !raw.teamName.trim() || raw.teamName.length > 64)
@@ -494,6 +496,8 @@ export function parseTeamSettings(raw: unknown): TeamSettings {
     throw new Error('team.hubPort must be a port 1-65535.');
   if (raw.hubFingerprint !== undefined && (typeof raw.hubFingerprint !== 'string' || raw.hubFingerprint.length > 64))
     throw new Error('team.hubFingerprint must be a short string.');
+  if (raw.teamId !== undefined && (typeof raw.teamId !== 'string' || raw.teamId.length > 64))
+    throw new Error('team.teamId must be a short string.');
   return {
     role: raw.role,
     teamName: raw.teamName,
@@ -501,6 +505,7 @@ export function parseTeamSettings(raw: unknown): TeamSettings {
     hubHost: raw.hubHost,
     hubPort: raw.hubPort,
     ...(raw.hubFingerprint === undefined ? {} : { hubFingerprint: raw.hubFingerprint as string }),
+    ...(raw.teamId === undefined ? {} : { teamId: raw.teamId as string }),
   };
 }
 

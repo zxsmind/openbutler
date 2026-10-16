@@ -37,7 +37,7 @@ export interface ToolCatalogueOptions {
   ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
   ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
-  teamInbox?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamInbox?: (limit: number) => Promise<unknown>;
   teamGroup?: (limit: number) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;

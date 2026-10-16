@@ -1,5 +1,5 @@
 import * as client from './client.js';
-import { GROUP_RECIPIENT, makeMessageId } from './service.js';
+import { TeamOperations } from './operations.js';
 import type { TeamStore } from './store.js';
 import type { JoinTarget } from './tailnet.js';
 
@@ -59,7 +59,7 @@ const PRESENCE_WINDOW_MS = 15_000;
  */
 export interface TeamChannel {
   readonly name: string;
-  send(recipient: string, body: string, replyTo?: string): Promise<SendResult>;
+  send(recipient: string, body: string, replyTo?: string, msgId?: string): Promise<SendResult>;
   group(since: number): Promise<{ latestSeq: number; messages: TeamMessage[] }>;
   groupCursor(): number;
   setGroupCursor(seq: number): Promise<void>;
@@ -68,26 +68,27 @@ export interface TeamChannel {
   /** Team roster with presence and last activity. */
   status(): Promise<TeamStatusView>;
   inbox(): Promise<{ count: number; messages: TeamMessage[] }>;
+  /** Read unread DMs and consume them in one step (reading is handled). */
+  readInbox(limit: number): Promise<{ count: number; messages: TeamMessage[]; remaining: number }>;
   ack(msgIds: readonly string[]): Promise<{ acknowledged: number; remaining: number }>;
   memory(since: number): Promise<{ latestSeq: number; entries: TeamMemoryEntry[] }>;
   remember(topic: TeamMemoryTopic, body: string): Promise<{ seq: number }>;
 }
 
-/** The hub's own view: straight to the store, same clock and same sequence as everyone. */
+/** The hub's own view: straight through the same operation owner as the HTTP path. */
 export function localChannel(store: TeamStore, memberName: string): TeamChannel {
+  const operations = new TeamOperations(store);
   return {
     name: memberName,
-    async send(recipient, body, replyTo) {
-      const msgId = makeMessageId();
-      const stored = store.postMessage({
-        msgId,
-        sender: memberName,
-        recipient: recipient === 'group' ? GROUP_RECIPIENT : recipient,
+    async send(recipient, body, replyTo, msgId) {
+      const result = operations.postMessage(memberName, {
+        recipient,
         body,
-        createdAt: Date.now(),
-        replyTo: replyTo ?? null,
+        ...(replyTo ? { replyTo } : {}),
+        ...(msgId ? { msgId } : {}),
       });
-      return { msgId: stored.msgId, seq: stored.seq, createdAt: stored.createdAt };
+      if (result.duplicate) return { msgId: result.msgId, duplicate: true };
+      return { msgId: result.message.msgId, seq: result.message.seq, createdAt: result.message.createdAt };
     },
     async group(since) {
       return { latestSeq: store.groupLatestSeq(), messages: store.groupMessages(since, 200) };
@@ -117,6 +118,16 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
     async inbox() {
       return { count: store.unreadDmCount(memberName), messages: store.unreadDms(memberName, 200) };
     },
+    async readInbox(limit) {
+      const messages = store.unreadDms(memberName, limit);
+      if (messages.length > 0)
+        store.ackDms(
+          memberName,
+          messages.map((message) => message.msgId),
+          Date.now(),
+        );
+      return { count: messages.length, messages, remaining: store.unreadDmCount(memberName) };
+    },
     async ack(msgIds) {
       const acknowledged = store.ackDms(memberName, msgIds, Date.now());
       return { acknowledged, remaining: store.unreadDmCount(memberName) };
@@ -125,7 +136,7 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
       return { latestSeq: store.memoryLatestSeq(), entries: store.memoryEntries(since, 500) };
     },
     async remember(topic, body) {
-      const seq = store.appendMemory({ topic, author: memberName, body, createdAt: Date.now() });
+      const seq = operations.appendMemory(memberName, topic, body);
       return { seq };
     },
   };
@@ -136,8 +147,8 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
   let cursor = groupCursorStart;
   return {
     name: memberName,
-    send(recipient, body, replyTo) {
-      return client.postMessage(target, ticket, { recipient, body, ...(replyTo ? { replyTo } : {}) });
+    send(recipient, body, replyTo, msgId) {
+      return client.postMessage(target, ticket, { recipient, body, ...(replyTo ? { replyTo } : {}), ...(msgId ? { msgId } : {}) });
     },
     group(since) {
       return client.fetchGroup(target, ticket, since);
@@ -173,6 +184,9 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
     },
     inbox() {
       return client.fetchInbox(target, ticket);
+    },
+    readInbox(limit) {
+      return client.readInbox(target, ticket, limit);
     },
     ack(msgIds) {
       return client.ackInbox(target, ticket, msgIds);

@@ -2,7 +2,7 @@ import type { JSONValue } from 'ai';
 import { MAX_TOOL_INPUT_CHARS, type ToolDefinition } from './registry.js';
 
 type TeamSend = (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
-type TeamInbox = (limit: number, acknowledge?: string[]) => Promise<unknown>;
+type TeamInbox = (limit: number) => Promise<unknown>;
 type TeamGroup = (limit: number) => Promise<unknown>;
 type TeamStatus = () => Promise<unknown>;
 type TeamRemember = (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
@@ -48,20 +48,14 @@ export function createTeamInboxTool(inbox: TeamInbox): ToolDefinition {
   return {
     providerId: 'host',
     name: 'team_inbox',
-    maxInputChars: 512,
+    maxInputChars: 128,
     description:
-      'Read the direct messages your team sent to this ranite, oldest first. Group channel traffic is not returned here; read it when you choose to. A direct message is what woke this session, so read it, act on it, and acknowledge ids that are fully handled so they stop counting as unread.',
+      'Read the direct messages your team sent to this ranite, oldest first. A direct message is what woke this session, so read it and act on it. Reading consumes the messages: they are marked handled in the same step, so a message never returns on a later wake. When you answer a message with team_send, include its id in replyTo and it is acknowledged for you.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum messages to read; defaults to 20.' },
-        acknowledge: {
-          type: 'array',
-          maxItems: 50,
-          items: { type: 'string' },
-          description: 'Ids of team direct messages that are fully handled.',
-        },
       },
     },
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
@@ -71,10 +65,7 @@ export function createTeamInboxTool(inbox: TeamInbox): ToolDefinition {
       const limit = input.limit ?? 20;
       if (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 50)
         return Promise.resolve({ status: 'invalid', error: 'limit must be an integer between 1 and 50.' });
-      const acknowledge = input.acknowledge ?? [];
-      if (!Array.isArray(acknowledge) || acknowledge.length > 50 || !acknowledge.every((id) => typeof id === 'string'))
-        return Promise.resolve({ status: 'invalid', error: 'acknowledge must be an array of up to 50 message ids.' });
-      return inbox(Number(limit), acknowledge as string[]);
+      return inbox(Number(limit));
     },
   };
 }

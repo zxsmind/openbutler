@@ -13,10 +13,11 @@ export class HubUnreachableError extends Error {
 export interface HubFingerprint {
   team: string;
   fingerprint: string;
+  teamId: string;
 }
 
 export type JoinPollResult =
-  { status: 'pending' } | { status: 'denied' } | { status: 'approved'; ticket: string; team: string; memberName: string };
+  { status: 'pending' } | { status: 'denied' } | { status: 'approved'; ticket: string; team: string; teamId: string; memberName: string };
 
 export interface HubMember {
   name: string;
@@ -78,7 +79,7 @@ export async function fetchHubFingerprint(target: JoinTarget): Promise<HubFinger
   const { status, body } = await requestJson(`${baseUrl(target)}/v1/fingerprint`, {});
   if (status !== 200 || typeof body.team !== 'string' || typeof body.fingerprint !== 'string')
     throw hubError(status, body, 'Unexpected hub answer.');
-  return { team: body.team, fingerprint: body.fingerprint };
+  return { team: body.team, fingerprint: body.fingerprint, teamId: typeof body.teamId === 'string' ? body.teamId : '' };
 }
 
 /** Opens a join request. Returns the request id; approval still needs the hub owner. */
@@ -103,7 +104,13 @@ export async function pollJoin(target: JoinTarget, requestId: string): Promise<J
   if (status === 200 && body.status === 'approved' && typeof body.ticket === 'string') {
     if (typeof body.team !== 'string' || typeof body.memberName !== 'string')
       throw hubError(status, body, 'Approval answer is incomplete.');
-    return { status: 'approved', ticket: body.ticket, team: body.team, memberName: body.memberName };
+    return {
+      status: 'approved',
+      ticket: body.ticket,
+      team: body.team,
+      teamId: typeof body.teamId === 'string' ? body.teamId : '',
+      memberName: body.memberName,
+    };
   }
   throw hubError(status, body, 'Join status is unknown.');
 }
@@ -200,6 +207,21 @@ export async function fetchInbox(target: JoinTarget, ticket: string): Promise<{ 
   const { status, body } = await requestJson(`${baseUrl(target)}/v1/inbox`, { headers: { authorization: `Bearer ${ticket}` } });
   if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'Inbox read failed.');
   return body as unknown as { count: number; messages: TeamMessage[] };
+}
+
+/** Authenticated: read unread DMs and consume them in one step (reading is handled). */
+export async function readInbox(
+  target: JoinTarget,
+  ticket: string,
+  limit: number,
+): Promise<{ count: number; messages: TeamMessage[]; remaining: number }> {
+  const { status, body } = await requestJson(`${baseUrl(target)}/v1/inbox/read`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+  if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'Inbox read failed.');
+  return body as unknown as { count: number; messages: TeamMessage[]; remaining: number };
 }
 
 /** Authenticated: acknowledge DMs so they stop counting as unread. */

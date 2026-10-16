@@ -166,15 +166,21 @@ export class TeamStore {
       .run(key, value);
   }
 
-  initHub(hubId: string, teamName: string, hubName: string, now: number): void {
+  initHub(hubId: string, teamId: string, teamName: string, hubName: string, now: number): void {
     if (this.getMeta('hub_id') !== null) throw new Error('This machine already initialized a team. Leave or reset it first.');
     this.setMeta('hub_id', hubId);
+    this.setMeta('team_id', teamId);
     this.setMeta('team_name', teamName);
     this.database
       .prepare(
         "INSERT INTO team_members (name, name_lower, role, ticket_hash, created_at, last_seen, removed_at) VALUES (?, ?, 'hub', NULL, ?, ?, NULL)",
       )
       .run(hubName, hubName.toLowerCase(), now, now);
+  }
+
+  /** The team's stable, public identity. Used to key shared memory and to scope local state. */
+  teamId(): string {
+    return this.getMeta('team_id') ?? '';
   }
 
   isInitialized(): boolean {
@@ -225,6 +231,18 @@ export class TeamStore {
     const row = this.database.prepare('SELECT 1 FROM team_members WHERE name_lower = ?').get(name.toLowerCase()) as
       { '1': number } | undefined;
     return !!row;
+  }
+
+  /**
+   * The canonical stored name for an active member, matched case-insensitively,
+   * or null. Every recipient is resolved through this so a message is always
+   * stored under the member's real name, never the sender's spelling.
+   */
+  canonicalMemberName(name: string): string | null {
+    const row = this.database
+      .prepare('SELECT name FROM team_members WHERE name_lower = ? AND removed_at IS NULL')
+      .get(name.toLowerCase()) as { name: string } | undefined;
+    return row?.name ?? null;
   }
 
   createJoinRequest(id: string, name: string, code: string, now: number): void {

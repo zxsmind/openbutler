@@ -67,7 +67,7 @@ import { TeamStore, type JoinRequest } from './team/store.js';
 import { localChannel, remoteChannel, type TeamChannel } from './team/session.js';
 import { shouldWakeForTeamDms } from './team/service.js';
 import { materializeTeamMemory } from './team/memory-mirror.js';
-import { enqueueOutbox, readOutbox, replaceOutbox, type OutboxEntry } from './team/outbox.js';
+import { TeamOutbox } from './team/outbox.js';
 import { HubUnreachableError } from './team/client.js';
 import { todayLocalDate } from './file-write-core.js';
 import type { ToolCallRequest } from './tools/registry.js';
@@ -222,6 +222,12 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   let teamWakeSeenSeq = 0;
   /** Highest team-memory sequence already materialized locally. */
   let teamMemorySeq = 0;
+  /** Single owner of locally queued outbound messages. */
+  const teamOutbox = new TeamOutbox();
+  /** A flush is single-flight: the one-second timer never starts a second one. */
+  let teamFlushInFlight = false;
+  /** The team this host is currently serving, so a switch can drop the old queue. */
+  let activeTeamId: string | null = null;
 
   /**
    * Runs `fn` against this machine's team channel. The hub talks to its own
@@ -258,7 +264,9 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       });
     } catch (error) {
       if (error instanceof HubUnreachableError) {
-        const { dropped } = enqueueOutbox({
+        const team = loadSettings().team;
+        const { dropped } = teamOutbox.enqueue({
+          teamId: team?.teamId ?? '',
           recipient: input.recipient,
           body: input.text,
           ...(input.replyTo ? { replyTo: input.replyTo } : {}),
@@ -275,40 +283,50 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   /**
-   * Drains the local outbox once the hub is reachable again. A message the hub
-   * permanently rejects (unknown member, too long) is dropped with a log line;
-   * a message the hub merely cannot be reached for stays queued, in order.
+   * Drains this team's outbox once the hub is reachable again. Single-flight: a
+   * tick during an in-progress flush does nothing. Each entry is removed by its
+   * own id after it is sent, so a message enqueued mid-flush survives, and the
+   * stable id makes a re-send a no-op on the hub. A message the hub permanently
+   * rejects is dropped with a log line.
    */
   async function flushTeamOutbox(): Promise<void> {
-    const entries = readOutbox();
+    if (teamFlushInFlight) return;
+    const team = loadSettings().team;
+    if (!team) return;
+    const entries = teamOutbox.list(team.teamId ?? '');
     if (entries.length === 0) return;
-    let index = 0;
-    for (; index < entries.length; index++) {
-      const entry: OutboxEntry = entries[index]!;
-      try {
-        await withTeamChannel((channel) => channel.send(entry.recipient, entry.body, entry.replyTo));
-      } catch (error) {
-        if (error instanceof HubUnreachableError) break;
-        options.log(`team outbox: dropped a message to ${entry.recipient}: ${error instanceof Error ? error.message : String(error)}`);
+    teamFlushInFlight = true;
+    try {
+      for (const entry of entries) {
+        try {
+          await withTeamChannel((channel) => channel.send(entry.recipient, entry.body, entry.replyTo, entry.msgId));
+          teamOutbox.remove(entry.msgId);
+        } catch (error) {
+          if (error instanceof HubUnreachableError) break;
+          options.log(`team outbox: dropped a message to ${entry.recipient}: ${error instanceof Error ? error.message : String(error)}`);
+          teamOutbox.remove(entry.msgId);
+        }
       }
+    } finally {
+      teamFlushInFlight = false;
     }
-    if (index > 0) replaceOutbox(entries.slice(index));
   }
 
-  /** `team_inbox`: acknowledge handled ids, then read what remains unread. */
-  async function readTeamInbox(limit: number, acknowledge?: string[]): Promise<unknown> {
+  /** `team_inbox`: read and consume unread direct messages in one step. */
+  async function readTeamInbox(limit: number): Promise<unknown> {
     try {
       return await withTeamChannel(async (channel) => {
-        if (acknowledge && acknowledge.length > 0) await channel.ack(acknowledge);
-        const inbox = await channel.inbox();
+        const inbox = await channel.readInbox(limit);
         return {
           status: 'ok',
           count: inbox.count,
-          messages: inbox.messages.slice(0, limit).map((message) => ({
+          remaining: inbox.remaining,
+          messages: inbox.messages.map((message) => ({
             id: message.msgId,
             from: message.sender,
             at: new Date(message.createdAt).toISOString(),
             text: message.body,
+            ...(message.replyTo ? { replyTo: message.replyTo } : {}),
           })),
         };
       });
@@ -1089,6 +1107,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const reload = reloadChain.then(async () => {
       if (closing) return;
       const settings = loadSettings();
+      // A team switch or a leave drops the previous team's queued messages, so
+      // nothing is ever delivered to the wrong team.
+      const nextTeamId = settings.team?.teamId ?? null;
+      if (activeTeamId !== null && activeTeamId !== nextTeamId) teamOutbox.clearTeam(activeTeamId);
+      activeTeamId = nextTeamId;
       applyApprovalMode(settings.approvalMode, false);
       await background.reload(settings.backgroundTasks);
       if (closing) return;
