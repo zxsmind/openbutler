@@ -20,8 +20,8 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
 ```
 
-A specific release: `bash -s -- --version 0.3.1` for the shell installer, or
-download `install.ps1` first and run `.\install.ps1 -Version 0.3.1`.
+A specific release: `bash -s -- --version 0.3.2` for the shell installer, or
+download `install.ps1` first and run `.\install.ps1 -Version 0.3.2`.
 `--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
 Both installers verify the result with `ranite --version`; restart the
 terminal afterwards so the updated PATH takes effect.
@@ -116,7 +116,7 @@ matching official Node.js runtime (checksum-verified), and writes
 Upload every archive to the same release tag before announcing it:
 
 ```sh
-gh release upload v0.3.1 release/ranite-0.3.1-*
+gh release upload v0.3.2 release/ranite-0.3.2-*
 ```
 
 The installers resolve per-platform files from the GitHub release, so all
