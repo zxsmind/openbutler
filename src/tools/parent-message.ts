@@ -23,7 +23,7 @@ export function createParentMessageTool(
   return {
     providerId: 'host',
     name: 'parent_message',
-    description: `Leave a short progress note for the parent session that started this background worker; it reads the note with subagent_poll when it wants an update. Nothing is pushed into the parent session. Rule: report at every milestone — what you completed, what remains, anything blocking you; on long tasks at least every ~10 tool calls, one or two sentences. Your final assistant message is the report it polls when the run ends. Text only, at most ${MAX_PARENT_MESSAGE_CHARS} characters.`,
+    description: `Leave a short progress note, material question, or blocker for the parent session that started this background worker. The parent retrieves it with subagent_poll; nothing is pushed into its session and delivery does not mean the parent has read it. Report meaningful milestones and changed assumptions, with the evidence, remaining work, or decision needed; avoid repeated status with no new information. Your final assistant message is the complete report it polls when the run ends. Text only, at most ${MAX_PARENT_MESSAGE_CHARS} characters.`,
     inputSchema: {
       type: 'object',
       properties: {
