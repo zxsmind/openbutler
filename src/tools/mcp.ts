@@ -38,7 +38,6 @@ export interface McpConnectionManager {
 export async function connectMcpServers(
   servers: Record<string, McpServerState>,
   options: {
-    approveServer: (request: McpServerRequest) => Promise<boolean>;
     onError: (serverId: string, message: string) => void;
     onConnected: (serverId: string, toolCount: number) => void;
     inputModalities?: () => readonly string[];
@@ -48,7 +47,7 @@ export async function connectMcpServers(
 
   try {
     for (const [id, config] of Object.entries(servers)) {
-      const connection = await openMcpServer(id, config, options, options.approveServer, false);
+      const connection = await openMcpServer(id, config, options, false);
       if (connection) connected.set(id, connection);
     }
   } catch (error) {
@@ -75,7 +74,7 @@ export async function connectMcpServers(
     async addServer(id, rawConfig) {
       const config = parseMcpServerState(rawConfig, id);
       if (id in loadSettings().mcpServers) throw new Error(`MCP server ${id} is already configured.`);
-      const connection = await openMcpServer(id, config, options, async () => true, true);
+      const connection = await openMcpServer(id, config, options, true);
       if (!connection) throw new Error(`MCP server ${id} was not connected.`);
       try {
         const settings = loadSettings();
@@ -93,7 +92,7 @@ export async function connectMcpServers(
       if (connected.has(id)) return { connected: true, changed: false, tools: connected.get(id)!.tools.map((tool) => tool.name) };
       const config = loadSettings().mcpServers[id];
       if (!config) throw new Error(`MCP server ${id} is not configured.`);
-      const connection = await openMcpServer(id, config, options, async () => true, true);
+      const connection = await openMcpServer(id, config, options, true);
       if (!connection) throw new Error(`MCP server ${id} was not connected.`);
       connected.set(id, connection);
       return { connected: true, changed: true, tools: connection.tools.map((tool) => tool.name) };
@@ -207,15 +206,8 @@ async function openMcpServer(
   id: string,
   config: McpServerState,
   options: Parameters<typeof connectMcpServers>[1],
-  approve: (request: McpServerRequest) => Promise<boolean>,
   throwOnError: boolean,
 ): Promise<ConnectedMcpServer | null> {
-  const request: McpServerRequest =
-    config.transport === 'stdio'
-      ? { id, transport: 'stdio', command: config.command, args: config.args, env: config.env, ...(config.cwd ? { cwd: config.cwd } : {}) }
-      : { id, transport: config.transport, url: config.url, headers: config.headers };
-  if (!(await approve(request))) return null;
-
   const client = new Client({ name: 'ranite', version: getRaniteVersion() });
   try {
     await withTimeout((signal) => client.connect(createTransport(config), { signal }), MCP_HANDSHAKE_TIMEOUT_MS, 'connect');

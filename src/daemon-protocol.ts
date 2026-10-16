@@ -1,5 +1,4 @@
 import type { AgentSessionRuntimeView, AgentSessionSnapshot, AgentSessionView } from './agent-session.js';
-import type { McpServerRequest } from './tools/mcp.js';
 import type { SessionEntry, SessionSummary } from './session-store.js';
 import type { TelegramStatus } from './telegram.js';
 import type { ApprovalMode } from './settings.js';
@@ -60,7 +59,6 @@ export type SessionPatchData = {
 export type DaemonEvent =
   | { version: 2; event: 'snapshot'; snapshot: SessionSnapshotData; runtime: RuntimeViewData }
   | { version: 2; event: 'patch'; patch: SessionPatchData }
-  | { version: 2; event: 'mcp-approval-request'; requestId: string; request: McpServerRequest }
   | DaemonNotification;
 // Notifications are owner messages; they are not model conversation patches.
 export type DaemonNotification = { version: 2; event: 'notification'; title: string; message: string };
