@@ -71,3 +71,23 @@ it('restores legacy queue ordering and checkpoint projection while keeping every
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('saves and reloads a session carrying every user-entry source, including team', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ranite-session-sources-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-sources-'))
+    throw new Error('Unsafe fixture path.');
+  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.resetModules();
+  try {
+    const { createSession, saveSession, loadSavedSession, USER_ENTRY_SOURCES } = await import('../src/session-store.js');
+    // Every source the type allows must survive the save validator; a source
+    // added to one and forgotten in the other once made a session unsavable.
+    const entries = USER_ENTRY_SOURCES.map((source) => ({ kind: 'user' as const, text: `from ${source}`, source }));
+    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries });
+    const restored = loadSavedSession(saved.id)!;
+    expect(restored.entries.map((entry) => (entry.kind === 'user' ? entry.source : null))).toEqual([...USER_ENTRY_SOURCES]);
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});

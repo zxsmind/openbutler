@@ -7,13 +7,22 @@ import { appendTranscriptArchiveReference, repairQueuedMessageOrder, retireCover
 
 export type NoticeTone = 'info' | 'warn' | 'error';
 
+/**
+ * The single authority for user-entry sources. The type and the save
+ * validator both derive from this list, so a new source can never be added to
+ * one and forgotten in the other — the drift that once made every team-sourced
+ * session unsavable.
+ */
+export const USER_ENTRY_SOURCES = ['terminal', 'telegram', 'owner-inbox', 'background', 'team'] as const;
+export type UserEntrySource = (typeof USER_ENTRY_SOURCES)[number];
+
 export type SessionEntry =
   | {
       kind: 'user';
       text: string;
       workspaceRoot?: string;
       imageCount?: number;
-      source?: 'terminal' | 'telegram' | 'owner-inbox' | 'background' | 'team';
+      source?: UserEntrySource;
       eventId?: string;
     }
   | { kind: 'assistant'; text: string }
@@ -450,7 +459,7 @@ function isSessionEntry(value: unknown): value is SessionEntry {
   if (value.kind === 'user')
     return (
       typeof value.text === 'string' &&
-      (value.source === undefined || ['terminal', 'telegram', 'background'].includes(String(value.source))) &&
+      (value.source === undefined || (USER_ENTRY_SOURCES as readonly string[]).includes(String(value.source))) &&
       (value.eventId === undefined || typeof value.eventId === 'string') &&
       (value.workspaceRoot === undefined || typeof value.workspaceRoot === 'string') &&
       (value.imageCount === undefined ||
