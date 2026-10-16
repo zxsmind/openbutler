@@ -312,7 +312,8 @@ export class TelegramAdapter {
     const header =
       `<b>Action approval</b>\n` +
       `<b>${escapeTelegramHtml(request.providerId)}/${escapeTelegramHtml(request.name)}</b>\n` +
-      `Workspace: ${escapeTelegramHtml(workspaceRoot.slice(0, 200))}`;
+      `Workspace: ${escapeTelegramHtml(workspaceRoot.slice(0, 200))}\n` +
+      `Unanswered approvals expire; the agent works around them and moves on.`;
     const input = JSON.stringify(redactSensitive(request.input), null, 2);
     const budget = Math.max(64, 4000 - header.length - 64);
     const parts = splitTelegramText(input, budget);

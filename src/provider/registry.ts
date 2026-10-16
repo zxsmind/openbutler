@@ -617,6 +617,60 @@ export function normalizeReasoningVariantId(variantId: string): string {
   return variantId === 'auto' ? 'default' : variantId;
 }
 
+/**
+ * The variant that actually governs a request.
+ *
+ * A stored preference goes stale whenever the default model changes, the
+ * catalog updates, or an adapter mapping changes: the id is then absent from
+ * the list, and resolving it at the call site used to send empty options
+ * while the UI still showed the stored choice. Resolve at every read
+ * instead: the listed preference wins; otherwise the strongest available
+ * effort preserves the intent (a stale xhigh degrades to high, never to
+ * nothing); models without reasoning stay on Default. The stored value is
+ * kept as-is so switching back to a capable model restores the choice.
+ */
+export function resolveReasoningVariant(variants: readonly ReasoningVariant[], preferredId: string): ReasoningVariant {
+  const preferred = normalizeReasoningVariantId(preferredId);
+  const listed = variants.find((variant) => variant.id === preferred);
+  if (listed) return listed;
+  const strongest = [...variants].reverse().find((variant) => variant.id !== 'default' && variant.id !== 'none');
+  return (
+    strongest ??
+    variants.find((variant) => variant.id === 'default') ?? {
+      id: 'default',
+      label: 'Default',
+      providerOptions: {},
+    }
+  );
+}
+
+/**
+ * The cheapest expressible reasoning request, for permission reviews.
+ *
+ * Structural, never name-matched: explicit off when the adapter supports a
+ * toggle, else the catalog's first (lowest) effort value, else nothing (bare
+ * model default). Budget-only models yield nothing: a token budget does not
+ * cheapen the call, and a mid-range budget is an arbitrary cost for a
+ * classification. A missing adapter mapping also yields nothing rather than
+ * a guess at the wire format.
+ */
+export function minimalReasoningOptions(
+  provider: ResolvedProvider,
+  model: CatalogModel | null,
+): ReasoningVariant['providerOptions'] | null {
+  if (model?.reasoning !== true || !model.reasoning_options?.length) return null;
+  const key = providerOptionsKey(provider);
+  if (!key) return null;
+  const off = toggleOptions(provider.npm, false);
+  if (off) return { [key]: off } as ReasoningVariant['providerOptions'];
+  const effort = model.reasoning_options.find((option) => option.type === 'effort');
+  if (effort) {
+    const options = effortOptions(provider.npm, effort.values[0] ?? 'none');
+    if (options) return { [key]: options } as ReasoningVariant['providerOptions'];
+  }
+  return null;
+}
+
 /** Builds selectable settings from models.dev and the installed AI SDK adapter. */
 export function listReasoningVariants(provider: ResolvedProvider, model: CatalogModel | null): ReasoningVariant[] {
   const variants: ReasoningVariant[] = [{ id: 'default', label: 'Default', providerOptions: {} }];
@@ -738,13 +792,17 @@ export function providerIsConfigured(providerId: string, state: ProviderState | 
 }
 
 export function defaultModelIsUsable(settings: SettingsStore): boolean {
-  const { defaultProvider, defaultModel } = settings;
-  if (!defaultProvider || !defaultModel) return false;
-  const state = settings.providers[defaultProvider];
-  if (!state || !state.enabled || !providerIsConfigured(defaultProvider, state)) return false;
+  return modelIsUsable(settings, settings.defaultProvider, settings.defaultModel);
+}
+
+/** True when the named provider/model is enabled, authenticated, and verified for native tool calls. */
+export function modelIsUsable(settings: SettingsStore, providerId: string, modelId: string): boolean {
+  if (!providerId || !modelId) return false;
+  const state = settings.providers[providerId];
+  if (!state || !state.enabled || !providerIsConfigured(providerId, state)) return false;
   const custom = Boolean(state.npm) || Boolean(state.url);
   if (!isCatalogLoaded() && !custom) return false;
-  return canUseTools(defaultProvider, defaultModel, state);
+  return canUseTools(providerId, modelId, state);
 }
 
 export interface RoutableModel {

@@ -20,7 +20,10 @@ export function mergeMarkdownTokenSegments(previous: Token[], next: Token[]): To
         merged[merged.length - 1] = {
           ...left,
           raw: `${left.raw}\n${right.raw}`,
-          loose: true,
+          // Keep the fragments' looseness instead of forcing loose: a tight list
+          // split by a streaming boundary must not gain blank lines mid-stream
+          // (and keep them once complete).
+          loose: left.loose || right.loose,
           items: [...left.items, ...right.items],
         };
         continue;

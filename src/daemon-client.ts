@@ -23,11 +23,12 @@ import {
   type SessionEntriesPatch,
   type SessionSnapshotData,
 } from './daemon-protocol.js';
-import type { SessionEntry, SessionSummary } from './session-store.js';
-import type { McpServerRequest } from './tools/mcp.js';
+import type { SessionEntry, SessionSummary, NoticeTone } from './session-store.js';
 import type { ApprovalMode } from './settings.js';
 
 const CLIENT_CONNECT_TIMEOUT_MS = 10_000;
+/** How many client-local notices stay pinned to the transcript; oldest drops first. */
+const MAX_LOCAL_NOTICES = 5;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -45,14 +46,10 @@ type AttachOptions = {
   runningWorkerOf?: string;
 };
 
-export async function connectDaemonSession(
-  workspacePath: string,
-  approveMcpServer?: (request: McpServerRequest) => Promise<boolean>,
-  options: AttachOptions = {},
-): Promise<AgentSessionClient> {
+export async function connectDaemonSession(workspacePath: string, options: AttachOptions = {}): Promise<AgentSessionClient> {
   const workspaceRoot = realpathSync(workspacePath);
   const socket = await connectSocket();
-  const client = new DaemonSessionClient(socket, workspaceRoot, approveMcpServer, options);
+  const client = new DaemonSessionClient(socket, workspaceRoot, options);
   try {
     await client.attach(options);
     return client;
@@ -71,7 +68,13 @@ class DaemonSessionClient implements AgentSessionClient {
   private connectionFailureReported = false;
   private reconnecting = false;
   private intentionalShutdown = false;
-  private localNoticeCount = 0;
+  /**
+   * Client-local notices (connection loss, IPC failures) pinned to the end of
+   * the visible transcript. They are re-appended after every server patch and
+   * snapshot instead of being stripped by the next update, so a notice can no
+   * longer blink out mid-stream before it is read. Capped; oldest drops first.
+   */
+  private localNotices: SessionEntry[] = [];
   private readonly workspaceKey: string;
   private savedSessions: SessionSummary[] = [];
 
@@ -80,7 +83,6 @@ class DaemonSessionClient implements AgentSessionClient {
   constructor(
     private socket: Socket,
     private readonly workspaceRoot: string,
-    private readonly approveMcpServer?: (request: McpServerRequest) => Promise<boolean>,
     private attachOptions: AttachOptions = {},
   ) {
     const identityRoot = this.attachOptions.custodian === true ? getDataPath('custodian') : workspaceRoot;
@@ -100,7 +102,7 @@ class DaemonSessionClient implements AgentSessionClient {
         this.runtime.reasoningDefault = variantId;
         void this.request('runtime.save-reasoning', { variantId }).catch(() => {});
       },
-      showReasoningDefault: false,
+      showReasoningDefault: true,
       saveShowReasoningPreference: (visible) => {
         this.runtime.showReasoningDefault = visible;
         void this.request('runtime.save-show-reasoning', { visible }).catch(() => {});
@@ -149,8 +151,8 @@ class DaemonSessionClient implements AgentSessionClient {
       );
     this.applyRuntime(result.runtime);
     this.savedSessions = result.savedSessions;
-    this.snapshot = snapshotFromData(result.snapshot);
-    this.localNoticeCount = 0;
+    const fresh = snapshotFromData(result.snapshot);
+    this.snapshot = { ...fresh, session: { ...fresh.session, entries: this.withLocalNotices(fresh.session.entries) } };
     this.publish();
   }
 
@@ -177,10 +179,14 @@ class DaemonSessionClient implements AgentSessionClient {
     void this.request('session.answer', { answer, questionId }).catch((error: unknown) => this.addLocalNotice(error));
   }
 
-  stop(options: { keepQueue?: boolean } = {}): void {
-    void this.request('session.stop', options.keepQueue === true ? { keepQueue: true } : {}).catch((error: unknown) =>
-      this.addLocalNotice(error),
-    );
+  stop(options: { keepQueue?: boolean; holdQueue?: boolean } = {}): void {
+    const payload: { keepQueue?: boolean; holdQueue?: boolean } = {};
+    if (options.keepQueue === true) payload.keepQueue = true;
+    if (options.holdQueue === true) {
+      payload.keepQueue = true;
+      payload.holdQueue = true;
+    }
+    void this.request('session.stop', payload).catch((error: unknown) => this.addLocalNotice(error));
   }
 
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void> {
@@ -312,25 +318,17 @@ class DaemonSessionClient implements AgentSessionClient {
       this.addLocalNotice(`${event.title}\n${event.message}`);
       return;
     }
-    if (event.event === 'mcp-approval-request') {
-      void this.resolveMcpApproval(event.requestId, event.request);
-      return;
-    }
     if (event.event === 'snapshot') {
-      this.snapshot = snapshotFromData(event.snapshot);
-      this.localNoticeCount = 0;
+      const fresh = snapshotFromData(event.snapshot);
+      this.snapshot = { ...fresh, session: { ...fresh.session, entries: this.withLocalNotices(fresh.session.entries) } };
       this.applyRuntime(event.runtime);
       this.publish();
       return;
     }
     if (!this.snapshot) return;
     const current = this.snapshot;
-    const serverEntries =
-      this.localNoticeCount > 0
-        ? current.session.entries.slice(0, Math.max(0, current.session.entries.length - this.localNoticeCount))
-        : current.session.entries;
-    this.localNoticeCount = 0;
-    const session = { ...event.patch.session, entries: applyEntriesPatch(serverEntries, event.patch.entriesPatch) };
+    const serverEntries = this.withoutLocalNotices(current.session.entries);
+    const session = { ...event.patch.session, entries: this.withLocalNotices(applyEntriesPatch(serverEntries, event.patch.entriesPatch)) };
     const streamingIndex = event.patch.streamingAssistantIndex;
     this.snapshot = {
       session,
@@ -348,20 +346,6 @@ class DaemonSessionClient implements AgentSessionClient {
     this.publish();
   }
 
-  private async resolveMcpApproval(requestId: string, request: McpServerRequest): Promise<void> {
-    let approved = false;
-    try {
-      approved = (await this.approveMcpServer?.(request)) ?? false;
-    } catch {
-      approved = false;
-    }
-    try {
-      await this.request('mcp.approve-startup', { approvalId: requestId, approved });
-    } catch (error) {
-      this.addLocalNotice(error);
-    }
-  }
-
   private applyRuntime(data: RuntimeViewData): void {
     Object.assign(this.runtime, {
       ...data,
@@ -369,15 +353,29 @@ class DaemonSessionClient implements AgentSessionClient {
     });
   }
 
-  private addLocalNotice(error: unknown): void {
+  private addLocalNotice(error: unknown, tone: NoticeTone = 'error'): void {
     if (!this.snapshot || this.closed) return;
     const text = error instanceof Error ? error.message : String(error);
+    const notice: SessionEntry = tone === 'info' ? { kind: 'notice', text } : { kind: 'notice', text, tone };
+    this.localNotices = [...this.localNotices, notice].slice(-MAX_LOCAL_NOTICES);
+    const current = this.snapshot;
     this.snapshot = {
-      ...this.snapshot,
-      session: { ...this.snapshot.session, entries: [...this.snapshot.session.entries, { kind: 'notice', text }] },
+      ...current,
+      session: { ...current.session, entries: this.withLocalNotices(this.withoutLocalNotices(current.session.entries)) },
     };
-    this.localNoticeCount += 1;
     this.publish();
+  }
+
+  /** Server entries only: strips the pinned client-local notices from a merged view. */
+  private withoutLocalNotices(entries: SessionEntry[]): SessionEntry[] {
+    if (this.localNotices.length === 0) return entries;
+    const pinned = new Set(this.localNotices);
+    return entries.filter((entry) => !pinned.has(entry));
+  }
+
+  /** Merged view: server entries with the pinned client-local notices at the end. */
+  private withLocalNotices(entries: SessionEntry[]): SessionEntry[] {
+    return this.localNotices.length > 0 ? [...entries, ...this.localNotices] : entries;
   }
 
   private publish(): void {
@@ -397,6 +395,7 @@ class DaemonSessionClient implements AgentSessionClient {
         this.intentionalShutdown
           ? 'The Ranite host stopped. Run ranite to connect again.'
           : 'Lost connection to the Ranite host. Reconnecting…',
+        this.intentionalShutdown ? 'error' : 'warn',
       );
     }
     if (!this.closed && !this.intentionalShutdown) void this.reconnect();
@@ -433,14 +432,14 @@ class DaemonSessionClient implements AgentSessionClient {
         ) {
           const restored = await this.loadSession(previousSessionId);
           if (restored && this.snapshot) {
-            this.snapshot = { ...this.snapshot, session: restored };
+            this.snapshot = { ...this.snapshot, session: { ...restored, entries: this.withLocalNotices(restored.entries) } };
             this.publish();
           }
         }
 
         this.connectionFailureReported = false;
         this.reconnecting = false;
-        this.addLocalNotice('Reconnected to the Ranite host.');
+        this.addLocalNotice('Reconnected to the Ranite host.', 'info');
         return;
       } catch {
         if (socket && !socket.destroyed) socket.destroy();
@@ -565,9 +564,6 @@ function isDaemonEvent(value: unknown): value is DaemonEvent {
       (value.patch.entriesPatch === undefined || isEntriesPatch(value.patch.entriesPatch))
     );
   }
-  if (value.event === 'mcp-approval-request') {
-    return typeof value.requestId === 'string' && isMcpServerRequest(value.request);
-  }
   return false;
 }
 
@@ -575,10 +571,6 @@ function isEntriesPatch(value: unknown): value is SessionEntriesPatch {
   if (!isRecord(value)) return false;
   if (value.kind === 'replace-all') return Array.isArray(value.entries);
   return value.kind === 'delta' && Array.isArray(value.append) && Array.isArray(value.replace) && Array.isArray(value.appendText);
-}
-
-function isMcpServerRequest(value: unknown): value is McpServerRequest {
-  return isRecord(value) && typeof value.id === 'string' && ['stdio', 'http', 'sse'].includes(String(value.transport));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

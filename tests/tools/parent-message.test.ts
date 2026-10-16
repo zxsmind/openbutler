@@ -19,13 +19,12 @@ describe('parent_message tool', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('maps host failures to an error result, stays worker-only and pre-approved', () => {
+  it('maps host failures to an error result, stays pre-approved', () => {
     const tool = createParentMessageTool(() => {
       throw new Error('boom');
     });
     expect(tool.name).toBe('parent_message');
     expect(tool.providerId).toBe('host');
-    expect(tool.workerOnly).toBe(true);
     expect(tool.autoApprove?.({}, undefined)).toBe(true);
     expect(tool.effect).toEqual({ change: 'none', data: 'sensitive', network: 'none', reversible: 'full', outbound: 'model' });
     return expect(tool.execute({ text: 'Ping.' })).resolves.toMatchObject({

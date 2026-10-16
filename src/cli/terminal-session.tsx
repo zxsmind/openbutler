@@ -11,10 +11,11 @@ import { mergeMarkdownTokenSegments } from './markdown-merge.js';
 import type { ApprovalDecision } from '../agent-session.js';
 import type { AgentSessionClient } from '../agent-session.js';
 import { getCatalogIndex, getProvider, listProviderSummaries } from '../provider/catalog.js';
-import { listSupportedPackages, listToolCapableModels, providerIsConfigured } from '../provider/registry.js';
+import { listSupportedPackages, listToolCapableModels, providerIsConfigured, resolveReasoningVariant } from '../provider/registry.js';
 import { loadSettings, rememberProviderModel } from '../settings.js';
-import { listSavedSessions, type SessionEntry, type SessionSummary } from '../session-store.js';
+import { listSavedSessions, type SessionEntry, type SessionSummary, type NoticeTone } from '../session-store.js';
 import { upsertProvider, writeSettings } from './config-edit.js';
+import { getRaniteVersion } from '../version.js';
 import { detectTerminalTheme } from './terminal-detect.js';
 import { glyphs, uiTokens, type ResolvedTheme, type UiTheme, type UiTokens } from './theme.js';
 
@@ -191,7 +192,9 @@ const RUNNING_WORD = 'running';
 function RunningIndicator({ tokens }: { tokens: UiTokens }) {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
-    const timer = setInterval(() => setFrame((value) => (value + 1) % 1_000_000), 110);
+    // Slow sweep: every tick rewrites the footer line, so a fast per-letter
+    // sweep means constant terminal churn while a run is active.
+    const timer = setInterval(() => setFrame((value) => (value + 1) % 1_000_000), 300);
     return () => clearInterval(timer);
   }, []);
   const spinner = glyphs.spinner[frame % glyphs.spinner.length]!;
@@ -262,6 +265,7 @@ function SessionScreen({
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(8);
   const [expandedTools, setExpandedTools] = useState<Set<number>>(() => new Set());
   const [expandedMessages, setExpandedMessages] = useState<Set<number>>(() => new Set());
+  const [expandedNotices, setExpandedNotices] = useState<Set<number>>(() => new Set());
   const [escapeWarning, setEscapeWarning] = useState<string | null>(null);
   const [composerKey, setComposerKey] = useState(0);
   const [composerText, setComposerText] = useState('');
@@ -284,8 +288,8 @@ function SessionScreen({
   const [sessionSelection, setSessionSelection] = useState(0);
   const [selectedTheme, setSelectedTheme] = useState<UiTheme>(initialTheme);
   const [settingsSelection, setSettingsSelection] = useState(0);
-  const [reasoningVariantId, setReasoningVariantId] = useState(() =>
-    runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault) ? runtime.reasoningDefault : 'default',
+  const [reasoningVariantId, setReasoningVariantId] = useState(
+    () => resolveReasoningVariant(runtime.reasoningVariants, runtime.reasoningDefault).id,
   );
   const [reasoningSelection, setReasoningSelection] = useState(0);
   const [thinkingSelection, setThinkingSelection] = useState(runtime.showReasoningDefault ? 1 : 0);
@@ -488,8 +492,10 @@ function SessionScreen({
       escapeStopArmed.current = false;
       if (escapeStopTimer.current !== null) clearTimeout(escapeStopTimer.current);
       escapeStopTimer.current = null;
-      setEscapeWarning('Stopping run…');
-      controller.stop();
+      setEscapeWarning('Stopping run… Queued messages are kept and will not start on their own.');
+      // Esc never drops user input: queued messages stay visible in the chat and
+      // wait for the next explicit send instead of starting a run by themselves.
+      controller.stop({ keepQueue: true, holdQueue: true });
       return;
     }
 
@@ -539,14 +545,18 @@ function SessionScreen({
 
   const openSessionPicker = useCallback(async () => {
     if (controller.isBusy) {
-      addEntry({ kind: 'notice', text: 'Wait for the current run to finish before switching sessions.' });
+      addEntry({ kind: 'notice', text: 'Wait for the current run to finish before switching sessions.', tone: 'warn' });
       return;
     }
     await flushSessionSave();
     try {
       setSavedSessions(await controller.listSessions());
     } catch (error) {
-      addEntry({ kind: 'notice', text: `Could not read saved sessions: ${error instanceof Error ? error.message : String(error)}` });
+      addEntry({
+        kind: 'notice',
+        text: `Could not read saved sessions: ${error instanceof Error ? error.message : String(error)}`,
+        tone: 'error',
+      });
       setSavedSessions([]);
     }
     setSessionSearch('');
@@ -556,7 +566,7 @@ function SessionScreen({
 
   const openProviderPicker = useCallback(() => {
     if (controller.isBusy) {
-      addEntry({ kind: 'notice', text: 'Wait for the current run to finish before changing providers.' });
+      addEntry({ kind: 'notice', text: 'Wait for the current run to finish before changing providers.', tone: 'warn' });
       return;
     }
     setProviderPickerMode('provider');
@@ -565,7 +575,7 @@ function SessionScreen({
 
   const openModelPicker = useCallback(() => {
     if (controller.isBusy) {
-      addEntry({ kind: 'notice', text: 'Wait for the current run to finish before changing models.' });
+      addEntry({ kind: 'notice', text: 'Wait for the current run to finish before changing models.', tone: 'warn' });
       return;
     }
     setProviderPickerMode('models');
@@ -578,9 +588,7 @@ function SessionScreen({
       const settings = loadSettings();
       rememberProviderModel(settings, providerId, modelId);
       writeSettings(settings);
-      const reasoning = runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault)
-        ? runtime.reasoningDefault
-        : 'default';
+      const reasoning = resolveReasoningVariant(runtime.reasoningVariants, runtime.reasoningDefault).id;
       setReasoningVariantId(reasoning);
       setReasoningSelection(
         Math.max(
@@ -605,7 +613,7 @@ function SessionScreen({
           const loaded = await controller.loadSession(choice.session.id);
           if (!loaded) {
             setSavedSessions(await controller.listSessions());
-            addEntry({ kind: 'notice', text: 'That session is no longer available.' });
+            addEntry({ kind: 'notice', text: 'That session is no longer available.', tone: 'warn' });
             return;
           }
         } catch (error) {
@@ -619,6 +627,7 @@ function SessionScreen({
       entryHeightCache.current = new WeakMap();
       setExpandedTools(new Set());
       setExpandedMessages(new Set());
+      setExpandedNotices(new Set());
       toolRefs.current.clear();
       setSessionChooserOpen(false);
       followTail.current = true;
@@ -707,13 +716,13 @@ function SessionScreen({
         return;
       }
       if (commandOnly && (text === '/exit' || text === '/quit')) {
-        if (controller.isBusy) addEntry({ kind: 'notice', text: 'Wait for the current run to finish before exiting.' });
+        if (controller.isBusy) addEntry({ kind: 'notice', text: 'Wait for the current run to finish before exiting.', tone: 'warn' });
         else exit();
         return;
       }
       if (commandOnly && text === '/clear') {
         if (controller.isBusy) {
-          addEntry({ kind: 'notice', text: 'Wait for the current run to finish before clearing the session.' });
+          addEntry({ kind: 'notice', text: 'Wait for the current run to finish before clearing the session.', tone: 'warn' });
           return;
         }
         await flushSessionSave();
@@ -723,6 +732,7 @@ function SessionScreen({
         entryHeightCache.current = new WeakMap();
         setExpandedTools(new Set());
         setExpandedMessages(new Set());
+        setExpandedNotices(new Set());
         toolRefs.current.clear();
         followTail.current = true;
         setRequestedScrollTop(Number.MAX_SAFE_INTEGER);
@@ -802,15 +812,9 @@ function SessionScreen({
   }
   if (queuedMessageCount > 0) approvalNote = `${approvalNote ? approvalNote + ' · ' : ''}${queuedMessageCount} queued`;
   const busyHint = 'Esc to stop · Enter to queue';
-  const footerHint = pendingQuestion
-    ? pendingQuestionOptions.length > 0
-      ? '↑/↓ choose · Enter answer · Esc dismiss'
-      : 'Type an answer · Enter send · Esc dismiss'
-    : pending
-      ? '←/→ approve · Enter confirm'
-      : busy
-        ? `running · ${busyHint}`
-        : '';
+  // The question and approval cards print their own hints; the footer stays out
+  // of their way and only describes the run itself.
+  const footerHint = pending ? '←/→ choose · Enter confirm' : busy ? `running · ${busyHint}` : '';
   const footerMeta = `${runtime.modelId} · ${activeReasoningLabel} · ${formatContextIndicator(activeSession.contextTokens, activeSession.contextWindowTokens)}`;
   const approvalPanelBottom = layoutMetrics.hasMeasured ? layoutMetrics.composerTop + COMPOSER_SLOT_HEIGHT : rows - 5;
   const approvalPanelTop = Math.max(0, approvalPanelBottom - approvalPanelHeight);
@@ -838,12 +842,15 @@ function SessionScreen({
     let contentHeight = 0;
     entries.forEach((entry, index) => {
       const streaming = entry.kind === 'assistant' && entry === snapshot.streamingAssistantEntry;
+      const reasoningHidden = entry.kind === 'reasoning' && !showReasoning;
       const layoutKey = transcriptEntryLayoutKey(
         width,
         entry.kind === 'tool' && expandedTools.has(index),
         entry.kind === 'user' && expandedMessages.has(index),
+        entry.kind === 'notice' && expandedNotices.has(index),
         mouseInput.supported,
         streaming,
+        reasoningHidden,
       );
       let height = entryHeightCache.current.get(entry)?.get(layoutKey);
       if (height === undefined) {
@@ -852,7 +859,9 @@ function SessionScreen({
           width,
           entry.kind === 'tool' && expandedTools.has(index),
           entry.kind === 'user' && expandedMessages.has(index),
+          entry.kind === 'notice' && expandedNotices.has(index),
           mouseInput.supported,
+          reasoningHidden,
         );
         let cachedHeights = entryHeightCache.current.get(entry);
         if (!cachedHeights) {
@@ -867,7 +876,17 @@ function SessionScreen({
     });
     offsets.push(contentHeight);
     return { heights, offsets, contentHeight };
-  }, [entries, expandedMessages, expandedTools, mouseInput.supported, snapshot.streamingAssistantEntry, transcriptHeightRevision, width]);
+  }, [
+    entries,
+    expandedMessages,
+    expandedNotices,
+    expandedTools,
+    mouseInput.supported,
+    showReasoning,
+    snapshot.streamingAssistantEntry,
+    transcriptHeightRevision,
+    width,
+  ]);
 
   const viewportHeight = layoutMetrics.viewportHeight || rows;
   const overscan = Math.max(6, viewportHeight);
@@ -891,8 +910,9 @@ function SessionScreen({
         const index = transcriptStartIndex + visibleOffset;
         const expanded = entry.kind === 'tool' && expandedTools.has(index);
         const expandedMessage = entry.kind === 'user' && expandedMessages.has(index);
+        const expandedNotice = entry.kind === 'notice' && expandedNotices.has(index);
         const streaming = entry.kind === 'assistant' && entry === snapshot.streamingAssistantEntry;
-        const rowKey = `${activeSession.id}:${index}:${entry.kind}:${width}:${expanded}:${expandedMessage}:${popupOpen}:${mouseInput.supported}:${streaming}:${selectedTheme}`;
+        const rowKey = `${activeSession.id}:${index}:${entry.kind}:${width}:${expanded}:${expandedMessage}:${expandedNotice}:${popupOpen}:${mouseInput.supported}:${streaming}:${selectedTheme}:${showReasoning}`;
         const cached = transcriptRowCache.current.get(entry);
         if (cached?.key === rowKey) return cached.element;
         const element = (
@@ -904,6 +924,8 @@ function SessionScreen({
               streaming={streaming}
               expanded={expanded}
               expandedMessage={expandedMessage}
+              expandedNotice={expandedNotice}
+              hideReasoning={!showReasoning}
               dimmed={popupOpen}
               setToolRef={setToolRef}
               mouseSupported={mouseInput.supported}
@@ -918,12 +940,14 @@ function SessionScreen({
       activeSession.id,
       entries,
       expandedMessages,
+      expandedNotices,
       expandedTools,
       getEntryRef,
       mouseInput.supported,
       popupOpen,
       selectedTheme,
       setToolRef,
+      showReasoning,
       snapshot.streamingAssistantEntry,
       transcriptEndIndex,
       transcriptStartIndex,
@@ -944,8 +968,10 @@ function SessionScreen({
         width,
         entry.kind === 'tool' && expandedTools.has(index),
         entry.kind === 'user' && expandedMessages.has(index),
+        entry.kind === 'notice' && expandedNotices.has(index),
         mouseInput.supported,
         streaming,
+        entry.kind === 'reasoning' && !showReasoning,
       );
       // Measuring is a full layout pass; a stable entry identity and layout key stays valid.
       let height = measuredHeightCache.current.get(entry)?.get(layoutKey);
@@ -985,8 +1011,10 @@ function SessionScreen({
   }, [
     entries,
     expandedMessages,
+    expandedNotices,
     expandedTools,
     mouseInput.supported,
+    showReasoning,
     snapshot.streamingAssistantEntry,
     transcriptEndIndex,
     transcriptLayout,
@@ -1021,7 +1049,6 @@ function SessionScreen({
         const { connectDaemonSession } = await import('../daemon-client.js');
         const client = await connectDaemonSession(
           parentController.runtime.workspaceRoot,
-          undefined,
           running ? { runningWorkerOf: activeSession.id } : { workerSessionId: workerSessionId! },
         );
         if (subagentClientRef.current) {
@@ -1141,6 +1168,21 @@ function SessionScreen({
           return;
         }
       }
+      for (const [index, element] of entryRefs.current) {
+        const entry = state.entries[index];
+        if (entry?.kind !== 'notice' || !entry.detail) continue;
+        const bounds = measureElement(element);
+        const top = bounds.y - scrollTopRef.current;
+        if (x >= bounds.x && x < bounds.x + bounds.width && y >= top && y < top + bounds.height) {
+          setExpandedNotices((expanded) => {
+            const next = new Set(expanded);
+            if (next.has(index)) next.delete(index);
+            else next.add(index);
+            return next;
+          });
+          return;
+        }
+      }
     },
     [clearSelection, repaintSelection, selection],
   );
@@ -1180,6 +1222,9 @@ function SessionScreen({
     (input, key) => {
       if (!pending) return;
       if (key.escape) {
+        // Esc exits the approval card: the pending action is denied. The same
+        // press arms the run stop, so a second Esc stops the whole run.
+        controller.approveToolCall('deny');
         handleRunEscape();
         return;
       }
@@ -1244,18 +1289,20 @@ function SessionScreen({
         setSelectedSlashIndex((index) => (index + direction + slashSuggestions.length) % slashSuggestions.length);
         return;
       }
-      if (key.home) {
+      if (key.home && key.ctrl) {
         clearSelection();
         followTail.current = false;
         setRequestedScrollTop(0);
         return;
       }
-      if (key.end) {
+      if (key.end && key.ctrl) {
         clearSelection();
         followTail.current = true;
         setRequestedScrollTop(Number.MAX_SAFE_INTEGER);
         return;
       }
+      // Plain Home/End belong to the composer caret (SessionComposer); the
+      // transcript only jumps on Ctrl+Home/End.
       const page = Math.max(1, Math.floor((layoutMetrics.viewportHeight || rows) / 2));
       const delta = key.pageUp ? page : key.pageDown ? -page : key.upArrow ? 1 : key.downArrow ? -1 : 0;
       if (delta !== 0) clearSelection();
@@ -1320,9 +1367,8 @@ function SessionScreen({
         } catch (error) {
           addEntry({ kind: 'notice', text: error instanceof Error ? error.message : String(error) });
         }
-        if (!visible) {
-          controller.removeReasoningEntries();
-        }
+        // Display-only: reasoning entries stay in the session and reappear when
+        // switched back on. Nothing is deleted.
         setThinkingOpen(false);
       } else if (settingsOpen && key.upArrow) {
         setSettingsSelection((index) => (index + themeOptions.length - 1) % themeOptions.length);
@@ -1361,9 +1407,12 @@ function SessionScreen({
     <Box flexDirection="column" width={columns} height={rows} paddingX={2} paddingY={1}>
       {entries.length === 0 ? (
         <Box flexDirection="column" alignItems="center" marginTop={2} marginBottom={2} flexShrink={0}>
-          <Text bold dimColor={popupOpen}>
-            R A N I T E
+          <Text bold dimColor={popupOpen} {...(popupOpen ? {} : { color: tokens.accent })}>
+            Ranite {getRaniteVersion()}
           </Text>
+          <Text dimColor>{`${runtime.modelId} · ${activeReasoningLabel} · ${runtime.approvalMode}`}</Text>
+          {runtime.workspaceRoot ? <Text dimColor>{clipTerminalWidth(runtime.workspaceRoot, Math.max(8, width - 8))}</Text> : null}
+          <Text dimColor>Type a message or /help · Enter send · Esc×2 stop · Ctrl+Home/End top/bottom</Text>
         </Box>
       ) : (
         <Box width="100%" marginBottom={1} flexShrink={0}>
@@ -1469,7 +1518,10 @@ function SessionScreen({
           <Text dimColor>{`${glyphs.bullet} subagent session · view only · ↑ returns to the parent session`}</Text>
         </Box>
       ) : pending ? (
-        <Box ref={composerSlotRef} width={composerWidth} height={COMPOSER_SLOT_HEIGHT} marginBottom={1} flexShrink={0} />
+        <Box ref={composerSlotRef} width={composerWidth} height={COMPOSER_SLOT_HEIGHT} marginBottom={1} flexShrink={0}>
+          {/* The rule stays while an approval is open so the transcript does not reflow by a row. */}
+          <Text dimColor>{'─'.repeat(Math.max(1, composerWidth))}</Text>
+        </Box>
       ) : pendingQuestion ? (
         <Box ref={composerSlotRef} width={composerWidth} marginBottom={1} flexShrink={0} />
       ) : (
@@ -1592,139 +1644,112 @@ function SessionScreen({
       ) : null}
 
       {settingsOpen ? (
-        <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
-          <Box
-            width={Math.max(12, Math.min(56, columns - 8))}
-            flexDirection="column"
-            backgroundColor={tokens.surface}
-            paddingX={1}
-            paddingY={1}
-            flexShrink={0}
-          >
-            <Text bold>Settings</Text>
-            <Text dimColor>Theme</Text>
-            {themeOptions.map((option, index) => (
-              <Box key={option} width="100%" {...(settingsSelection === index ? { backgroundColor: tokens.accent } : {})}>
-                <Text {...(settingsSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                  {settingsSelection === index ? `${glyphs.prompt} ` : '  '}
-                </Text>
-                <Text {...(settingsSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
-                  {option}
-                  {selectedTheme === option ? '  · current' : ''}
-                </Text>
-              </Box>
-            ))}
-            <Text dimColor>↑/↓ move · Enter select · Esc close</Text>
-          </Box>
-        </Box>
+        <PopupFrame
+          tokens={tokens}
+          width={Math.max(12, Math.min(64, columns - 8))}
+          title="Settings"
+          subtitle="Theme"
+          hint="↑/↓ move · Enter select · Esc close"
+        >
+          {themeOptions.map((option, index) => (
+            <Box key={option} width="100%" {...(settingsSelection === index ? { backgroundColor: tokens.accent } : {})}>
+              <Text {...(settingsSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                {settingsSelection === index ? `${glyphs.prompt} ` : '  '}
+              </Text>
+              <Text {...(settingsSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
+                {option}
+                {selectedTheme === option ? '  · current' : ''}
+              </Text>
+            </Box>
+          ))}
+        </PopupFrame>
       ) : null}
       {permissionsOpen ? (
-        <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
-          <Box
-            width={Math.max(24, Math.min(60, columns - 8))}
-            flexDirection="column"
-            backgroundColor={tokens.surface}
-            paddingX={1}
-            paddingY={1}
-            flexShrink={0}
-          >
-            <Text bold>Tool access</Text>
-            <Text dimColor>Choose how Ranite handles actions outside this workspace.</Text>
-            <Text dimColor>{clipped(runtime.workspaceRoot, Math.max(12, Math.min(52, columns - 18)))}</Text>
-            {[
-              { mode: 'workspace' as const, label: 'Workspace', description: 'Trust this folder; ask before actions outside it.' },
-              {
-                mode: 'auto-review' as const,
-                label: 'Approve for me',
-                description: 'Same folder rule; the model reviews outside actions.',
-              },
-              { mode: 'full-access' as const, label: 'Full access', description: 'Run tools without permission prompts.' },
-            ].map((option, index) => (
-              <Box
-                key={option.mode}
-                width="100%"
-                flexDirection="column"
-                {...(permissionsSelection === index ? { backgroundColor: tokens.accent } : {})}
-              >
-                <Box width="100%">
-                  <Text {...(permissionsSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                    {permissionsSelection === index ? `${glyphs.prompt} ` : '  '}
-                  </Text>
-                  <Text {...(permissionsSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
-                    {option.label}
-                    {(runtime.approvalMode ?? 'workspace') === option.mode ? '  · current' : ''}
-                  </Text>
-                </Box>
-                <Text {...(permissionsSelection === index ? { color: tokens.onAccent } : { dimColor: true })}> {option.description}</Text>
+        <PopupFrame
+          tokens={tokens}
+          width={Math.max(24, Math.min(64, columns - 8))}
+          title="Tool access"
+          subtitle={`Choose how Ranite handles actions outside this workspace.\n${clipped(runtime.workspaceRoot, Math.max(12, Math.min(52, columns - 18)))}`}
+          hint="↑/↓ move · Enter select · Esc close"
+        >
+          {[
+            { mode: 'workspace' as const, label: 'Workspace', description: 'Trust this folder; ask before actions outside it.' },
+            {
+              mode: 'auto-review' as const,
+              label: 'Approve for me',
+              description: 'Same folder rule; the model reviews outside actions.',
+            },
+            { mode: 'full-access' as const, label: 'Full access', description: 'Run tools without permission prompts.' },
+          ].map((option, index) => (
+            <Box
+              key={option.mode}
+              width="100%"
+              flexDirection="column"
+              {...(permissionsSelection === index ? { backgroundColor: tokens.accent } : {})}
+            >
+              <Box width="100%">
+                <Text {...(permissionsSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                  {permissionsSelection === index ? `${glyphs.prompt} ` : '  '}
+                </Text>
+                <Text {...(permissionsSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
+                  {option.label}
+                  {(runtime.approvalMode ?? 'workspace') === option.mode ? '  · current' : ''}
+                </Text>
               </Box>
-            ))}
-            <Text dimColor>↑/↓ move · Enter select · Esc close</Text>
-          </Box>
-        </Box>
+              <Text {...(permissionsSelection === index ? { color: tokens.onAccent } : { dimColor: true })}> {option.description}</Text>
+            </Box>
+          ))}
+        </PopupFrame>
       ) : null}
       {reasoningOpen ? (
-        <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
-          <Box
-            width={Math.max(12, Math.min(56, columns - 8))}
-            flexDirection="column"
-            backgroundColor={tokens.surface}
-            paddingX={1}
-            paddingY={1}
-            flexShrink={0}
-          >
-            <Text bold>Reasoning</Text>
+        <PopupFrame
+          tokens={tokens}
+          width={Math.max(12, Math.min(64, columns - 8))}
+          title="Reasoning"
+          subtitle={`${runtime.providerId}/${runtime.modelId}`}
+          hint="↑/↓ move · Enter select · Esc close"
+        >
+          {runtime.reasoningVariants.length <= 1 ? (
             <Text dimColor>
-              {runtime.providerId}/{runtime.modelId}
+              {(runtime.reasoningSupport ?? 'model-unsupported') === 'adapter-unmapped'
+                ? 'This model lists reasoning support, but Ranite has no reasoning mapping for this adapter yet.'
+                : 'No selectable reasoning variants are listed for this model.'}
             </Text>
-            {runtime.reasoningVariants.length <= 1 ? (
-              <Text dimColor>
-                {(runtime.reasoningSupport ?? 'model-unsupported') === 'adapter-unmapped'
-                  ? 'This model lists reasoning support, but Ranite has no reasoning mapping for this adapter yet.'
-                  : 'No selectable reasoning variants are listed for this model.'}
-              </Text>
-            ) : (
-              runtime.reasoningVariants.map((variant, index) => (
-                <Box key={variant.id} width="100%" {...(reasoningSelection === index ? { backgroundColor: tokens.accent } : {})}>
-                  <Text {...(reasoningSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                    {reasoningSelection === index ? `${glyphs.prompt} ` : '  '}
-                  </Text>
-                  <Text {...(reasoningSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
-                    {variant.label}
-                    {reasoningVariantId === variant.id ? '  · current' : ''}
-                  </Text>
-                </Box>
-              ))
-            )}
-            <Text dimColor>↑/↓ move · Enter select · Esc close</Text>
-          </Box>
-        </Box>
-      ) : null}
-      {thinkingOpen ? (
-        <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
-          <Box
-            width={Math.max(12, Math.min(56, columns - 8))}
-            flexDirection="column"
-            backgroundColor={tokens.surface}
-            paddingX={1}
-            paddingY={1}
-            flexShrink={0}
-          >
-            <Text bold>Thinking</Text>
-            <Text dimColor>Show reasoning above assistant messages</Text>
-            {['Off', 'On'].map((option, index) => (
-              <Box key={option} width="100%" {...(thinkingSelection === index ? { backgroundColor: tokens.accent } : {})}>
-                <Text {...(thinkingSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                  {thinkingSelection === index ? `${glyphs.prompt} ` : '  '}
+          ) : (
+            runtime.reasoningVariants.map((variant, index) => (
+              <Box key={variant.id} width="100%" {...(reasoningSelection === index ? { backgroundColor: tokens.accent } : {})}>
+                <Text {...(reasoningSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                  {reasoningSelection === index ? `${glyphs.prompt} ` : '  '}
                 </Text>
-                <Text {...(thinkingSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
-                  {option}
-                  {showReasoning === (index === 1) ? '  · current' : ''}
+                <Text {...(reasoningSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
+                  {variant.label}
+                  {reasoningVariantId === variant.id ? '  · current' : ''}
                 </Text>
               </Box>
-            ))}
-            <Text dimColor>↑/↓ move · Enter select · Esc close</Text>
-          </Box>
-        </Box>
+            ))
+          )}
+        </PopupFrame>
+      ) : null}
+      {thinkingOpen ? (
+        <PopupFrame
+          tokens={tokens}
+          width={Math.max(12, Math.min(64, columns - 8))}
+          title="Thinking"
+          subtitle="Show reasoning above assistant messages (hidden entries are kept)"
+          hint="↑/↓ move · Enter select · Esc close"
+        >
+          {['Off', 'On'].map((option, index) => (
+            <Box key={option} width="100%" {...(thinkingSelection === index ? { backgroundColor: tokens.accent } : {})}>
+              <Text {...(thinkingSelection === index ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                {thinkingSelection === index ? `${glyphs.prompt} ` : '  '}
+              </Text>
+              <Text {...(thinkingSelection === index ? { color: tokens.onAccent } : { dimColor: true })}>
+                {option}
+                {showReasoning === (index === 1) ? '  · current' : ''}
+              </Text>
+            </Box>
+          ))}
+        </PopupFrame>
       ) : null}
       {providerOpen ? (
         <ProviderPicker
@@ -1737,61 +1762,56 @@ function SessionScreen({
         />
       ) : null}
       {sessionChooserOpen ? (
-        <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
-          <Box
-            width={Math.max(24, Math.min(72, columns - 8))}
-            flexDirection="column"
-            backgroundColor={tokens.surface}
-            paddingX={1}
-            paddingY={1}
-            flexShrink={0}
-          >
-            <Text bold>Sessions</Text>
-            <Box width="100%">
-              <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-              <Text dimColor={!sessionSearch}>{sessionSearch || 'Type to filter sessions'}</Text>
-            </Box>
-            {filteredSessions.length === 0 ? <Text dimColor>No saved sessions match this search.</Text> : null}
-            <Box flexDirection="column" width="100%">
-              {visibleSessionChoices.map((choice, offset) => {
-                const index = sessionListStart + offset;
-                const selected = selectedSessionIndex === index;
-                if (choice.kind === 'new') {
-                  return (
-                    <Box key="new-session" flexDirection="column" width="100%" {...(selected ? { backgroundColor: tokens.accent } : {})}>
-                      <Box width="100%">
-                        <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                          {selected ? `${glyphs.prompt} ` : '  '}
-                        </Text>
-                        <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>New session</Text>
-                      </Box>
-                      <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>Start a blank conversation</Text>
-                    </Box>
-                  );
-                }
-                const session = choice.session;
-                const updatedAt = new Date(session.updatedAt).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
+        <PopupFrame
+          tokens={tokens}
+          width={Math.max(24, Math.min(72, columns - 8))}
+          title="Sessions"
+          hint="↑/↓ select · Type to search · Enter open · Esc close"
+        >
+          <Box width="100%">
+            <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
+            <Text dimColor={!sessionSearch}>{sessionSearch || 'Type to filter sessions'}</Text>
+          </Box>
+          <Box height={1} flexShrink={0} />
+          {filteredSessions.length === 0 ? <Text dimColor>No saved sessions match this search.</Text> : null}
+          <Box flexDirection="column" width="100%">
+            {visibleSessionChoices.map((choice, offset) => {
+              const index = sessionListStart + offset;
+              const selected = selectedSessionIndex === index;
+              if (choice.kind === 'new') {
                 return (
-                  <Box key={session.id} flexDirection="column" width="100%" {...(selected ? { backgroundColor: tokens.accent } : {})}>
+                  <Box key="new-session" flexDirection="column" width="100%" {...(selected ? { backgroundColor: tokens.accent } : {})}>
                     <Box width="100%">
                       <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
                         {selected ? `${glyphs.prompt} ` : '  '}
                       </Text>
-                      <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
-                        {session.title}
-                        {session.id === activeSession.id ? '  · current' : ''}
-                      </Text>
+                      <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>New session</Text>
                     </Box>
-                    <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
-                      {clipped(session.preview || `${session.providerId}/${session.modelId}`, 64)} · {updatedAt}
-                    </Text>
+                    <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>Start a blank conversation</Text>
                   </Box>
                 );
-              })}
-            </Box>
-            <Text dimColor>↑/↓ select · Type to search · Enter open · Esc close</Text>
+              }
+              const session = choice.session;
+              const updatedAt = new Date(session.updatedAt).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' });
+              return (
+                <Box key={session.id} flexDirection="column" width="100%" {...(selected ? { backgroundColor: tokens.accent } : {})}>
+                  <Box width="100%">
+                    <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                      {selected ? `${glyphs.prompt} ` : '  '}
+                    </Text>
+                    <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
+                      {session.title}
+                      {session.id === activeSession.id ? '  · current' : ''}
+                    </Text>
+                  </Box>
+                  <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
+                    {clipped(session.preview || `${session.providerId}/${session.modelId}`, 64)} · {updatedAt}
+                  </Text>
+                </Box>
+              );
+            })}
           </Box>
-        </Box>
+        </PopupFrame>
       ) : null}
 
       {sessionSaveError || composerNotice || escapeWarning ? (
@@ -1799,7 +1819,7 @@ function SessionScreen({
           <Box flexDirection="column" backgroundColor={tokens.surface} paddingX={1} flexShrink={0}>
             {sessionSaveError ? <Text color={tokens.error}>Session auto-save failed: {clipped(sessionSaveError, 120)}</Text> : null}
             {composerNotice ? <Text color={tokens.warning}>{composerNotice}</Text> : null}
-            {!composerNotice && escapeWarning ? <Text color="yellow">{escapeWarning}</Text> : null}
+            {!composerNotice && escapeWarning ? <Text color={tokens.warning}>{escapeWarning}</Text> : null}
           </Box>
         </Box>
       ) : null}
@@ -2268,153 +2288,165 @@ function ProviderPicker({
   );
 
   const panelWidth = Math.max(28, Math.min(76, columns - 8));
+  // One header per wizard step: the shared frame prints title, subtitle, and
+  // hint with breathing room, so each step only renders its own content.
+  const stepMeta = {
+    providers: {
+      title: 'Providers',
+      subtitle: 'Choose a provider from the models.dev catalog.',
+      hint: '↑/↓ or PgUp/PgDn · Type to search · Enter select · Esc close',
+    },
+    'custom-id': {
+      title: 'Custom provider',
+      subtitle: 'Choose a unique provider ID using letters, digits, or dashes.',
+      hint: 'Enter continue · Esc providers',
+    },
+    'custom-runtime': {
+      title: providerName,
+      subtitle: 'Choose the AI SDK runtime package for this endpoint.',
+      hint: '↑/↓ choose · Enter continue · Esc back',
+    },
+    'custom-url': {
+      title: providerName,
+      subtitle: 'Enter the endpoint base URL (for example, https://host/v1).',
+      hint: 'Enter continue · Esc back',
+    },
+    key: {
+      title: providerName,
+      subtitle: 'Paste this provider’s API key. The key is stored in Ranite settings.',
+      hint: customDraft ? 'Enter save · Esc endpoint' : 'Enter continue · Esc providers',
+    },
+    models: {
+      title: mode === 'models' ? 'Models' : `${providerName} models`,
+      subtitle: mode === 'models' ? 'Models from configured providers' : undefined,
+      hint: manualModelOpen ? 'Enter select · Esc back' : '↑/↓ or PgUp/PgDn · Type to search · Enter select · Esc back',
+    },
+  }[step];
   return (
-    <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
-      <Box width={panelWidth} flexDirection="column" backgroundColor={tokens.surface} paddingX={1} paddingY={1} flexShrink={0}>
-        {step === 'providers' ? (
-          <>
-            <Text bold>Providers</Text>
-            <Text dimColor>Choose a provider from the models.dev catalog.</Text>
-            <Box width="100%">
-              <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-              <Text dimColor={!providerSearch}>{providerSearch || 'Type to filter providers'}</Text>
-            </Box>
-            {loading ? <Text dimColor>Loading providers…</Text> : null}
-            {!loading && filteredProviders.length === 0 ? <Text dimColor>No matching tool-capable providers.</Text> : null}
-            <Box flexDirection="column" width="100%">
-              {visibleProviders.map((provider, offset) => {
-                const index = providerStart + offset;
-                const selected = index === providerIndex;
-                return (
-                  <Box key={provider.id} width="100%" {...(selected ? { backgroundColor: tokens.accent } : {})}>
-                    <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                      {selected ? `${glyphs.prompt} ` : '  '}
-                    </Text>
-                    <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
-                      {provider.kind === 'add-custom'
-                        ? provider.name
-                        : provider.kind === 'custom'
-                          ? `${provider.name} (${provider.id}) · custom endpoint${provider.id === currentProviderId ? ' · current' : ''}`
-                          : `${provider.name} (${provider.id}) · ${provider.modelCount} models${provider.id === currentProviderId ? ' · current' : ''}`}
-                    </Text>
-                  </Box>
-                );
-              })}
-            </Box>
-            {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
-            <Text dimColor>↑/↓ or PgUp/PgDn · Type to search · Enter select · Esc close</Text>
-          </>
-        ) : null}
+    <PopupFrame tokens={tokens} width={panelWidth} title={stepMeta.title} subtitle={stepMeta.subtitle} hint={stepMeta.hint}>
+      {step === 'providers' ? (
+        <>
+          <Box width="100%">
+            <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
+            <Text dimColor={!providerSearch}>{providerSearch || 'Type to filter providers'}</Text>
+          </Box>
+          {loading ? <Text dimColor>Loading providers…</Text> : null}
+          {!loading && filteredProviders.length === 0 ? <Text dimColor>No matching tool-capable providers.</Text> : null}
+          <Box flexDirection="column" width="100%">
+            {visibleProviders.map((provider, offset) => {
+              const index = providerStart + offset;
+              const selected = index === providerIndex;
+              return (
+                <Box key={provider.id} width="100%" {...(selected ? { backgroundColor: tokens.accent } : {})}>
+                  <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                    {selected ? `${glyphs.prompt} ` : '  '}
+                  </Text>
+                  <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
+                    {provider.kind === 'add-custom'
+                      ? provider.name
+                      : provider.kind === 'custom'
+                        ? `${provider.name} (${provider.id}) · custom endpoint${provider.id === currentProviderId ? ' · current' : ''}`
+                        : `${provider.name} (${provider.id}) · ${provider.modelCount} models${provider.id === currentProviderId ? ' · current' : ''}`}
+                  </Text>
+                </Box>
+              );
+            })}
+          </Box>
+          {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
+        </>
+      ) : null}
 
-        {step === 'custom-id' ? (
-          <>
-            <Text bold>Custom provider</Text>
-            <Text dimColor>Choose a unique provider ID using letters, digits, or dashes.</Text>
-            <Box width="100%">
-              <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-              <Text dimColor>Provider ID </Text>
-              <Text dimColor={!customProviderId}>{customProviderId || 'Type a provider ID'}</Text>
-            </Box>
-            {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
-            <Text dimColor>Enter continue · Esc providers</Text>
-          </>
-        ) : null}
+      {step === 'custom-id' ? (
+        <>
+          <Box width="100%">
+            <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
+            <Text dimColor>Provider ID </Text>
+            <Text dimColor={!customProviderId}>{customProviderId || 'Type a provider ID'}</Text>
+          </Box>
+          {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
+        </>
+      ) : null}
 
-        {step === 'custom-runtime' ? (
-          <>
-            <Text bold>{providerName}</Text>
-            <Text dimColor>Choose the AI SDK runtime package for this endpoint.</Text>
-            {runtimePackages.map((name, index) => (
-              <Box key={name} width="100%" {...(index === customRuntimeSelection ? { backgroundColor: tokens.accent } : {})}>
-                <Text {...(index === customRuntimeSelection ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                  {index === customRuntimeSelection ? `${glyphs.prompt} ` : '  '}
-                </Text>
-                <Text {...(index === customRuntimeSelection ? { color: tokens.onAccent } : { dimColor: true })}>{name}</Text>
-              </Box>
-            ))}
-            <Text dimColor>↑/↓ choose · Enter continue · Esc back</Text>
-          </>
-        ) : null}
-
-        {step === 'custom-url' ? (
-          <>
-            <Text bold>{providerName}</Text>
-            <Text dimColor>Enter the endpoint base URL (for example, https://host/v1).</Text>
-            <Box width="100%">
-              <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-              <Text dimColor>URL </Text>
-              <Text dimColor={!customEndpointUrl}>{customEndpointUrl || 'Type or paste a URL'}</Text>
-            </Box>
-            {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
-            <Text dimColor>Enter continue · Esc back</Text>
-          </>
-        ) : null}
-
-        {step === 'key' ? (
-          <>
-            <Text bold>{providerName}</Text>
-            <Text dimColor>Paste this provider’s API key. The key is stored in Ranite settings.</Text>
-            {hasSavedKey ? <Text dimColor>Press Enter to keep the saved key.</Text> : null}
-            <Box width="100%">
-              <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-              <Text dimColor>API key </Text>
-              <Text dimColor={!providerKey}>
-                {providerKey ? `${'•'.repeat(Math.min(providerKey.length, 48))}${providerKey.length > 48 ? '…' : ''}` : 'Paste key here'}
+      {step === 'custom-runtime' ? (
+        <>
+          {runtimePackages.map((name, index) => (
+            <Box key={name} width="100%" {...(index === customRuntimeSelection ? { backgroundColor: tokens.accent } : {})}>
+              <Text {...(index === customRuntimeSelection ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                {index === customRuntimeSelection ? `${glyphs.prompt} ` : '  '}
               </Text>
+              <Text {...(index === customRuntimeSelection ? { color: tokens.onAccent } : { dimColor: true })}>{name}</Text>
             </Box>
-            {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
-            <Text dimColor>{customDraft ? 'Enter save · Esc endpoint' : 'Enter continue · Esc providers'}</Text>
-          </>
-        ) : null}
+          ))}
+        </>
+      ) : null}
 
-        {step === 'models' ? (
-          <>
-            <Text bold>{mode === 'models' ? 'Models' : `${providerName} models`}</Text>
-            {mode === 'models' ? <Text dimColor>Models from configured providers</Text> : null}
+      {step === 'custom-url' ? (
+        <>
+          <Box width="100%">
+            <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
+            <Text dimColor>URL </Text>
+            <Text dimColor={!customEndpointUrl}>{customEndpointUrl || 'Type or paste a URL'}</Text>
+          </Box>
+          {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
+        </>
+      ) : null}
+
+      {step === 'key' ? (
+        <>
+          {hasSavedKey ? <Text dimColor>Press Enter to keep the saved key.</Text> : null}
+          <Box width="100%">
+            <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
+            <Text dimColor>API key </Text>
+            <Text dimColor={!providerKey}>
+              {providerKey ? `${'•'.repeat(Math.min(providerKey.length, 48))}${providerKey.length > 48 ? '…' : ''}` : 'Paste key here'}
+            </Text>
+          </Box>
+          {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
+        </>
+      ) : null}
+
+      {step === 'models' ? (
+        <>
+          <Box width="100%">
+            <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
+            <Text dimColor={!modelSearch}>{modelSearch || 'Type to filter models'}</Text>
+          </Box>
+          {loading ? <Text dimColor>Loading models…</Text> : null}
+          {!loading && filteredModels.length === 0 ? <Text dimColor>No catalog models. Enter a model ID below.</Text> : null}
+          <Box flexDirection="column" width="100%">
+            {Array.from({ length: Math.min(visibleCount, modelChoiceCount - modelStart) }, (_, offset) => {
+              const index = modelStart + offset;
+              const selected = index === modelIndex;
+              const model = filteredModels[index];
+              const enterModelId = index === filteredModels.length;
+              return (
+                <Box
+                  key={enterModelId ? 'enter-model-id' : `${model?.providerId}/${model?.modelId}`}
+                  width="100%"
+                  {...(selected ? { backgroundColor: tokens.accent } : {})}
+                >
+                  <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
+                    {selected ? `${glyphs.prompt} ` : '  '}
+                  </Text>
+                  <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
+                    {enterModelId ? 'Enter model ID…' : `${model?.providerId} / ${model?.modelId}`}
+                    {!enterModelId && model?.providerId === currentProviderId && model.modelId === currentModelId ? ' · current' : ''}
+                  </Text>
+                </Box>
+              );
+            })}
+          </Box>
+          {manualModelOpen ? (
             <Box width="100%">
               <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-              <Text dimColor={!modelSearch}>{modelSearch || 'Type to filter models'}</Text>
+              <Text dimColor>Model ID </Text>
+              <Text dimColor={!manualModelId}>{manualModelId || 'Type or paste a model ID'}</Text>
             </Box>
-            {loading ? <Text dimColor>Loading models…</Text> : null}
-            {!loading && filteredModels.length === 0 ? <Text dimColor>No catalog models. Enter a model ID below.</Text> : null}
-            <Box flexDirection="column" width="100%">
-              {Array.from({ length: Math.min(visibleCount, modelChoiceCount - modelStart) }, (_, offset) => {
-                const index = modelStart + offset;
-                const selected = index === modelIndex;
-                const model = filteredModels[index];
-                const enterModelId = index === filteredModels.length;
-                return (
-                  <Box
-                    key={enterModelId ? 'enter-model-id' : `${model?.providerId}/${model?.modelId}`}
-                    width="100%"
-                    {...(selected ? { backgroundColor: tokens.accent } : {})}
-                  >
-                    <Text {...(selected ? { color: tokens.onAccent } : { color: tokens.accent })}>
-                      {selected ? `${glyphs.prompt} ` : '  '}
-                    </Text>
-                    <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
-                      {enterModelId ? 'Enter model ID…' : `${model?.providerId} / ${model?.modelId}`}
-                      {!enterModelId && model?.providerId === currentProviderId && model.modelId === currentModelId ? ' · current' : ''}
-                    </Text>
-                  </Box>
-                );
-              })}
-            </Box>
-            {manualModelOpen ? (
-              <Box width="100%">
-                <Text color={tokens.accent}>{`${glyphs.prompt} `}</Text>
-                <Text dimColor>Model ID </Text>
-                <Text dimColor={!manualModelId}>{manualModelId || 'Type or paste a model ID'}</Text>
-              </Box>
-            ) : null}
-            {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
-            <Text dimColor>
-              {manualModelOpen ? 'Enter select · Esc back' : '↑/↓ or PgUp/PgDn · Type to search · Enter select · Esc back'}
-            </Text>
-          </>
-        ) : null}
-      </Box>
-    </Box>
+          ) : null}
+          {error ? <Text color={tokens.error}>{clipped(error, panelWidth - 6)}</Text> : null}
+        </>
+      ) : null}
+    </PopupFrame>
   );
 }
 
@@ -2463,8 +2495,30 @@ function SessionComposer({
 
   useInput(
     (input, key) => {
-      if (disabled || key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || key.ctrl || key.meta || key.super || key.hyper)
+      if (disabled || key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || key.meta || key.super || key.hyper) return;
+      // Readline basics live here so they never reach the transcript scroller.
+      if (key.ctrl && input.toLowerCase() === 'u') {
+        onChange('');
+        setCursorOffset(0);
         return;
+      }
+      if (key.ctrl && input.toLowerCase() === 'a') {
+        setCursorOffset(0);
+        return;
+      }
+      if (key.ctrl && input.toLowerCase() === 'e') {
+        setCursorOffset(value.length);
+        return;
+      }
+      if (key.ctrl) return;
+      if (key.home) {
+        setCursorOffset(0);
+        return;
+      }
+      if (key.end) {
+        setCursorOffset(value.length);
+        return;
+      }
       if (key.return) {
         onSubmit(value);
         return;
@@ -2591,6 +2645,47 @@ function toolOutputPreview(result: string, width: number): string {
   return visible.join('\n');
 }
 
+/** Severity mark for a notice row: info stays a dim dot, warn/error get their own glyph and color. */
+function noticeMark(tone: NoticeTone | undefined, tokens: UiTokens): { glyph: string; color?: string } {
+  if (tone === 'error') return { glyph: glyphs.error, color: tokens.error };
+  if (tone === 'warn') return { glyph: glyphs.warn, color: tokens.warning };
+  return { glyph: glyphs.dot };
+}
+
+/**
+ * Shared frame for every centered popup: one width rule, roomy padding, and a
+ * blank row between the title block, the content, and the hint footer, so
+ * popups stop reading as a single stuck-together block.
+ */
+function PopupFrame({
+  tokens,
+  width,
+  title,
+  subtitle,
+  hint,
+  children,
+}: {
+  tokens: UiTokens;
+  width: number;
+  title: string;
+  subtitle?: string | undefined;
+  hint: string;
+  children: ReactNode;
+}) {
+  return (
+    <Box position="absolute" top={0} left={0} width="100%" height="100%" justifyContent="center" alignItems="center">
+      <Box width={width} flexDirection="column" backgroundColor={tokens.surface} paddingX={2} paddingY={1} flexShrink={0}>
+        <Text bold>{title}</Text>
+        {subtitle ? <Text dimColor>{subtitle}</Text> : null}
+        <Box height={1} flexShrink={0} />
+        {children}
+        <Box height={1} flexShrink={0} />
+        <Text dimColor>{hint}</Text>
+      </Box>
+    </Box>
+  );
+}
+
 function lowerBoundTranscriptRow(offsets: number[], heights: number[], y: number): number {
   let low = 0;
   let high = heights.length;
@@ -2606,10 +2701,12 @@ function transcriptEntryLayoutKey(
   width: number,
   expandedTool: boolean,
   expandedMessage: boolean,
+  expandedNotice: boolean,
   mouseSupported: boolean,
   streaming: boolean,
+  reasoningHidden = false,
 ): string {
-  return `${width}:${expandedTool ? 'tool-expanded' : 'tool-normal'}:${expandedMessage ? 'message-expanded' : 'message-normal'}:${mouseSupported}:${streaming ? 'streaming' : 'complete'}`;
+  return `${width}:${expandedTool ? 'tool-expanded' : 'tool-normal'}:${expandedMessage ? 'message-expanded' : 'message-normal'}:${expandedNotice ? 'notice-expanded' : 'notice-normal'}:${mouseSupported}:${streaming ? 'streaming' : 'complete'}:${reasoningHidden ? 'reasoning-hidden' : 'reasoning-shown'}`;
 }
 
 function estimateTranscriptEntryHeight(
@@ -2617,14 +2714,17 @@ function estimateTranscriptEntryHeight(
   width: number,
   expandedTool = false,
   expandedUser = false,
+  expandedNotice = false,
   mouseSupported = true,
+  reasoningHidden = false,
 ): number {
   const wrappedRows = (text: string, availableWidth: number) =>
     text.split('\n').reduce((total, line) => total + Math.max(1, Math.ceil(terminalTextWidth(line) / Math.max(1, availableWidth))), 0);
   if (entry.kind === 'user') {
     const fullMessage = expandedUser || !mouseSupported;
     const message = fullMessage ? entry.text : clipped(entry.text, 1_200);
-    return wrappedRows(message, width - 2) + (entry.imageCount ?? 0) + (userMessageNeedsExpand(entry) && mouseSupported ? 1 : 0) + 1;
+    // The expand marker rides inside the message text; it costs no extra row.
+    return wrappedRows(message, width - 2) + (entry.imageCount ?? 0) + 1;
   }
   if (entry.kind === 'assistant') {
     const text = entry.text.replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd();
@@ -2632,6 +2732,9 @@ function estimateTranscriptEntryHeight(
     return wrappedRows(text, width - 2) + blocks + 1;
   }
   if (entry.kind === 'reasoning') {
+    // A hidden reasoning row occupies no space; the entry stays in place so
+    // index-keyed expansion state keeps pointing at the same rows.
+    if (reasoningHidden) return 0;
     const text = entry.text
       .replace(/\r\n?/g, '\n')
       .replace(/\n[ \t]*\n+/g, '\n')
@@ -2644,13 +2747,15 @@ function estimateTranscriptEntryHeight(
     const result = displayableCommand(entry.result).trimEnd();
     const showFullDetails = expandedTool || !mouseSupported;
     const preview = showFullDetails ? result : toolOutputPreview(result, width - 6);
-    const expandHint = toolNeedsExpand(entry, width) && mouseSupported ? 1 : 0;
     return (
       wrappedRows(showFullDetails ? command : clipTerminalWidth(command, width - 6), width - 2) +
       (preview ? wrappedRows(preview, width - 4) + 1 : 0) +
-      expandHint +
       1
     );
+  }
+  if (entry.kind === 'notice' && entry.detail) {
+    const showDetail = expandedNotice || !mouseSupported;
+    return wrappedRows(clipped(entry.text, 1_200), width - 2) + (showDetail ? wrappedRows(entry.detail, width - 4) : 0) + 1;
   }
   return wrappedRows(clipped(entry.text, 1_200), width - 2) + 1;
 }
@@ -2680,6 +2785,8 @@ const TranscriptEntry = memo(function TranscriptEntry({
   streaming = false,
   expanded = false,
   expandedMessage = false,
+  expandedNotice = false,
+  hideReasoning = false,
   dimmed = false,
   setToolRef,
   mouseSupported = false,
@@ -2691,6 +2798,8 @@ const TranscriptEntry = memo(function TranscriptEntry({
   streaming?: boolean;
   expanded?: boolean;
   expandedMessage?: boolean;
+  expandedNotice?: boolean;
+  hideReasoning?: boolean;
   dimmed?: boolean;
   setToolRef: (index: number, element: DOMElement | null) => void;
   mouseSupported?: boolean;
@@ -2715,15 +2824,15 @@ const TranscriptEntry = memo(function TranscriptEntry({
               [Image attached #{index + 1}]
             </Text>
           ))}
-          {userMessageNeedsExpand(entry) && mouseSupported ? (
-            <Text dimColor>{messageExpanded ? 'Click to collapse message' : 'Click to view full message'}</Text>
-          ) : null}
         </Box>
       </Box>
     );
   }
 
   if (entry.kind === 'reasoning') {
+    // Display-only hiding: the entry stays in the session and reappears when
+    // reasoning is switched back on. Height is already 0 via the estimator.
+    if (hideReasoning) return null;
     const text = entry.text
       .replace(/\r\n?/g, '\n')
       .replace(/\n[ \t]*\n+/g, '\n')
@@ -2754,11 +2863,10 @@ const TranscriptEntry = memo(function TranscriptEntry({
     const oneLineCommand = command.replace(/\n/g, ' ↵ ');
     const result = displayableCommand(entry.result).trimEnd();
     const activity = toolActivity(entry);
-    const canExpand = toolNeedsExpand(entry, width) && !entry.preparing;
     const showFullDetails = expanded || !mouseSupported;
     const commandLimit = Math.max(8, width - (activity.active && !showFullDetails ? toolCommandReserve(entry) : 6));
     return (
-      <Box ref={toolRef} flexDirection="column" width="100%" marginBottom={1} flexShrink={0}>
+      <Box ref={toolRef} flexDirection="column" width="100%" marginBottom={1} flexShrink={0} backgroundColor={tokens.surface}>
         <Box width="100%" flexDirection="row" flexShrink={0}>
           <Text dimColor={dimmed} {...(activity.active ? { color: tokens.accent } : {})}>
             {activity.active ? `${glyphs.spinner[0]} ` : `${glyphs.bullet} `}
@@ -2779,19 +2887,33 @@ const TranscriptEntry = memo(function TranscriptEntry({
             </Box>
           </Box>
         ) : null}
-        {subagentCall(entry) && mouseSupported ? (
-          <Text dimColor> click to open the subagent session</Text>
-        ) : canExpand && mouseSupported ? (
-          <Text dimColor> click to {expanded ? 'collapse' : 'expand'} details</Text>
+      </Box>
+    );
+  }
+
+  if (entry.kind === 'notice' && entry.detail) {
+    const showDetail = expandedNotice || !mouseSupported;
+    const mark = noticeMark(entry.tone, tokens);
+    return (
+      <Box width="100%" marginBottom={1} flexDirection="column" flexShrink={0}>
+        <Text dimColor={dimmed} {...(mark.color ? { color: mark.color } : {})}>
+          {`${mark.glyph} `}
+          {clipped(entry.text, 1_200)}
+        </Text>
+        {showDetail ? (
+          <Box width={Math.max(1, width - 2)} flexDirection="column" marginLeft={2} flexShrink={0}>
+            <Text dimColor>{entry.detail}</Text>
+          </Box>
         ) : null}
       </Box>
     );
   }
 
+  const mark = noticeMark(entry.kind === 'notice' ? entry.tone : undefined, tokens);
   return (
     <Box width="100%" marginBottom={1}>
-      <Text dimColor={dimmed}>
-        {`${glyphs.dot} `}
+      <Text dimColor={dimmed} {...(mark.color ? { color: mark.color } : {})}>
+        {`${mark.glyph} `}
         {clipped(entry.text, 1_200)}
       </Text>
     </Box>
