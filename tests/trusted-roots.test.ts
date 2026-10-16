@@ -32,11 +32,19 @@ describe('trusted path classification', () => {
   });
 
   it('reports unknown when no root can be resolved', () => {
-    expect(classifyTrustedPath(join(project, 'a.ts'), [join(root, 'missing-root')])).toBe('unknown');
+    expect(classifyTrustedPath(join(project, 'a.ts'), ['\0'])).toBe('unknown');
+  });
+
+  it('treats a missing root as outside rather than unknown', () => {
+    expect(classifyTrustedPath(join(project, 'a.ts'), [join(root, 'missing-root')])).toBe('outside');
+  });
+
+  it('treats a not-yet-created trusted root as inside', () => {
+    const futureScratch = join(tmpdir(), 'ranite', '2099-01-01');
+    expect(classifyTrustedPath(join(futureScratch, 'probe.py'), [project, futureScratch])).toBe('workspace');
   });
 
   it('includes the scratch root so throwaway work needs no prompt', () => {
-    mkdirSync(getScratchRoot(), { recursive: true });
     expect(classifyTrustedPath(join(getScratchRoot(), 'probe.py'), trustedRootsFor(project))).toBe('workspace');
     expect(classifyTrustedPath(join(other, 'notes.md'), trustedRootsFor(project))).toBe('outside');
   });

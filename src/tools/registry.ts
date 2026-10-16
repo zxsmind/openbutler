@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ToolSet } from 'ai';
+import type { JSONValue } from '@ai-sdk/provider';
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
+import { isForbiddenHostPath } from '../host-owned-paths.js';
 import { summarizeFileToolResult, summarizeImageToolResult, summarizeOwnerInboxToolResult } from '../image.js';
 import { redactToolOutput } from '../sensitive-data.js';
 import type { ToolActionState } from '../activity-ledger.js';
@@ -49,18 +51,24 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
   maxInputChars?: number;
-  /** Only offered inside a worker tool set (`allowTools`); hidden from ordinary sessions. */
-  workerOnly?: boolean;
   effect: ToolEffect;
   /**
    * Resolves the concrete execution target (typically a canonical filesystem path)
    * once, before the permission decision. The same value reaches `assess`,
-   * `autoApprove`, `workspaceScope` and `execute`, so approval and execution act on
-   * one resolution instead of each re-resolving the input.
+   * `autoApprove`, `hostPreAuthorized`, `workspaceScope` and `execute`, so
+   * approval and execution act on one resolution instead of each re-resolving
+   * the input.
    */
   resolveTarget?: (input: Record<string, unknown>) => string | null;
   assess?: (input: Record<string, unknown>, target?: string) => ToolEffect;
   autoApprove?: (input: Record<string, unknown>, target?: string) => boolean;
+  /**
+   * Host authority: true when this call touches only Ranite-owned paths
+   * (scratch, memory, settings — see host-owned-paths.ts). Unlike
+   * `autoApprove`, which is the tool's own judgment and is switched off in
+   * unattended runs, this is a host fact and stays on in background sessions.
+   */
+  hostPreAuthorized?: (input: Record<string, unknown>, target?: string) => boolean;
   /** Classifies filesystem/command effects relative to the active workspace. */
   workspaceScope?: (input: Record<string, unknown>, target?: string) => WorkspaceScope;
   /** Stop this model stream after a successful call so its caller can rebuild available tools. */
@@ -75,13 +83,26 @@ export interface ToolCallRequest {
   name: string;
   input: Record<string, unknown>;
   effect: ToolEffect;
+  /**
+   * Why this call needs a human or reviewer decision. Set by the registry when
+   * deterministic gates pass it to approve(); reviewers use it as context.
+   */
+  gateReason?: string;
 }
 
 export interface ToolApprovalOutcome {
   approved: boolean;
-  /** Reviewer rejections return to the model so it can choose a safer action. */
-  source: 'auto-review';
+  /**
+   * Who decided: the auto-reviewer, or the approval clock when nobody
+   * answered in time. Timeouts never stop the run; the model works around
+   * them like a reviewer denial, not like a human refusal.
+   */
+  source: 'auto-review' | 'approval-timeout';
   reason: string;
+  /** Risk the reviewer reported on allow; surfaced to the model with the result. */
+  risk?: string;
+  /** Seconds the approver had before an approval-timeout fired. */
+  timeoutSeconds?: number;
 }
 
 export type ToolApprovalResponse = boolean | ToolApprovalOutcome;
@@ -154,6 +175,12 @@ export class ToolRegistry {
     let queue: Promise<void> = Promise.resolve();
     let stopped = false;
     let restartRequested = false;
+    /**
+     * Per-call review notes, keyed by the exact result object `execute`
+     * returns. The model wrapper appends them as trailing text; the ledger,
+     * transcript, and notifications keep the untagged value.
+     */
+    const reviewNotes = new WeakMap<object, string>();
 
     const execute = async (definition: ToolDefinition, input: Record<string, unknown>, toolCallId?: string): Promise<unknown> => {
       if (options.signal?.aborted) return { status: 'cancelled', error: 'The run was stopped by the user.' };
@@ -180,7 +207,7 @@ export class ToolRegistry {
       } catch (error) {
         return { status: 'rejected', error: `Could not assess tool effects: ${error instanceof Error ? error.message : String(error)}` };
       }
-      const request = { requestId: randomUUID(), providerId: definition.providerId, name: definition.name, input, effect };
+      const request: ToolCallRequest = { requestId: randomUUID(), providerId: definition.providerId, name: definition.name, input, effect };
       const reportResult = (result: unknown) => {
         try {
           options.onResult(request, result, toolCallId);
@@ -221,10 +248,29 @@ export class ToolRegistry {
           scope = 'unknown';
         }
       }
+      if (target !== undefined && isForbiddenHostPath(target)) {
+        // The secret store is never visible to the agent: no read, write,
+        // edit, or search, under no approval mode and no whitelist. This is a
+        // hard denial, not an approval question, and it does not stop the run:
+        // the agent is told where keys actually come from and moves on.
+        const result = {
+          status: 'denied',
+          error:
+            "Ranite's secret store is not visible to the agent: it cannot be read, written, edited, or searched. Provider keys are configured with `ranite setup` or environment variables, never through this session. Name the provider you need; do not retry this path.",
+        };
+        try {
+          await options.onAction?.(request, 'denied', { result });
+        } catch {
+          /* keep the denied tool exchange paired */
+        }
+        reportResult(result);
+        return result;
+      }
       let autoApproved: boolean;
       try {
         autoApproved =
           options.approvalMode === 'full-access' ||
+          definition.hostPreAuthorized?.(input, target) === true ||
           (options.allowToolAutoApproval !== false && definition.autoApprove?.(input, target) === true) ||
           ((options.approvalMode === 'workspace' || options.approvalMode === 'auto-review') && scope === 'workspace') ||
           options.autoApprove?.(request) === true;
@@ -233,7 +279,10 @@ export class ToolRegistry {
       }
       let approvalResponse: ToolApprovalResponse = autoApproved;
       try {
-        if (!autoApproved) approvalResponse = await options.approve(request, options.signal);
+        if (!autoApproved) {
+          request.gateReason = scope === 'outside' ? 'outside-workspace' : scope === 'unknown' ? 'unknown-scope' : 'manual-review';
+          approvalResponse = await options.approve(request, options.signal);
+        }
       } catch (error) {
         return failClosed(`Tool approval failed; the tool was not run: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -252,14 +301,25 @@ export class ToolRegistry {
       }
       const approved = typeof approvalResponse === 'boolean' ? approvalResponse : approvalResponse.approved;
       if (!approved) {
-        const autoReviewDenied = typeof approvalResponse !== 'boolean' && approvalResponse.source === 'auto-review';
-        if (!autoReviewDenied) stopped = true;
-        let result: Record<string, unknown> = autoReviewDenied
-          ? {
-              status: 'denied',
-              error: `Auto-review denied this exact action: ${typeof approvalResponse === 'boolean' ? '' : approvalResponse.reason} Do not retry it, change its wording, or switch tools to bypass the decision. Only propose a materially safer alternative or ask the user.`,
-            }
-          : { status: 'denied', error: 'The user declined this tool call. It was not run.' };
+        const outcome = typeof approvalResponse === 'boolean' ? undefined : approvalResponse;
+        const autoReviewDenied = outcome?.source === 'auto-review';
+        const approvalTimedOut = outcome?.source === 'approval-timeout';
+        if (!autoReviewDenied && !approvalTimedOut) stopped = true;
+        let result: Record<string, unknown>;
+        if (autoReviewDenied) {
+          result = {
+            status: 'denied',
+            error: `Auto-review denied this exact action: ${outcome?.reason ?? ''} Do not retry it, change its wording, or switch tools to bypass the decision. Only propose a materially safer alternative or ask the user.`,
+          };
+        } else if (approvalTimedOut) {
+          const seconds = outcome?.timeoutSeconds ?? 60;
+          result = {
+            status: 'denied',
+            error: `No approval decision within ${seconds} seconds: nobody approved or declined, so the action was not run. This is not a refusal on the merits. Work around it: propose a materially safer alternative that needs no approval, defer the action, or ask the user about it in chat.`,
+          };
+        } else {
+          result = { status: 'denied', error: 'The user declined this tool call. It was not run.' };
+        }
         try {
           await options.onAction?.(request, 'denied', { result });
         } catch (error) {
@@ -276,6 +336,16 @@ export class ToolRegistry {
       let resultRecorded = false;
       let executionStarted = false;
       let executionCompleted = false;
+      // The model sees that a review ran and passed; the note stays out of
+      // the stored result so tool data is never polluted by it.
+      const reviewNote =
+        typeof approvalResponse !== 'boolean' && approvalResponse.source === 'auto-review' && approvalResponse.approved
+          ? `Auto-review checked and allowed this action${approvalResponse.risk ? ` (${approvalResponse.risk} risk)` : ''}.`
+          : undefined;
+      const tagReviewed = <T>(value: T): T => {
+        if (reviewNote !== undefined && typeof value === 'object' && value !== null) reviewNotes.set(value, reviewNote);
+        return value;
+      };
       try {
         await options.onAction?.(request, 'approved');
         await options.onAction?.(request, 'started');
@@ -303,7 +373,7 @@ export class ToolRegistry {
           await options.onAction?.(request, 'completed', { result: mediaSummary });
           resultRecorded = true;
           reportResult(mediaSummary);
-          return result;
+          return tagReviewed(result);
         }
         const serialized = JSON.stringify(result);
         if (serialized === undefined) {
@@ -319,7 +389,7 @@ export class ToolRegistry {
         await options.onAction?.(request, toolOutcome(result), { result: bounded });
         resultRecorded = true;
         reportResult(bounded);
-        return bounded;
+        return tagReviewed(bounded);
       } catch (error) {
         if (resultRecorded) throw error;
         if (options.signal?.aborted) {
@@ -353,7 +423,6 @@ export class ToolRegistry {
 
     for (const definition of this.definitions.values()) {
       if (options.allowTools && !options.allowTools.includes(definition.name)) continue;
-      if (definition.workerOnly === true && !options.allowTools) continue;
       const identity = `${definition.providerId}:${definition.name}`;
       const isMcpTool = definition.providerId.startsWith('mcp-');
       const rawName =
@@ -371,7 +440,26 @@ export class ToolRegistry {
       if (usedNames.has(modelName)) throw new Error(`Model tool name collision for ${identity}`);
       usedNames.add(modelName);
 
-      const toModelOutput = definition.toModelOutput;
+      const definitionModelOutput = definition.toModelOutput;
+      /**
+       * Every tool carries a model-output wrapper so a review note can ride
+       * along as trailing text. Without a note it reproduces the SDK default
+       * exactly (`{type:'json'}` keeps the raw object by reference), so
+       * untagged results cost nothing extra; only a reviewed allow becomes
+       * text with the note appended.
+       */
+      const toModelOutput = async ({ output }: { output: unknown }): Promise<ToolResultOutput> => {
+        const base = definitionModelOutput ? await definitionModelOutput(output) : undefined;
+        const note = typeof output === 'object' && output !== null ? reviewNotes.get(output) : undefined;
+        if (base !== undefined) {
+          if (note !== undefined && isTextOutput(base)) return { type: 'text', value: `${base.value}\n\n${note}` };
+          return base;
+        }
+        if (isTextOutput(output)) return note !== undefined ? { type: 'text', value: `${output.value}\n\n${note}` } : output;
+        if (note === undefined) return { type: 'json', value: (output === undefined ? null : output) as JSONValue };
+        const text = typeof output === 'string' ? output : (JSON.stringify(output) ?? String(output));
+        return { type: 'text', value: `${text}\n\n${note}` };
+      };
       modelTools[modelName] = tool({
         description: `${definition.description}\nSource: ${definition.providerId}/${definition.name}. Declared effects: ${JSON.stringify(definition.effect)}.`,
         inputSchema: jsonSchema<Record<string, unknown>>(definition.inputSchema as Parameters<typeof jsonSchema>[0]),
@@ -404,7 +492,7 @@ export class ToolRegistry {
           );
           return current;
         },
-        ...(toModelOutput ? { toModelOutput: ({ output }: { output: unknown }) => toModelOutput(output) } : {}),
+        toModelOutput,
       });
     }
 
@@ -414,6 +502,15 @@ export class ToolRegistry {
       shouldRestart: () => restartRequested,
     };
   }
+}
+
+function isTextOutput(value: unknown): value is { type: 'text'; value: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>).type === 'text' &&
+    typeof (value as Record<string, unknown>).value === 'string'
+  );
 }
 
 function toolOutcome(result: unknown): ToolActionState {

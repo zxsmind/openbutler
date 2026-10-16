@@ -12,6 +12,7 @@ import {
   writeTextAtomically,
 } from '../file-write-core.js';
 import type { MemoryIndex } from '../memory-index.js';
+import { classifyHostOwnedPath } from '../host-owned-paths.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
 import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
@@ -30,7 +31,7 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
     providerId: 'host',
     name: 'file_edit',
     description:
-      'Replace one exact occurrence of a string inside an existing local UTF-8 text file without rewriting the whole file. `old` must match the current file content exactly, including whitespace and line breaks. `occurrence` selects which match to replace (1-based, default 1); the result reports how many matches exist, the edited line, the line counts, added/removed line stats, and the sha256 of the written text, so an ambiguous edit is visible before the next call. Prefer file_edit over file_write for targeted changes; use file_write only to create a file or replace it completely. Workspace writes follow the active permission mode. Ranite-owned memory paths are pre-authorized and keep the same structure validation as file_write.',
+      'Replace one exact occurrence of a string inside an existing local UTF-8 text file without rewriting the whole file. `old` must match the current file content exactly, including whitespace and line breaks. `occurrence` selects which match to replace (1-based, default 1); the result reports how many matches exist, the edited line, the line counts, added/removed line stats, and the sha256 of the written text, so an ambiguous edit is visible before the next call. Prefer file_edit over file_write for targeted changes; use file_write only to create a file or replace it completely. Workspace writes follow the active permission mode. Ranite-owned paths (scratch, memory, settings) are pre-authorized and keep the same structure validation as file_write.',
     maxInputChars: MAX_WRITE_BYTES * 2 + 100_000,
     inputSchema: {
       type: 'object',
@@ -58,9 +59,9 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
         return 'unknown';
       }
     },
-    autoApprove: (input, target) => {
-      const path = target ?? (typeof input.path === 'string' ? input.path : '');
-      return isMemoryIndexPath(path, workspaceRoot) || isMemoryDocumentPath(path, workspaceRoot);
+    hostPreAuthorized: (input, target) => {
+      const source = target ?? (typeof input.path === 'string' ? input.path : '');
+      return classifyHostOwnedPath(source, workspaceRoot) !== null;
     },
     assess: (input, target) => {
       const path = target ?? (typeof input.path === 'string' ? input.path : workspaceRoot);

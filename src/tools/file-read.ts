@@ -15,6 +15,7 @@ import {
   type ImageSourceType,
 } from '../image.js';
 import { classifyFilePath, resolveFilePath } from '../file-write-core.js';
+import { classifyHostOwnedPath } from '../host-owned-paths.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import { isTrustedSkillResourcePath } from '../skills.js';
 import { MAX_TOOL_INPUT_CHARS, type ToolDefinition, type ToolEffect } from './registry.js';
@@ -155,6 +156,15 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
         isMemoryDocumentPath(path, workspaceRoot) ||
         isTrustedSkillResourcePath(path, workspaceRoot)
       );
+    },
+    /**
+     * Reads of the general settings file need no prompt: key material moved
+     * to the secret store, so settings.yaml carries nothing sensitive. Memory
+     * stays on autoApprove above; the secret store is denied centrally.
+     */
+    hostPreAuthorized: (input, target) => {
+      const source = target ?? (typeof input.path === 'string' ? input.path : '');
+      return classifyHostOwnedPath(source, workspaceRoot) === 'settings';
     },
     assess: (input, target) => {
       const source = typeof input.path === 'string' ? input.path : '';

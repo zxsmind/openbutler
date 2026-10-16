@@ -6,12 +6,19 @@ import { getDataPath } from './paths.js';
 /**
  * Persisted configuration.
  *
- * One file, one place, written atomically. Keys live here rather than in the
- * environment so the setup wizard has something to edit; the environment still
- * wins at resolve time for a provider the catalog names no variable for.
+ * Two files, two trust levels. `settings.yaml` holds everything the operator
+ * may show, share, or let the agent edit: providers (without key material),
+ * models, appearance, approval policy, tasks. `config.yaml` holds only secret
+ * values — provider API keys — and is never shown to the agent. The runtime
+ * shape (`SettingsStore`) is the union of the two, so every consumer keeps
+ * working unchanged.
  *
- * The schema is closed: an unknown key fails instead of being ignored. A typo
- * that silently fell back to a default is a bug that surfaces days later.
+ * Keys live in files rather than in the environment so the setup wizard has
+ * something to edit; the environment still wins at resolve time for a
+ * provider the catalog names no variable for.
+ *
+ * Both schemas are closed: an unknown key fails instead of being ignored. A
+ * typo that silently fell back to a default is a bug that surfaces days later.
  */
 
 export interface ProviderState {
@@ -41,6 +48,8 @@ export interface BackgroundTaskState {
   name: string;
   enabled: boolean;
   workspaceRoot: string;
+  /** Session that created the task; '' means no affinity (task-owned session). */
+  originSessionId: string;
   instruction: string;
   trigger: { adapter: string; options: Record<string, unknown> };
 }
@@ -51,6 +60,20 @@ export interface TelegramSettings {
   workspaceRoot: string;
   chatId?: string;
   userId?: string;
+}
+
+/**
+ * Non-secret team membership. Which team, who I am in it, where the hub
+ * lives. The bearer ticket itself lives in config.yaml, never here.
+ */
+export interface TeamSettings {
+  role: 'hub' | 'member';
+  teamName: string;
+  memberName: string;
+  hubHost: string;
+  hubPort: number;
+  /** Hub fingerprint captured at join, so a rejoin can prove it is the same hub. */
+  hubFingerprint?: string;
 }
 
 export type ApprovalMode = 'workspace' | 'auto-review' | 'full-access';
@@ -71,9 +94,9 @@ export interface SettingsStore {
    */
   defaultProvider: string;
   defaultModel: string;
-  /** Preferred reasoning variant id; unsupported choices fall back to Default per model. */
+  /** Preferred reasoning variant id; a stale id resolves to the strongest variant the model offers. */
   reasoning?: string;
-  /** Whether reasoning deltas are shown in the session transcript. */
+  /** Reasoning deltas are shown in the session transcript unless explicitly switched off. */
   showReasoning?: boolean;
   /** TUI appearance: Dark, Light, or System (System follows the terminal background). */
   theme?: 'Dark' | 'Light' | 'System';
@@ -85,14 +108,30 @@ export interface SettingsStore {
    * too small a value turns every outside action into a manual prompt.
    */
   autoReviewTimeoutSeconds?: number;
+  /**
+   * Optional provider/model the permission reviewer runs on, so a flaky
+   * reviewer can be swapped without changing the main model. Both must be
+   * set together; unset means the reviewer reuses the main model.
+   */
+  autoReviewProvider?: string;
+  autoReviewModel?: string;
+  /**
+   * How long a manual approval prompt waits for a human decision before it
+   * expires and the action is reported back to the model as unanswered. The
+   * run keeps going: an expired approval is a timeout, never an approval.
+   */
+  approvalTimeoutSeconds?: number;
   /** Explicit user tasks. An empty list starts no observers or scheduled model calls. */
   backgroundTasks: BackgroundTaskState[];
   /** Workspace used by bare Ranite launches; it does not define the machine custodian identity. */
   defaultWorkspaceRoot?: string;
   telegram?: TelegramSettings;
+  /** Team membership; absent means this machine is not in a team. */
+  team?: TeamSettings;
 }
 
 const SETTINGS_FILE = getDataPath('settings.yaml');
+const CONFIG_FILE = getDataPath('config.yaml');
 
 const KNOWN_KEYS = new Set([
   'providers',
@@ -105,11 +144,33 @@ const KNOWN_KEYS = new Set([
   'theme',
   'approvalMode',
   'autoReviewTimeoutSeconds',
+  'autoReviewProvider',
+  'autoReviewModel',
+  'approvalTimeoutSeconds',
   'backgroundTasks',
   'defaultWorkspaceRoot',
   'telegram',
+  'team',
 ]);
 const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options']);
+
+/**
+ * The secret half of the persisted configuration: provider API keys plus the
+ * team bearer ticket, nothing else. The host reads this file directly; it is
+ * never handed to the agent.
+ */
+export interface ProviderSecrets {
+  keys: string[];
+}
+
+export interface SecretsStore {
+  providers: Record<string, ProviderSecrets>;
+  /** Raw team bearer ticket; absent when this machine is not a joined member. */
+  teamTicket?: string;
+}
+
+const KNOWN_SECRET_KEYS = new Set(['providers', 'teamTicket']);
+const KNOWN_PROVIDER_SECRET_KEYS = new Set(['keys']);
 
 function isEnvironmentName(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
@@ -185,6 +246,11 @@ export function parseMcpServerState(raw: unknown, id: string): McpServerState {
 
 export function getSettingsPath(): string {
   return SETTINGS_FILE;
+}
+
+/** The secret half of the persisted configuration; never shown to the agent. */
+export function getConfigPath(): string {
+  return CONFIG_FILE;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -296,7 +362,13 @@ export function loadSettings(): SettingsStore {
     text = readFileSync(SETTINGS_FILE, 'utf8');
   } catch (error) {
     // Only a missing file means "defaults". A permissions or I/O failure must stay visible.
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultSettings();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // No settings file still leaves the secret store: keys without settings
+      // are a configured provider, not an empty one.
+      const settings = defaultSettings();
+      mergeSecrets(settings, loadSecrets());
+      return settings;
+    }
     throw error;
   }
   const parsed: unknown = parseYaml(text);
@@ -359,6 +431,32 @@ export function loadSettings(): SettingsStore {
     }
     settings.autoReviewTimeoutSeconds = parsed.autoReviewTimeoutSeconds;
   }
+  if (parsed.autoReviewProvider !== undefined || parsed.autoReviewModel !== undefined) {
+    const provider = parsed.autoReviewProvider;
+    const model = parsed.autoReviewModel;
+    if (provider === undefined && model === undefined) {
+      // Both omitted: nothing to do.
+    } else if (provider === null || model === null) {
+      delete settings.autoReviewProvider;
+      delete settings.autoReviewModel;
+    } else if (typeof provider !== 'string' || typeof model !== 'string' || !provider.trim() || !model.trim()) {
+      throw new Error('autoReviewProvider and autoReviewModel must both be non-empty strings, or both omitted.');
+    } else {
+      settings.autoReviewProvider = provider.trim();
+      settings.autoReviewModel = model.trim();
+    }
+  }
+  if (parsed.approvalTimeoutSeconds !== undefined) {
+    if (
+      typeof parsed.approvalTimeoutSeconds !== 'number' ||
+      !Number.isInteger(parsed.approvalTimeoutSeconds) ||
+      parsed.approvalTimeoutSeconds < 5 ||
+      parsed.approvalTimeoutSeconds > 600
+    ) {
+      throw new Error('approvalTimeoutSeconds must be a whole number of seconds between 5 and 600.');
+    }
+    settings.approvalTimeoutSeconds = parsed.approvalTimeoutSeconds;
+  }
   if (parsed.backgroundTasks !== undefined) {
     if (!Array.isArray(parsed.backgroundTasks) || parsed.backgroundTasks.length > 256)
       throw new Error('backgroundTasks must be a list of up to 256 tasks.');
@@ -376,17 +474,143 @@ export function loadSettings(): SettingsStore {
     settings.defaultWorkspaceRoot = parsed.defaultWorkspaceRoot;
   }
   if (parsed.telegram !== undefined) settings.telegram = parseTelegramSettings(parsed.telegram);
+  if (parsed.team !== undefined) settings.team = parseTeamSettings(parsed.team);
+  mergeSecrets(settings, loadSecrets());
   return settings;
 }
 
-/** Writes settings atomically, so a crash cannot leave a half file. */
+export function parseTeamSettings(raw: unknown): TeamSettings {
+  if (!isRecord(raw)) throw new Error('team must be a mapping.');
+  const allowed = new Set(['role', 'teamName', 'memberName', 'hubHost', 'hubPort', 'hubFingerprint']);
+  for (const key of Object.keys(raw)) if (!allowed.has(key)) throw new Error(`team.${key} is not a supported setting.`);
+  if (raw.role !== 'hub' && raw.role !== 'member') throw new Error('team.role must be hub or member.');
+  if (typeof raw.teamName !== 'string' || !raw.teamName.trim() || raw.teamName.length > 64)
+    throw new Error('team.teamName must be 1-64 characters.');
+  if (typeof raw.memberName !== 'string' || !raw.memberName.trim() || raw.memberName.length > 64)
+    throw new Error('team.memberName must be 1-64 characters.');
+  if (typeof raw.hubHost !== 'string' || !raw.hubHost.trim() || raw.hubHost.length > 512)
+    throw new Error('team.hubHost must be a non-empty host under 512 characters.');
+  if (typeof raw.hubPort !== 'number' || !Number.isInteger(raw.hubPort) || raw.hubPort < 1 || raw.hubPort > 65535)
+    throw new Error('team.hubPort must be a port 1-65535.');
+  if (raw.hubFingerprint !== undefined && (typeof raw.hubFingerprint !== 'string' || raw.hubFingerprint.length > 64))
+    throw new Error('team.hubFingerprint must be a short string.');
+  return {
+    role: raw.role,
+    teamName: raw.teamName,
+    memberName: raw.memberName,
+    hubHost: raw.hubHost,
+    hubPort: raw.hubPort,
+    ...(raw.hubFingerprint === undefined ? {} : { hubFingerprint: raw.hubFingerprint as string }),
+  };
+}
+
+/**
+ * Folds the secret store into the loaded settings. Files written before the
+ * split still carry `keys` inside settings.yaml; those keep working and move
+ * to config.yaml on the next save. When both files name keys for one
+ * provider the lists unite, so a hand edit on either side never loses a key.
+ * A provider named only by the secret store is created enabled, and joins
+ * the provider order so it stays reachable.
+ */
+function mergeSecrets(settings: SettingsStore, secrets: SecretsStore): void {
+  for (const [id, secret] of Object.entries(secrets.providers)) {
+    const existing = settings.providers[id];
+    if (existing) {
+      const merged = [...secret.keys];
+      for (const key of existing.keys) if (!merged.includes(key)) merged.push(key);
+      existing.keys = merged;
+    } else {
+      settings.providers[id] = { enabled: true, keys: [...secret.keys] };
+    }
+    if (!settings.providerOrder.includes(id)) settings.providerOrder.push(id);
+  }
+}
+
+/** Reads the secret store from disk, or empty when the file is absent. */
+export function loadSecrets(): SecretsStore {
+  let text: string;
+  try {
+    text = readFileSync(CONFIG_FILE, 'utf8');
+  } catch (error) {
+    // Only a missing file means "no secrets". A permissions or I/O failure must stay visible.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { providers: {} };
+    throw error;
+  }
+  const parsed: unknown = parseYaml(text);
+  if (parsed === null || parsed === undefined) return { providers: {} };
+  if (!isRecord(parsed)) throw new Error(`${CONFIG_FILE} must be a mapping`);
+  for (const key of Object.keys(parsed)) {
+    if (!KNOWN_SECRET_KEYS.has(key)) {
+      throw new Error(`${key} is not a secret ranite knows (known: ${[...KNOWN_SECRET_KEYS].join(', ')})`);
+    }
+  }
+  const secrets: SecretsStore = { providers: {} };
+  if (isRecord(parsed.providers)) {
+    for (const [id, raw] of Object.entries(parsed.providers)) secrets.providers[id] = parseProviderSecrets(raw, id);
+  }
+  if (parsed.teamTicket !== undefined) {
+    if (typeof parsed.teamTicket !== 'string' || !parsed.teamTicket || parsed.teamTicket.length > 512)
+      throw new Error('config teamTicket must be a non-empty string under 512 characters.');
+    secrets.teamTicket = parsed.teamTicket;
+  }
+  return secrets;
+}
+
+function parseProviderSecrets(raw: unknown, id: string): ProviderSecrets {
+  if (!isRecord(raw)) throw new Error(`config providers.${id} must be a mapping`);
+  for (const key of Object.keys(raw)) {
+    if (!KNOWN_PROVIDER_SECRET_KEYS.has(key)) {
+      throw new Error(`config providers.${id}.${key} is not a secret ranite knows (known: ${[...KNOWN_PROVIDER_SECRET_KEYS].join(', ')})`);
+    }
+  }
+  return { keys: stringArray(raw.keys, `config providers.${id}.keys`) };
+}
+
+/** Writes a YAML document atomically, so a crash cannot leave a half file. */
+function atomicWriteYaml(path: string, document: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempFile = `${path}.tmp`;
+  writeFileSync(tempFile, dumpYaml(document, { lineWidth: 120 }), 'utf8');
+  // Config entries hold API key material, so both files are owner-only like the
+  // allowlist and the ledger. Note that on Windows `chmod` only toggles the read-only
+  // attribute: the data directory's ACL is what actually governs access there.
+  try {
+    chmodSync(tempFile, 0o600);
+  } catch {
+    /* Windows uses the directory ACL. */
+  }
+  renameSync(tempFile, path);
+}
+
+/**
+ * Writes the whole secret store. Prefer saveSettings for settings changes;
+ * use this for ticket-only updates so callers never touch provider keys.
+ */
+export function saveSecrets(secrets: SecretsStore): void {
+  const providers: Record<string, ProviderSecrets> = {};
+  for (const [id, secret] of Object.entries(secrets.providers)) providers[id] = { keys: [...secret.keys] };
+  atomicWriteYaml(CONFIG_FILE, { providers, ...(secrets.teamTicket ? { teamTicket: secrets.teamTicket } : {}) });
+}
+
+/**
+ * Writes settings atomically. Key material goes to config.yaml; everything
+ * else goes to settings.yaml, so a pre-split file is cleaned the first time
+ * it is saved.
+ */
 export function saveSettings(settings: SettingsStore): void {
   const ordered: Record<string, ProviderState> = {};
   for (const id of [...settings.providerOrder, ...Object.keys(settings.providers)]) {
     if (id in settings.providers) ordered[id] = settings.providers[id];
   }
+  const settingsProviders: Record<string, Omit<ProviderState, 'keys'>> = {};
+  const secretProviders: Record<string, ProviderSecrets> = {};
+  for (const [id, provider] of Object.entries(ordered)) {
+    const { keys, ...rest } = provider;
+    settingsProviders[id] = rest;
+    if (keys.length > 0) secretProviders[id] = { keys: [...keys] };
+  }
   const document = {
-    providers: ordered,
+    providers: settingsProviders,
     mcpServers: settings.mcpServers,
     providerOrder: Object.keys(ordered),
     defaultProvider: settings.defaultProvider,
@@ -396,27 +620,29 @@ export function saveSettings(settings: SettingsStore): void {
     ...(settings.theme ? { theme: settings.theme } : {}),
     approvalMode: settings.approvalMode,
     ...(settings.autoReviewTimeoutSeconds === undefined ? {} : { autoReviewTimeoutSeconds: settings.autoReviewTimeoutSeconds }),
+    ...(settings.autoReviewProvider === undefined ? {} : { autoReviewProvider: settings.autoReviewProvider }),
+    ...(settings.autoReviewModel === undefined ? {} : { autoReviewModel: settings.autoReviewModel }),
+    ...(settings.approvalTimeoutSeconds === undefined ? {} : { approvalTimeoutSeconds: settings.approvalTimeoutSeconds }),
     backgroundTasks: settings.backgroundTasks,
     ...(settings.defaultWorkspaceRoot ? { defaultWorkspaceRoot: settings.defaultWorkspaceRoot } : {}),
     ...(settings.telegram ? { telegram: settings.telegram } : {}),
+    ...(settings.team ? { team: settings.team } : {}),
   };
-  mkdirSync(dirname(SETTINGS_FILE), { recursive: true });
-  const tempFile = `${SETTINGS_FILE}.tmp`;
-  writeFileSync(tempFile, dumpYaml(document, { lineWidth: 120 }), 'utf8');
-  // Provider entries hold API key material, so the file is owner-only like the
-  // allowlist and the ledger. Note that on Windows `chmod` only toggles the read-only
-  // attribute: the data directory's ACL is what actually governs access there.
+  atomicWriteYaml(SETTINGS_FILE, document);
+  // saveSettings rewrites the secret file wholesale, so it carries the team
+  // ticket through: a settings save must never log the machine out of its team.
+  let teamTicket: string | undefined;
   try {
-    chmodSync(tempFile, 0o600);
+    teamTicket = loadSecrets().teamTicket;
   } catch {
-    /* Windows uses the directory ACL. */
+    teamTicket = undefined;
   }
-  renameSync(tempFile, SETTINGS_FILE);
+  atomicWriteYaml(CONFIG_FILE, { providers: secretProviders, ...(teamTicket ? { teamTicket } : {}) });
 }
 
 export function parseBackgroundTaskState(raw: unknown): BackgroundTaskState {
   if (!isRecord(raw)) throw new Error('A background task must be a mapping.');
-  const allowed = new Set(['id', 'name', 'enabled', 'workspaceRoot', 'instruction', 'trigger']);
+  const allowed = new Set(['id', 'name', 'enabled', 'workspaceRoot', 'originSessionId', 'instruction', 'trigger']);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) throw new Error(`background task ${key} is not a supported setting.`);
   if (typeof raw.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(raw.id))
     throw new Error('Background task id must use 1-64 letters, digits, underscores, or dashes.');
@@ -425,6 +651,8 @@ export function parseBackgroundTaskState(raw: unknown): BackgroundTaskState {
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('Background task enabled must be a boolean.');
   if (typeof raw.workspaceRoot !== 'string' || raw.workspaceRoot.length > 32_768 || !isAbsolute(raw.workspaceRoot))
     throw new Error('Background task workspaceRoot must be an absolute path.');
+  if (raw.originSessionId !== undefined && (typeof raw.originSessionId !== 'string' || raw.originSessionId.length > 256))
+    throw new Error('Background task originSessionId must be a session id under 256 characters.');
   if (typeof raw.instruction !== 'string' || !raw.instruction.trim() || raw.instruction.length > 16_000)
     throw new Error('Background task instruction must use 1-16000 characters.');
   if (!isRecord(raw.trigger) || Object.keys(raw.trigger).some((key) => key !== 'adapter' && key !== 'options'))
@@ -438,6 +666,7 @@ export function parseBackgroundTaskState(raw: unknown): BackgroundTaskState {
     name: raw.name,
     enabled: raw.enabled ?? true,
     workspaceRoot: raw.workspaceRoot,
+    originSessionId: typeof raw.originSessionId === 'string' ? raw.originSessionId : '',
     instruction: raw.instruction,
     trigger: { adapter: raw.trigger.adapter, options: raw.trigger.options },
   };

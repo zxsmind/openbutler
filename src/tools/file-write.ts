@@ -11,6 +11,7 @@ import {
   validateTextWrite,
   writeTextAtomically,
 } from '../file-write-core.js';
+import { classifyHostOwnedPath } from '../host-owned-paths.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import type { MemoryIndex } from '../memory-index.js';
 import { type ToolDefinition, type ToolEffect } from './registry.js';
@@ -30,7 +31,7 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
     providerId: 'host',
     name: 'file_write',
     description:
-      'Create or replace a local UTF-8 text file with the supplied content; this replaces the entire file. A successful write returns sha256 for the exact UTF-8 bytes written, the line counts, and added/removed line stats; file_read.sha256 reports the current on-disk file hash. Workspace writes follow the active permission mode. Ranite-owned memory paths are pre-authorized. For memory, use the paths and the flat summary-plus-bullets schema in the system instructions; keep MEMORY.md as one concise index and edit existing scoped notes instead of making duplicate indexes.',
+      'Create or replace a local UTF-8 text file with the supplied content; this replaces the entire file. A successful write returns sha256 for the exact UTF-8 bytes written, the line counts, and added/removed line stats; file_read.sha256 reports the current on-disk file hash. Workspace writes follow the active permission mode. Ranite-owned paths (scratch, memory, settings) are pre-authorized. For memory, use the paths and the flat summary-plus-bullets schema in the system instructions; keep MEMORY.md as one concise index and edit existing scoped notes instead of making duplicate indexes.',
     maxInputChars: MAX_WRITE_BYTES + 100_000,
     inputSchema: {
       type: 'object',
@@ -52,9 +53,9 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
         return 'unknown';
       }
     },
-    autoApprove: (input, target) => {
-      const path = target ?? (typeof input.path === 'string' ? input.path : '');
-      return isMemoryIndexPath(path, workspaceRoot) || isMemoryDocumentPath(path, workspaceRoot);
+    hostPreAuthorized: (input, target) => {
+      const source = target ?? (typeof input.path === 'string' ? input.path : '');
+      return classifyHostOwnedPath(source, workspaceRoot) !== null;
     },
     assess: (input, target) => {
       const path = target ?? (typeof input.path === 'string' ? resolveFilePath(input.path, workspaceRoot) : workspaceRoot);

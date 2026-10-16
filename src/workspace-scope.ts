@@ -20,8 +20,13 @@ export function classifyWorkspacePath(path: string, workspaceRoot: string): Work
  * Classifies against every root the owner has already trusted for this turn:
  * the directory Ranite was launched in (or an explicit `--workspace`) and the
  * agent's own scratch area. Any single match keeps the operation inside the
- * approved boundary. A root that cannot be resolved is skipped rather than
- * treated as a denial.
+ * approved boundary.
+ *
+ * Roots resolve missing-tolerantly through existing parents, the same way
+ * the target does: a trusted root that does not exist yet (the dated scratch
+ * directory on a fresh day) still contains its future children lexically, so
+ * the first write of the day classifies instead of failing into `outside`.
+ * Only a root that cannot be resolved at all is skipped.
  */
 export function classifyTrustedPath(path: string, roots: readonly string[]): WorkspaceScope {
   const target = resolveThroughExistingParents(path);
@@ -29,17 +34,23 @@ export function classifyTrustedPath(path: string, roots: readonly string[]): Wor
   let resolvedAny = false;
   for (const root of roots) {
     try {
-      const resolvedRoot = realpathSync(root);
+      const resolvedRoot = resolveThroughExistingParents(root);
+      if (resolvedRoot === null) continue;
       resolvedAny = true;
       if (isWithinResolved(target, resolvedRoot)) return 'workspace';
     } catch {
-      // A root that no longer exists cannot contain the target.
+      // A root that cannot be resolved cannot contain the target.
     }
   }
   return resolvedAny ? 'outside' : 'unknown';
 }
 
-/** The roots that never need a permission prompt: the turn scope plus scratch. */
+/**
+ * The roots that never need a permission prompt: the turn scope plus scratch.
+ * This is the scope mechanism's view; the full pre-authorized set (scratch,
+ * memory, settings) lives in host-owned-paths.ts, which file tools consult
+ * for paths outside every root here.
+ */
 export function trustedRootsFor(workspaceRoot: string): string[] {
   return [workspaceRoot, getScratchRoot()];
 }

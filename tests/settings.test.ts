@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,14 @@ async function loadConfigEdit(): Promise<typeof import('../src/cli/config-edit.j
 
 function writeSettings(yaml: string): void {
   writeFileSync(join(dataDir, 'settings.yaml'), yaml, 'utf8');
+}
+
+function writeConfig(yaml: string): void {
+  writeFileSync(join(dataDir, 'config.yaml'), yaml, 'utf8');
+}
+
+function readSettingsFile(): string {
+  return readFileSync(join(dataDir, 'settings.yaml'), 'utf8');
 }
 
 describe('settings round trip', () => {
@@ -91,6 +99,68 @@ describe('settings round trip', () => {
   });
 });
 
+describe('team settings', () => {
+  const teamYaml = [
+    'team:',
+    '  role: member',
+    '  teamName: MyTeam',
+    '  memberName: Murphy-Ranite',
+    '  hubHost: 100.64.0.1',
+    '  hubPort: 47821',
+    '',
+  ].join('\n');
+
+  it('round-trips the non-secret team block', async () => {
+    writeSettings(teamYaml);
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().team).toEqual({
+      role: 'member',
+      teamName: 'MyTeam',
+      memberName: 'Murphy-Ranite',
+      hubHost: '100.64.0.1',
+      hubPort: 47821,
+    });
+  });
+
+  it('keeps the team ticket in config.yaml and never in settings.yaml', async () => {
+    writeSettings(teamYaml);
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    settings.saveSettings(loaded);
+    settings.saveSecrets({ providers: {}, teamTicket: 'rt_secret_ticket' });
+    expect(readFileSync(join(dataDir, 'config.yaml'), 'utf8')).toContain('teamTicket: rt_secret_ticket');
+    expect(readSettingsFile()).not.toContain('rt_secret_ticket');
+    expect(settings.loadSecrets().teamTicket).toBe('rt_secret_ticket');
+  });
+
+  it('carries the team ticket through a settings save so a save never logs the machine out', async () => {
+    writeSettings(teamYaml);
+    const settings = await loadSettingsModule();
+    settings.saveSecrets({ providers: {}, teamTicket: 'rt_secret_ticket' });
+    // A later, unrelated settings change rewrites both files.
+    const loaded = settings.loadSettings();
+    loaded.defaultModel = 'gpt-5';
+    settings.saveSettings(loaded);
+    expect(settings.loadSecrets().teamTicket).toBe('rt_secret_ticket');
+    expect(readFileSync(join(dataDir, 'config.yaml'), 'utf8')).toContain('rt_secret_ticket');
+  });
+
+  it('rejects an invalid team block', async () => {
+    writeSettings(['team:', '  role: leader', '  teamName: X', '  memberName: Y', '  hubHost: h', '  hubPort: 1', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/team.role must be hub or member/);
+  });
+
+  it('round-trips the hub fingerprint used to verify a rejoin', async () => {
+    writeSettings([...teamYaml.trimEnd().split('\n'), '  hubFingerprint: A1B2:C3D4:E5F6', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    expect(loaded.team?.hubFingerprint).toBe('A1B2:C3D4:E5F6');
+    settings.saveSettings(loaded);
+    expect(settings.loadSettings().team?.hubFingerprint).toBe('A1B2:C3D4:E5F6');
+  });
+});
+
 describe('auto-review timeout setting', () => {
   it('round-trips a configured timeout', async () => {
     writeSettings(['approvalMode: auto-review', 'autoReviewTimeoutSeconds: 45', ''].join('\n'));
@@ -110,6 +180,56 @@ describe('auto-review timeout setting', () => {
     writeSettings(['autoReviewTimeoutSeconds: 12.5', ''].join('\n'));
     const settings = await loadSettingsModule();
     expect(() => settings.loadSettings()).toThrow(/autoReviewTimeoutSeconds/);
+  });
+});
+
+describe('approval timeout setting', () => {
+  it('round-trips a configured timeout', async () => {
+    writeSettings(['approvalTimeoutSeconds: 90', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().approvalTimeoutSeconds).toBe(90);
+    settings.saveSettings(settings.loadSettings());
+    expect(settings.loadSettings().approvalTimeoutSeconds).toBe(90);
+  });
+
+  it('leaves the timeout unset by default', async () => {
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().approvalTimeoutSeconds).toBeUndefined();
+  });
+
+  it('rejects a timeout outside the 5-600 second range', async () => {
+    writeSettings(['approvalTimeoutSeconds: 2', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/approvalTimeoutSeconds must be a whole number of seconds between 5 and 600/);
+  });
+
+  it('rejects a non-integer timeout', async () => {
+    writeSettings(['approvalTimeoutSeconds: 12.5', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/approvalTimeoutSeconds/);
+  });
+});
+
+describe('auto-review model override', () => {
+  it('round-trips a configured provider and model', async () => {
+    writeSettings(['autoReviewProvider: vercel', 'autoReviewModel: alibaba/qwen3.8-omni-flash', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().autoReviewProvider).toBe('vercel');
+    expect(settings.loadSettings().autoReviewModel).toBe('alibaba/qwen3.8-omni-flash');
+    settings.saveSettings(settings.loadSettings());
+    expect(settings.loadSettings().autoReviewModel).toBe('alibaba/qwen3.8-omni-flash');
+  });
+
+  it('leaves the override unset by default', async () => {
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().autoReviewProvider).toBeUndefined();
+    expect(settings.loadSettings().autoReviewModel).toBeUndefined();
+  });
+
+  it('rejects a lone provider without a model', async () => {
+    writeSettings(['autoReviewProvider: vercel', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/autoReviewProvider and autoReviewModel must both be/);
   });
 });
 
@@ -199,5 +319,120 @@ describe('writing settings', () => {
     expect(store.defaultProvider).toBe('b');
     expect(store.defaultModel).toBe('claude-opus-4-5');
     expect(setDefaultModel(store, 'nope', 'x')).toBe(false);
+  });
+});
+
+describe('settings/config split', () => {
+  it('keeps key material out of settings.yaml on save', async () => {
+    const settings = await loadSettingsModule();
+    const store = settings.defaultSettings();
+    store.providers.openai = { enabled: true, keys: ['sk-secret'] };
+    store.providerOrder = ['openai'];
+    settings.saveSettings(store);
+    /* settings.yaml must be safe to show, share, or hand to the agent. */
+    expect(readSettingsFile()).not.toContain('sk-secret');
+    expect(readSettingsFile()).not.toContain('keys:');
+    const loaded = settings.loadSettings();
+    expect(loaded.providers.openai?.keys).toEqual(['sk-secret']);
+  });
+
+  it('merges keys from config.yaml into the loaded store', async () => {
+    writeSettings(['providers:', '  openai:', '    enabled: true', 'defaultProvider: openai', ''].join('\n'));
+    writeConfig(['providers:', '  openai:', '    keys: [sk-from-config]', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    expect(loaded.providers.openai?.keys).toEqual(['sk-from-config']);
+    expect(loaded.providers.openai?.enabled).toBe(true);
+  });
+
+  it('creates a config-only provider as enabled and reachable', async () => {
+    writeSettings(['defaultProvider: ghost', ''].join('\n'));
+    writeConfig(['providers:', '  ghost:', '    keys: [sk-ghost]', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    expect(loaded.providers.ghost?.keys).toEqual(['sk-ghost']);
+    expect(loaded.providers.ghost?.enabled).toBe(true);
+    expect(loaded.providerOrder).toContain('ghost');
+  });
+
+  it('unites keys from both files instead of losing either side', async () => {
+    writeSettings(['providers:', '  openai:', '    keys: [sk-old]', ''].join('\n'));
+    writeConfig(['providers:', '  openai:', '    keys: [sk-new]', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().providers.openai?.keys).toEqual(['sk-new', 'sk-old']);
+  });
+
+  it('migrates a pre-split file on save', async () => {
+    writeSettings(['providers:', '  openai:', '    keys: [sk-legacy]', 'defaultProvider: openai', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    /* Old files keep working before the first save. */
+    expect(settings.loadSettings().providers.openai?.keys).toEqual(['sk-legacy']);
+    settings.saveSettings(settings.loadSettings());
+    /* After the save the keys live in config.yaml only. */
+    expect(readSettingsFile()).not.toContain('sk-legacy');
+    expect(settings.loadSettings().providers.openai?.keys).toEqual(['sk-legacy']);
+    expect(readFileSync(join(dataDir, 'config.yaml'), 'utf8')).toContain('sk-legacy');
+  });
+
+  it('rejects unknown keys in config.yaml rather than ignoring them', async () => {
+    writeConfig(['providers:', '  openai:', '    keys: [k]', '    modles: []', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/config providers\.openai\.modles is not a secret ranite knows/);
+  });
+
+  it('rejects an unknown top-level key in config.yaml', async () => {
+    writeConfig(['apiKeys: []', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/apiKeys is not a secret ranite knows/);
+  });
+
+  it('exposes the config path next to the settings path', async () => {
+    const settings = await loadSettingsModule();
+    expect(settings.getConfigPath()).toBe(join(dataDir, 'config.yaml'));
+  });
+});
+
+describe('background task parsing', () => {
+  const taskYaml = (extra: string): string =>
+    [
+      'backgroundTasks:',
+      '  - id: nightly',
+      '    name: Nightly check',
+      `    workspaceRoot: ${join(dataDir, 'work')}`,
+      ...extra.split('\n'),
+      '',
+    ].join('\n');
+
+  it('defaults a missing originSessionId to empty (no affinity)', async () => {
+    writeSettings(taskYaml('    instruction: Check and report.\n    trigger: {adapter: manual, options: {}}'));
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().backgroundTasks).toEqual([
+      {
+        id: 'nightly',
+        name: 'Nightly check',
+        enabled: true,
+        workspaceRoot: join(dataDir, 'work'),
+        originSessionId: '',
+        instruction: 'Check and report.',
+        trigger: { adapter: 'manual', options: {} },
+      },
+    ]);
+  });
+
+  it('keeps a provided originSessionId through a round trip', async () => {
+    writeSettings(
+      taskYaml('    originSessionId: session-abc\n    instruction: Check and report.\n    trigger: {adapter: manual, options: {}}'),
+    );
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    expect(loaded.backgroundTasks[0]?.originSessionId).toBe('session-abc');
+    settings.saveSettings(loaded);
+    expect(settings.loadSettings().backgroundTasks[0]?.originSessionId).toBe('session-abc');
+  });
+
+  it('rejects an unknown task key', async () => {
+    writeSettings(taskYaml('    instruction: Check.\n    trigger: {adapter: manual, options: {}}\n    schedule: daily'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/background task schedule is not a supported setting/);
   });
 });

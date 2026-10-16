@@ -77,12 +77,15 @@ The trusted boundary is the directory you launched Ranite in, so launching it in
 
 In an interactive session, use `/provider` to choose a provider, add its API key, load its tool-capable models, and select one. Use `/models` to browse models for configured providers and switch the active model. For a self-hosted endpoint or a model not listed in the catalog, configure the provider with `ranite setup`; `/models` also offers manual model-ID entry for the active provider.
 
+Provider API keys live in `config.yaml`, separate from the general `settings.yaml`; the agent session can never open that file. Manage keys with `ranite keys add|list|remove` (masked prompt, keys never passed as arguments). MCP server credentials are host environment variables referenced by name, never stored in either file.
+
 ## CLI
 
 ```text
 ranite                    Open an interactive terminal session
 ranite --workspace <path> Attach the shared custodian with this workspace scope
 ranite workspace default <path> Set the scope for bare Ranite launches
+ranite keys add|list|remove Manage provider API keys (masked prompt, never as arguments)
 ranite --c "<request>"    Run a one-shot request
 ranite permissions        Show the current permission mode and auto-review history
 ranite permissions --review-timeout 30   Raise the auto-review decision timeout (seconds)
