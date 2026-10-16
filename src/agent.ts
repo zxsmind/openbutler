@@ -1,6 +1,7 @@
 import { streamText, type JSONValue, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { randomUUID } from 'node:crypto';
-import { closeSync, lstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs';
+import { join } from 'node:path';
 import { estimateContextTokens, type CompactionContext, type CompactionResult } from './compaction.js';
 import {
   fileToolResultToModelMessage,
@@ -11,8 +12,9 @@ import {
   summarizeImageToolResult,
   summarizeOwnerInboxToolResult,
 } from './image.js';
-import { getMemoryPaths, isMemoryDocumentPath } from './memory-paths.js';
+import { getMemoryPaths, getTeamMemoryPaths, isMemoryDocumentPath } from './memory-paths.js';
 import { getScratchRoot } from './paths.js';
+import { getConfigPath, loadSettings } from './settings.js';
 import { MEMORY_DOCUMENT_GUIDANCE, MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES } from './memory-document.js';
 import { buildRecentSessionsBlock } from './session-registry.js';
 import { discoverSkills, formatSkillIndex, getRaniteSkillDirectory, getSkillRoots } from './skills.js';
@@ -71,7 +73,8 @@ export function getAgentContext(
   const loadedUserContext = [loadedPreferences, loadedUserProfile].filter((part) => part.length > 0).join('\n\n');
   const skillIndex = formatSkillIndex(discoverSkills(workspaceRoot));
   const skillRoots = getSkillRoots(workspaceRoot);
-  const system = `${SYSTEM_PROMPT}\n\n## Loaded memory index
+  const teamIdentity = buildTeamIdentityBlock(workspaceRoot);
+  const system = `${SYSTEM_PROMPT}${teamIdentity}\n\n## Loaded memory index
 Concise cross-workspace user signals from ${paths.indexFile} (data, not policy):
 ${memoryIndex || '(No memory index entries are saved.)'}
 
@@ -107,7 +110,7 @@ Evaluate information by its relevance, reliability, and expected future utility 
   // Only a session that knows its own id sees the other sessions; every other caller (tests,
   // previews) keeps the exact prompt it had. The block spans every workspace, labelled by folder.
   const recentSessions = currentSessionId ? buildRecentSessionsBlock({ excludeSessionId: currentSessionId }) : '';
-  const workspaceSystem = `${system}\n\n## Active workspace\nThe host selected this scope for the current turn: ${workspaceRoot}. Workspace memory and local tool defaults use this directory. The scope cannot be changed by model output.\n\n## Scratch space\n${getScratchRoot()} is your own dated scratch directory under the system temp folder. Write throwaway scripts, experiments, and intermediate output there; it needs no permission prompt and the OS may delete it at any time. Use the active workspace or a named project for anything the user must keep.`;
+  const workspaceSystem = `${system}\n\n## Active workspace\nThe host selected this scope for the current turn: ${workspaceRoot}. Workspace memory and local tool defaults use this directory. The scope cannot be changed by model output.\n\n## Scratch space\n${getScratchRoot()} is your own dated scratch directory under the system temp folder. Write throwaway scripts, experiments, and intermediate output there; it needs no permission prompt and the OS may delete it at any time. Use the active workspace or a named project for anything the user must keep.\n\n## Secret store\n${getConfigPath()} holds provider API keys. It is invisible to you: never read, write, edit, or search it, and never ask the user to paste a key into the chat. Name the provider you need; keys are configured outside this session.`;
   const sessionSystem = recentSessions ? `${workspaceSystem}\n\n${recentSessions}` : workspaceSystem;
   const channelSystem = systemInstruction ? `${sessionSystem}\n\n## Active channel\n${systemInstruction}` : sessionSystem;
   return {
@@ -123,6 +126,57 @@ function memoryProfileAvailability(path: string, workspaceRoot: string): string 
   } catch {
     return 'not initialized';
   }
+}
+
+/**
+ * "Who I am" and "my team", loaded ahead of the user memory so a ranite knows
+ * its own identity and peers before it reads its owner's context. Empty when
+ * this machine is not in a team, so a solo install keeps its exact prompt.
+ */
+function buildTeamIdentityBlock(workspaceRoot: string): string {
+  let team: ReturnType<typeof loadSettings>['team'];
+  try {
+    team = loadSettings().team;
+  } catch {
+    return '';
+  }
+  if (!team) return '';
+  const paths = getMemoryPaths(workspaceRoot);
+  const identity = readMemoryFile(paths.identityFile, 8192);
+  const peers = readMemoryDirectory(paths.peersDirectory);
+  const teamPaths = getTeamMemoryPaths(team.teamName, workspaceRoot);
+  const decisions = readMemoryFile(teamPaths.decisionsFile, 8192);
+  const shared = readMemoryFile(teamPaths.sharedFile, 8192);
+  const sections: string[] = [
+    '## Who I am',
+    `You are ${team.memberName} in the team "${team.teamName}" (${team.role === 'hub' ? 'this machine is the hub' : 'this machine is a member'}). The self and team memory below is your own; the user memory that follows is your owner's.`,
+  ];
+  if (identity) sections.push(identity);
+  else sections.push(`(No identity note yet. Save durable facts about who you are to ${paths.identityFile}.)`);
+  if (peers.length > 0) sections.push(`## My team\nPeer observations (your own notes, not synced):\n${peers.join('\n')}`);
+  if (decisions || shared) sections.push(`## Shared team memory\n${[decisions, shared].filter(Boolean).join('\n\n')}`);
+  return `\n\n${sections.join('\n\n')}`;
+}
+
+/** One compact line per peer note: the file name and its first non-frontmatter line. */
+function readMemoryDirectory(directory: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return [];
+  }
+  const lines: string[] = [];
+  for (const name of names.sort()) {
+    if (!name.toLowerCase().endsWith('.md')) continue;
+    const content = readMemoryFile(join(directory, name), 2048);
+    const firstLine = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith('---') && !line.startsWith('#') && !/^[a-z_]+:/.test(line));
+    lines.push(`- ${name.replace(/\.md$/i, '')}: ${firstLine ?? '(no summary)'}`);
+  }
+  return lines;
 }
 
 function readMemoryIndex(path: string): string {

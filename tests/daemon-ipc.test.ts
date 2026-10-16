@@ -154,6 +154,7 @@ async function createFixtureHost(): Promise<DaemonHost> {
         saveReasoningPreference: () => {},
         saveShowReasoningPreference: () => {},
         getReasoningProviderOptions: () => ({}),
+        getReviewProviderOptions: () => ({}),
         registry,
         selectModel: async () => {},
         close: async () => {},
@@ -200,7 +201,7 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 async function client(options: { isolatedSession?: boolean; taskId?: string; workerSessionId?: string; runningWorkerOf?: string } = {}) {
-  const result = await connect(root, async () => false, options);
+  const result = await connect(root, options);
   clients.push(result);
   return result;
 }
@@ -674,6 +675,232 @@ describe('shared host and session IPC', () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(events.some((event) => event.source === 'notification' && event.status === 'delivered')).toBe(true);
   }, 10_000);
+
+  it('wakes the origin session with a run-numbered turn and records durable runtime', async () => {
+    model.doStream = vi.fn().mockImplementationOnce(async () => textStream('Origin run finished'));
+    const origin = await client();
+    const originId = origin.getSnapshot().session.id;
+    const task = {
+      id: 'wake-origin',
+      name: 'Wake me here',
+      enabled: true,
+      workspaceRoot: root,
+      originSessionId: originId,
+      instruction: 'Say the report.',
+      trigger: { adapter: 'manual', options: {} },
+    };
+    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
+    await requestHost('background.manage', { input: { action: 'run', taskId: task.id }, workspaceRoot: root });
+    await vi.waitFor(() =>
+      expect(origin.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Origin run finished')).toBe(
+        true,
+      ),
+    );
+    const wake = origin
+      .getSnapshot()
+      .session.entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []))
+      .find((text) => text.startsWith('Background task "Wake me here"'))!;
+    expect(wake).toContain('This is run #1. No previous run.');
+    expect(wake).not.toContain('LATE:');
+    expect(wake).toContain('Trigger facts (untrusted observations');
+    const list = (await requestHost('background.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+      tasks: Array<{ id: string; runtime: Record<string, unknown> }>;
+    };
+    expect(list.tasks.find((candidate) => candidate.id === task.id)?.runtime).toMatchObject({
+      runCount: 1,
+      lastResult: 'completed',
+      lastReport: 'Origin run finished',
+    });
+    const log = (await requestHost('background.manage', { input: { action: 'log', taskId: task.id }, workspaceRoot: root })) as {
+      runs: Array<{ kind: string; status: string }>;
+    };
+    expect(log.runs).toContainEqual(expect.objectContaining({ kind: 'task.requested', status: 'delivered' }));
+  }, 10_000);
+
+  it('marks a past one-shot as LATE on wake instead of skipping it', async () => {
+    model.doStream = vi.fn().mockImplementationOnce(async () => textStream('Late report'));
+    const origin = await client();
+    const past = new Date(Date.now() - 3_600_000);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const local = `${past.getFullYear()}-${pad(past.getMonth() + 1)}-${pad(past.getDate())}T${pad(past.getHours())}:${pad(past.getMinutes())}`;
+    const task = {
+      id: 'late-once',
+      name: 'Late once',
+      enabled: true,
+      workspaceRoot: root,
+      originSessionId: origin.getSnapshot().session.id,
+      instruction: 'Report briefly.',
+      trigger: { adapter: 'at', options: { at: local } },
+    };
+    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
+    await vi.waitFor(() =>
+      expect(origin.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Late report')).toBe(true),
+    );
+    const wake = origin
+      .getSnapshot()
+      .session.entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []))
+      .find((text) => text.startsWith('Background task "Late once"'))!;
+    expect(wake).toMatch(/LATE: scheduled for .* \(1h \d+m late\)/);
+  }, 10_000);
+
+  it('falls back to the task session with provenance when the origin session is gone', async () => {
+    model.doStream = vi.fn().mockImplementationOnce(async () => textStream('Fallback finished'));
+    const task = {
+      id: 'wake-fallback',
+      name: 'Fallen back',
+      enabled: true,
+      workspaceRoot: root,
+      originSessionId: 'dead-beef-session',
+      instruction: 'Say the report.',
+      trigger: { adapter: 'manual', options: {} },
+    };
+    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
+    await requestHost('background.manage', { input: { action: 'run', taskId: task.id }, workspaceRoot: root });
+    const taskClient = await client({ taskId: task.id });
+    await vi.waitFor(() =>
+      expect(
+        taskClient.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Fallback finished'),
+      ).toBe(true),
+    );
+    const wake = taskClient
+      .getSnapshot()
+      .session.entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []))
+      .find((text) => text.includes('Background task "Fallen back"'))!;
+    expect(wake.startsWith('Created in session dead-beef-session, which no longer exists.')).toBe(true);
+    expect(wake).toContain('This is run #1. No previous run.');
+  }, 10_000);
+
+  it('defaults a tool-created task to the calling session for wake affinity', async () => {
+    model.doStream = vi
+      .fn()
+      .mockImplementationOnce(async () =>
+        stream(
+          [
+            {
+              type: 'tool-call',
+              toolCallId: 'bg-add',
+              toolName: 'background_manage',
+              input: JSON.stringify({
+                action: 'add',
+                task: {
+                  id: 'threaded',
+                  name: 'Threaded',
+                  enabled: true,
+                  workspaceRoot: root,
+                  instruction: 'Do the thing.',
+                  trigger: { adapter: 'manual', options: {} },
+                },
+              }),
+            },
+          ],
+          'tool-calls',
+        ),
+      )
+      .mockImplementationOnce(async () => textStream('Task created'));
+    const caller = await client();
+    await caller.sendMessage({ text: 'Create a background task', images: [] }, preferences);
+    // Same-workspace task management runs silent: no approval card.
+    await vi.waitFor(() =>
+      expect(caller.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Task created')).toBe(true),
+    );
+    expect(caller.getSnapshot().pendingApprovalId).toBeNull();
+    const list = (await requestHost('background.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+      tasks: Array<{ id: string; originSessionId: string }>;
+    };
+    expect(list.tasks.find((candidate) => candidate.id === 'threaded')?.originSessionId).toBe(caller.getSnapshot().session.id);
+  }, 10_000);
+
+  it('generates a task id when add omits it', async () => {
+    const result = (await requestHost('background.manage', {
+      input: {
+        action: 'add',
+        task: {
+          name: 'Nightly DB Check!',
+          enabled: true,
+          workspaceRoot: root,
+          instruction: 'Check and report.',
+          trigger: { adapter: 'manual', options: {} },
+        },
+      },
+      workspaceRoot: root,
+    })) as { status: string; task: { id: string; name: string } };
+    expect(result.status).toBe('completed');
+    expect(result.task.id).toMatch(/^nightly-db-check-[0-9a-f]{4}$/);
+    const list = (await requestHost('background.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+      tasks: Array<{ id: string }>;
+    };
+    expect(list.tasks.map((task) => task.id)).toContain(result.task.id);
+  });
+
+  it('persists background worker lineage and notes to durable state when it finishes', async () => {
+    let workerStep = 0;
+    let spawns = 0;
+    // Bounded by construction: snapshot sync lags a fast mock loop, so the
+    // mock must terminate from its own counters, never from snapshots.
+    model.doStream = vi.fn(async (options: { prompt?: unknown }) => {
+      const serialized = JSON.stringify(options.prompt ?? []);
+      if (serialized.includes('You are a worker session')) {
+        workerStep += 1;
+        if (workerStep === 1)
+          return stream(
+            [
+              {
+                type: 'tool-call',
+                toolCallId: 'w-note',
+                toolName: 'parent_message',
+                input: JSON.stringify({ text: 'Milestone one done.' }),
+              },
+            ],
+            'tool-calls',
+          );
+        return textStream('WORKER-REPORT: all done.');
+      }
+      spawns += 1;
+      if (spawns >= 2) return textStream('PARENT-DONE');
+      return stream(
+        [
+          {
+            type: 'tool-call',
+            toolCallId: `p-spawn-${spawns}`,
+            toolName: 'subagent',
+            input: JSON.stringify({ task: 'Do it.', mode: 'executor', background: true }),
+          },
+        ],
+        'tool-calls',
+      );
+    });
+    const viewerEntries = () => viewer.getSnapshot().session.entries as Array<{ kind: string; session?: unknown; result?: unknown }>;
+    const viewer = await client();
+    const parentId = viewer.getSnapshot().session.id;
+    await viewer.sendMessage({ text: 'Spawn the worker.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(
+        viewerEntries()
+          .map((entry) => (entry.kind === 'tool' ? entry.session : undefined))
+          .find((session): session is string => typeof session === 'string'),
+      ).toBeTruthy(),
+    );
+    const workerId = viewerEntries()
+      .map((entry) => (entry.kind === 'tool' ? entry.session : undefined))
+      .find((session): session is string => typeof session === 'string')!;
+    const workerView = await client({ workerSessionId: workerId });
+    await vi.waitFor(() => expect(workerView.getSnapshot().busy).toBe(false), { timeout: 10_000 });
+    // The durable artifacts a post-restart poll reads: lineage record plus notes.
+    const { ActivityLedger } = await import('../src/activity-ledger.js');
+    const { readWorkerOutbox, readWorkerRecord } = await import('../src/worker-records.js');
+    const ledger = new ActivityLedger(join(root, 'state.db'), { readOnly: true });
+    try {
+      expect(readWorkerRecord(ledger, workerId)).toMatchObject({
+        parentSessionId: parentId,
+        mode: 'executor',
+        background: true,
+        finished: true,
+      });
+      expect(readWorkerOutbox(ledger, workerId).notes).toEqual(['Milestone one done.']);
+    } finally {
+      ledger.close();
+    }
+  }, 20_000);
 
   it('continues the workspace main session from Telegram so one thread spans both channels', async () => {
     const settings = await import('../src/settings.js');

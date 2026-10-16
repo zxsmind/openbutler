@@ -169,6 +169,18 @@ export class MemoryIndex {
     await this.embeddingLease.acquire();
   }
 
+  /**
+   * Scopes the agent may search: the shared user scope, its own self scope,
+   * the active workspace, and every team scope. Other workspaces stay out.
+   */
+  private searchScopeFilter(alias: string): { clause: string; params: string[] } {
+    const params = ['user', 'self', this.workspaceScope];
+    return {
+      clause: `(${alias}.scope IN (${params.map(() => '?').join(', ')}) OR ${alias}.scope LIKE 'team:%')`,
+      params,
+    };
+  }
+
   async reindexPath(path: string): Promise<void> {
     const normalized = normalizePath(path);
     const source = await this.collectSourceFiles();
@@ -194,11 +206,14 @@ export class MemoryIndex {
       await this.indexSource(file, content);
     }
 
+    const scopeFilter = this.searchScopeFilter('s');
     const sourceCount = Number(
-      database.prepare('SELECT COUNT(*) AS count FROM memory_sources WHERE scope IN (?, ?)').get('user', this.workspaceScope)?.count ?? 0,
+      database.prepare(`SELECT COUNT(*) AS count FROM memory_sources s WHERE ${scopeFilter.clause}`).get(...scopeFilter.params)?.count ?? 0,
     );
     const chunkCount = Number(
-      database.prepare('SELECT COUNT(*) AS count FROM memory_chunks WHERE scope IN (?, ?)').get('user', this.workspaceScope)?.count ?? 0,
+      database
+        .prepare(`SELECT COUNT(*) AS count FROM memory_chunks c WHERE ${this.searchScopeFilter('c').clause}`)
+        .get(...scopeFilter.params)?.count ?? 0,
     );
     if (chunkCount === 0) {
       return { matches: [], indexedSources: sourceCount, indexedChunks: 0, emptyMemory: sourceCount === 0, ...issueField };
@@ -218,10 +233,10 @@ export class MemoryIndex {
              c.embedding, s.type, s.title, s.description
       FROM memory_chunks c
       JOIN memory_sources s ON s.path = c.path
-      WHERE c.scope IN (?, ?)
+      WHERE ${this.searchScopeFilter('c').clause}
     `,
       )
-      .iterate('user', this.workspaceScope);
+      .iterate(...scopeFilter.params);
     // A linear scan scores every chunk; the gates then keep only relevant rows. Add ANN when corpus size makes latency unacceptable.
     for (const row of chunks) {
       const chunk = row as unknown as StoredMemoryChunk;
@@ -343,8 +358,26 @@ export class MemoryIndex {
     if (owned(this.paths.userFile)) await addMarkdownFile(userFiles, this.paths.userFile, 'user');
     if (owned(this.paths.topicsDirectory)) await addMarkdownTree(userFiles, this.paths.topicsDirectory, 'user');
     if (owned(this.paths.areasDirectory)) await addMarkdownTree(userFiles, this.paths.areasDirectory, 'user');
+    // Per-agent self scope and the shared team scope are always searchable.
+    if (owned(this.paths.identityFile)) await addMarkdownFile(userFiles, this.paths.identityFile, 'self');
+    if (owned(this.paths.peersDirectory)) await addMarkdownTree(userFiles, this.paths.peersDirectory, 'self');
+    if (owned(this.paths.teamRoot)) await this.addTeamTrees(userFiles);
     if (owned(this.paths.workspaceFile)) await addMarkdownFile(workspaceFiles, this.paths.workspaceFile, this.workspaceScope);
     return [...userFiles, ...workspaceFiles].sort((left, right) => left.path.localeCompare(right.path));
+  }
+
+  /** Every `<teamRoot>/<slug>/*.md` file, each indexed under its own `team:<slug>` scope. */
+  private async addTeamTrees(target: MemorySourceFile[]): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(this.paths.teamRoot, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^[a-z0-9-]+$/.test(entry.name)) continue;
+      await addMarkdownTree(target, join(this.paths.teamRoot, entry.name), `team:${entry.name}`);
+    }
   }
 
   /**

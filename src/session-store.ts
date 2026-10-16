@@ -5,16 +5,19 @@ import type { ModelMessage } from 'ai';
 import { getDataPath } from './paths.js';
 import { appendTranscriptArchiveReference, repairQueuedMessageOrder, retireCoveredToolPreviews } from './conversation.js';
 
+export type NoticeTone = 'info' | 'warn' | 'error';
+
 export type SessionEntry =
   | {
       kind: 'user';
       text: string;
       workspaceRoot?: string;
       imageCount?: number;
-      source?: 'terminal' | 'telegram' | 'owner-inbox' | 'background';
+      source?: 'terminal' | 'telegram' | 'owner-inbox' | 'background' | 'team';
       eventId?: string;
     }
-  | { kind: 'assistant' | 'notice'; text: string }
+  | { kind: 'assistant'; text: string }
+  | { kind: 'notice'; text: string; detail?: string; tone?: NoticeTone }
   | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; command: string; result: string; running?: boolean; preparing?: boolean; tool?: string; session?: string };
 

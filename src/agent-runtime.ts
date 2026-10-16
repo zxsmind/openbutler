@@ -1,31 +1,36 @@
 import { realpathSync, statSync } from 'node:fs';
+import type { LanguageModel } from 'ai';
 import { getCatalogIndex } from './provider/catalog.js';
 import {
   createLanguageModel,
   defaultModelIsUsable,
   findReasoningCatalogMatch,
   listReasoningVariants,
+  minimalReasoningOptions,
   modelInputModalities,
+  modelIsUsable,
   modelSupportsVision,
   normalizeReasoningVariantId,
   providerIsConfigured,
   reasoningSupportStatus,
+  resolveReasoningVariant,
   supportsImageToolResult,
   withReasoningVisibility,
 } from './provider/registry.js';
 import { loadSettings, rememberProviderModel, saveSettings, type ApprovalMode } from './settings.js';
 import type { AgentEnvironment } from './agent-session.js';
-import type { McpServerRequest } from './tools/mcp.js';
 import type { SubagentRequest } from './tools/subagent.js';
 
 export interface CreateAgentRuntimeOptions {
   workspaceRoot?: string;
-  approveMcpServer?: (request: McpServerRequest) => Promise<boolean>;
   onMcpError?: (serverId: string, message: string) => void;
   onMcpConnected?: (serverId: string, toolCount: number) => void;
-  backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+  backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string, senderSessionId: string | undefined) => Promise<unknown>;
   ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
   ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
+  teamInbox?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
   parentMessage?: (input: { text: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
@@ -65,6 +70,30 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   if (!resolved.ok) throw new Error(resolved.error.reason);
   const reasoningCatalog = findReasoningCatalogMatch(providerId, modelId, resolved.resolved);
   const reasoningVariants = listReasoningVariants(resolved.resolved, reasoningCatalog.model);
+
+  // The permission reviewer may run on a different provider/model than the main
+  // one, so a model that is unreliable at forced tool calls can be swapped out
+  // without touching the session model. Resolved once at host start.
+  let reviewResolved: typeof resolved.resolved | null = null;
+  let reviewCatalogModel: typeof reasoningCatalog.model = null;
+  let reviewModel: LanguageModel | null = null;
+  if (settings.autoReviewProvider && settings.autoReviewModel) {
+    if (!modelIsUsable(settings, settings.autoReviewProvider, settings.autoReviewModel)) {
+      throw new Error(
+        `Auto-review model ${settings.autoReviewProvider}/${settings.autoReviewModel} is not usable. ` +
+          `Check its provider key and that the model supports native tool calls, or clear it with \`ranite permissions --review-model none\`.`,
+      );
+    }
+    const built = await createLanguageModel(
+      settings.autoReviewProvider,
+      settings.autoReviewModel,
+      settings.providers[settings.autoReviewProvider],
+    );
+    if (!built.ok) throw new Error(built.error.reason);
+    reviewResolved = built.resolved;
+    reviewCatalogModel = findReasoningCatalogMatch(settings.autoReviewProvider, settings.autoReviewModel, built.resolved).model;
+    reviewModel = built.model;
+  }
   let workspaceRoot = canonicalWorkspaceRoot(options.workspaceRoot ?? process.cwd());
   const { ToolRegistry } = await import('./tools/registry.js');
   let memoryIndex = new MemoryIndex(workspaceRoot);
@@ -75,7 +104,6 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   try {
     const [{ connectMcpServers }, { createToolCatalogue }] = await Promise.all([import('./tools/mcp.js'), import('./tools/catalog.js')]);
     mcp = await connectMcpServers(settings.mcpServers, {
-      approveServer: options.approveMcpServer ?? (async () => false),
       onError: options.onMcpError ?? (() => {}),
       onConnected: options.onMcpConnected ?? (() => {}),
       inputModalities: () => activeInputModalities,
@@ -93,6 +121,9 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         ...(options.backgroundManage ? { backgroundManage: options.backgroundManage } : {}),
         ...(options.ownerMessageSend ? { ownerMessageSend: options.ownerMessageSend } : {}),
         ...(options.ownerInboxRead ? { ownerInboxRead: options.ownerInboxRead } : {}),
+        ...(options.teamSend ? { teamSend: options.teamSend } : {}),
+        ...(options.teamInbox ? { teamInbox: options.teamInbox } : {}),
+        ...(options.teamRemember ? { teamRemember: options.teamRemember } : {}),
         ...(options.sessionMessage ? { sessionMessage: options.sessionMessage } : {}),
         ...(options.subagent ? { subagent: options.subagent } : {}),
         ...(options.parentMessage ? { parentMessage: options.parentMessage } : {}),
@@ -108,6 +139,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     let activeVariants = reasoningVariants;
     const runtime: AgentEnvironment = {
       model: resolved.model,
+      ...(reviewModel ? { reviewModel } : {}),
       get workspaceRoot() {
         return workspaceRoot;
       },
@@ -129,14 +161,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       reasoningVariants,
       reasoningMetadataSource: activeCatalog.inferred ? activeCatalog.sourceProviderId : null,
       reasoningSupport: reasoningSupportStatus(resolved.resolved, reasoningCatalog.model),
-      reasoningDefault: normalizeReasoningVariantId(settings.reasoning ?? 'default'),
+      reasoningDefault: resolveReasoningVariant(reasoningVariants, settings.reasoning ?? 'default').id,
       saveReasoningPreference: (variantId) => {
         const latest = loadSettings();
         latest.reasoning = normalizeReasoningVariantId(variantId);
         saveSettings(latest);
-        runtime.reasoningDefault = latest.reasoning;
+        runtime.reasoningDefault = resolveReasoningVariant(activeVariants, latest.reasoning).id;
       },
-      showReasoningDefault: settings.showReasoning === true,
+      showReasoningDefault: settings.showReasoning !== false,
       approvalMode: settings.approvalMode,
       saveApprovalModePreference: (mode: ApprovalMode) => {
         const latest = loadSettings();
@@ -150,12 +182,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         saveSettings(latest);
         runtime.showReasoningDefault = visible;
       },
-      getReasoningProviderOptions: (variantId, visible) =>
-        withReasoningVisibility(
-          activeResolved,
-          activeVariants.find((variant) => variant.id === normalizeReasoningVariantId(variantId))?.providerOptions ?? {},
-          visible,
-        ),
+      getReasoningProviderOptions: (variantId, visible) => {
+        const effective = resolveReasoningVariant(activeVariants, variantId);
+        return withReasoningVisibility(activeResolved, effective.providerOptions, visible);
+      },
+      getReviewProviderOptions: () =>
+        reviewResolved
+          ? (minimalReasoningOptions(reviewResolved, reviewCatalogModel) ?? {})
+          : (minimalReasoningOptions(activeResolved, activeCatalog.model) ?? {}),
       registry: createRegistry(activeInputModalities),
       selectWorkspaceRoot: async (path) => {
         const run = workspaceSwitch.then(async () => {
@@ -214,11 +248,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         runtime.reasoningVariants = nextVariants;
         runtime.reasoningMetadataSource = nextCatalog.inferred ? nextCatalog.sourceProviderId : null;
         runtime.reasoningSupport = reasoningSupportStatus(next.resolved, nextCatalog.model);
-        runtime.reasoningDefault = nextVariants.some(
-          (variant) => variant.id === normalizeReasoningVariantId(nextSettings.reasoning ?? 'default'),
-        )
-          ? normalizeReasoningVariantId(nextSettings.reasoning ?? 'default')
-          : 'default';
+        runtime.reasoningDefault = resolveReasoningVariant(nextVariants, nextSettings.reasoning ?? 'default').id;
         runtime.registry = nextRegistry;
       },
       close: async () => {

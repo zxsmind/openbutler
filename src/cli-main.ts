@@ -21,8 +21,17 @@ import { connectDaemonSession } from './daemon-client.js';
 import { parseRetentionDuration, selectFilesToPrune } from './retention.js';
 import { getRaniteVersion } from './version.js';
 import { getCatalogIndex } from './provider/catalog.js';
-import { listToolCapableModels, listSupportedPackages, normalizeReasoningVariantId, providerIsConfigured } from './provider/registry.js';
-import { getSettingsPath, loadSettings, parseTelegramSettings, saveSettings } from './settings.js';
+import {
+  findReasoningCatalogMatch,
+  listReasoningVariants,
+  listToolCapableModels,
+  listSupportedPackages,
+  normalizeReasoningVariantId,
+  providerIsConfigured,
+  resolveProvider,
+  resolveReasoningVariant,
+} from './provider/registry.js';
+import { getConfigPath, getSettingsPath, loadSettings, parseTelegramSettings, saveSettings } from './settings.js';
 import { getDataPath } from './paths.js';
 import type { TelegramStatus } from './telegram.js';
 import {
@@ -35,7 +44,7 @@ import {
   waitForPairing,
   waitForSettledState,
 } from './telegram-setup.js';
-import type { McpServerState } from './settings.js';
+import type { BackgroundTaskState, McpServerState } from './settings.js';
 import { defaultModelIsUsable, readiness, summarizeProviders } from './cli/config-edit.js';
 import { runUninstall } from './uninstall.js';
 import * as ui from './cli/ui.js';
@@ -59,6 +68,7 @@ function usage(): void {
     ['ranite', 'Open an interactive terminal session', '[default]'],
     ['ranite setup', 'First-run wizard. Saves once at the end.'],
     ['ranite config', 'Show the current settings.'],
+    ['ranite keys [add <provider>|list|remove <provider>]', 'Manage provider API keys in the secret store.'],
     [
       'ranite permissions [workspace|auto-review|full-access]',
       'Choose the tool approval mode; --review-timeout <seconds> tunes auto-review.',
@@ -69,12 +79,14 @@ function usage(): void {
     ['ranite mcp', 'Manage global MCP servers.'],
     ['ranite tasks', 'List, add, run, and open explicitly configured background tasks.'],
     ['ranite telegram', 'Configure and pair the owner Telegram channel.'],
+    ['ranite team <subcommand>', 'Form a closed team of ranites over the tailnet (init, invite, join, …).'],
     ['ranite events', 'Inspect the durable event ledger.'],
     ['ranite actions', 'Inspect the durable tool action ledger.'],
     ['ranite sessions index', 'Build or refresh the derived session search index (--rebuild to redo it).'],
     ['ranite sessions prune', 'Delete session files older than an explicit cutoff (needs --yes).'],
     ['ranite workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
     ['ranite skills', 'List global and active-workspace Agent Skills.'],
+    ['ranite approve', 'List recent auto-review denials; approve <n> retries one exactly once.'],
     ['ranite about', 'Version, runtime, configuration paths.'],
     ['ranite uninstall', 'Remove the installed program. Keeps data; --purge removes it too.'],
   ]);
@@ -98,6 +110,18 @@ function printHelpRows(rows: Array<[string, string, string?]>) {
   for (const [name, description, tag = ''] of rows) {
     ui.line(`  ${name.padEnd(nameWidth)}  ${description.padEnd(descWidth)}${tag ? `  ${tag}` : ''}`);
   }
+}
+
+/** Stored reasoning preference with the variant the default model will actually use. */
+function describeReasoningPreference(settings: ReturnType<typeof loadSettings>): string {
+  const stored = normalizeReasoningVariantId(settings.reasoning ?? 'default');
+  const resolution = settings.defaultProvider
+    ? resolveProvider(settings.defaultProvider, settings.providers[settings.defaultProvider])
+    : null;
+  if (!resolution || !resolution.ok || !settings.defaultModel) return stored;
+  const match = findReasoningCatalogMatch(settings.defaultProvider, settings.defaultModel, resolution.provider);
+  const effective = resolveReasoningVariant(listReasoningVariants(resolution.provider, match.model), stored);
+  return effective.id === stored ? stored : `${stored} (this model: ${effective.id})`;
 }
 
 async function runConfig(): Promise<void> {
@@ -130,8 +154,8 @@ async function runConfig(): Promise<void> {
   );
   ui.line();
   ui.kv('Default', settings.defaultProvider ? `${settings.defaultProvider} / ${settings.defaultModel || '(none)'}` : '(none)');
-  ui.kv('Reasoning', normalizeReasoningVariantId(settings.reasoning ?? 'default'));
-  ui.kv('Show reasoning', settings.showReasoning ? 'on' : 'off');
+  ui.kv('Reasoning', describeReasoningPreference(settings));
+  ui.kv('Show reasoning', settings.showReasoning !== false ? 'on' : 'off');
   ui.line();
   const report = readiness(settings);
   if (report.ready) ui.success('Ready to run.');
@@ -143,7 +167,9 @@ async function runConfig(): Promise<void> {
 async function runPermissions(parsed: Parsed): Promise<void> {
   const requestedMode = parsed.words[0] ?? '';
   if (requestedMode && !['ask', 'workspace', 'auto-review', 'full-access'].includes(requestedMode)) {
-    throw new Error('Usage: ranite permissions [workspace|auto-review|full-access] [--review-timeout <seconds>]');
+    throw new Error(
+      'Usage: ranite permissions [workspace|auto-review|full-access] [--review-timeout <seconds>] [--approval-timeout <seconds>] [--review-model <provider/model|none>]',
+    );
   }
   const timeoutFlag = parsed.flags.get('review-timeout');
   let timeoutSeconds: number | undefined;
@@ -154,10 +180,46 @@ async function runPermissions(parsed: Parsed): Promise<void> {
     }
     timeoutSeconds = candidate;
   }
+  const approvalTimeoutFlag = parsed.flags.get('approval-timeout');
+  let approvalTimeoutSeconds: number | undefined;
+  if (approvalTimeoutFlag !== undefined) {
+    const candidate = Number(approvalTimeoutFlag);
+    if (!Number.isInteger(candidate) || candidate < 5 || candidate > 600) {
+      throw new Error('--approval-timeout must be a whole number of seconds between 5 and 600.');
+    }
+    approvalTimeoutSeconds = candidate;
+  }
+  const reviewModelFlag = parsed.flags.get('review-model');
+  let reviewModelOverride: { providerId: string; modelId: string } | null | undefined;
+  if (reviewModelFlag !== undefined) {
+    if (reviewModelFlag === 'none' || reviewModelFlag === '') {
+      reviewModelOverride = null;
+    } else {
+      const slash = reviewModelFlag.indexOf('/');
+      if (slash <= 0 || slash === reviewModelFlag.length - 1) {
+        throw new Error('--review-model must be <provider>/<model>, or `none` to reuse the main model.');
+      }
+      reviewModelOverride = { providerId: reviewModelFlag.slice(0, slash), modelId: reviewModelFlag.slice(slash + 1) };
+    }
+  }
 
   const settings = loadSettings();
   if (timeoutSeconds !== undefined) {
     settings.autoReviewTimeoutSeconds = timeoutSeconds;
+    saveSettings(settings);
+  }
+  if (approvalTimeoutSeconds !== undefined) {
+    settings.approvalTimeoutSeconds = approvalTimeoutSeconds;
+    saveSettings(settings);
+  }
+  if (reviewModelOverride !== undefined) {
+    if (reviewModelOverride === null) {
+      delete settings.autoReviewProvider;
+      delete settings.autoReviewModel;
+    } else {
+      settings.autoReviewProvider = reviewModelOverride.providerId;
+      settings.autoReviewModel = reviewModelOverride.modelId;
+    }
     saveSettings(settings);
   }
   if (requestedMode) {
@@ -180,10 +242,26 @@ async function runPermissions(parsed: Parsed): Promise<void> {
     'Auto-review timeout',
     settings.autoReviewTimeoutSeconds === undefined ? '15 seconds (default)' : `${settings.autoReviewTimeoutSeconds} seconds`,
   );
+  ui.kv(
+    'Approval timeout',
+    settings.approvalTimeoutSeconds === undefined ? '60 seconds (default)' : `${settings.approvalTimeoutSeconds} seconds`,
+  );
+  ui.kv(
+    'Auto-review model',
+    settings.autoReviewProvider && settings.autoReviewModel ? `${settings.autoReviewProvider}/${settings.autoReviewModel}` : '(main model)',
+  );
   ui.info('Workspace paths run without prompts. Auto-review asks the selected model about actions outside the workspace.');
   ui.info('Use `ranite permissions full-access` to disable tool permission prompts.');
   if (requestedMode) ui.success(`Saved ${formatApprovalMode(settings.approvalMode)} mode.`);
   if (timeoutSeconds !== undefined) ui.success(`Auto-review timeout set to ${timeoutSeconds} seconds.`);
+  if (approvalTimeoutSeconds !== undefined) ui.success(`Approval timeout set to ${approvalTimeoutSeconds} seconds.`);
+  if (reviewModelOverride !== undefined)
+    ui.success(
+      reviewModelOverride === null
+        ? 'Auto-review will reuse the main model.'
+        : `Auto-review model set to ${reviewModelOverride.providerId}/${reviewModelOverride.modelId}.`,
+    );
+  if (reviewModelOverride !== undefined) ui.info('Restart the host for the reviewer model to take effect: ranite restart');
   await showAutoReviewHistory();
 }
 
@@ -460,6 +538,56 @@ async function runSkills(parsed: Parsed): Promise<void> {
   );
 }
 
+async function runApprove(parsed: Parsed): Promise<void> {
+  const { approveDeniedAction, listDeniedActions } = await import('./review-overrides.js');
+  const denials = listDeniedActions();
+  const target = parsed.words[0];
+  if (!target) {
+    if (denials.length === 0) {
+      ui.info('No recent auto-review denials.');
+      return;
+    }
+    ui.section('Recent auto-review denials');
+    ui.table(
+      ['#', 'TOOL', 'WORKSPACE', 'WHEN', 'REASON'],
+      denials.map((entry, index) => [
+        String(index + 1),
+        `${entry.providerId}/${entry.name}`,
+        entry.workspaceRoot,
+        timeAgo(entry.deniedAt),
+        entry.reason.length > 90 ? `${entry.reason.slice(0, 90)}…` : entry.reason,
+      ]),
+    );
+    ui.line();
+    ui.info('Approve one retry with: ranite approve <n>. The retry still goes through auto-review.');
+    return;
+  }
+  const byFingerprint =
+    /^[a-f0-9]+$/i.test(target) && target.length >= 6
+      ? denials.filter((denial) => denial.fingerprint.startsWith(target.toLowerCase()))
+      : [];
+  const picked =
+    byFingerprint.length === 1
+      ? byFingerprint[0]
+      : (() => {
+          const index = Number(target);
+          return Number.isInteger(index) && index >= 1 && index <= denials.length ? denials[index - 1] : undefined;
+        })();
+  if (!picked) throw new Error('Usage: ranite approve [n]. Pick a number from the denial list.');
+  const approved = approveDeniedAction(picked.fingerprint);
+  if (!approved) throw new Error('That denial is no longer available; list them again with ranite approve.');
+  ui.success(`Approved one retry of ${approved.providerId}/${approved.name}. It still goes through auto-review.`);
+}
+
+function timeAgo(timestamp: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 async function defaultModelReady(): Promise<boolean> {
   const settings = loadSettings();
   const providerId = settings.defaultProvider;
@@ -481,7 +609,7 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
   if (!(await defaultModelReady())) throw new Error('Configure a tool-capable default model first: ranite setup');
 
   await startDaemon();
-  const controller = await connectDaemonSession(workspaceRoot, approveMcpServer, { isolatedSession: true });
+  const controller = await connectDaemonSession(workspaceRoot, { isolatedSession: true });
   const runtime = controller.runtime;
   ui.section('Ranite agent');
   ui.kv('Model', `${runtime.modelName} / ${runtime.modelId}`);
@@ -591,10 +719,8 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
     await controller.sendMessage(
       { text: question, images: [] },
       {
-        reasoningVariantId: runtime.reasoningVariants.some((variant) => variant.id === runtime.reasoningDefault)
-          ? runtime.reasoningDefault
-          : 'default',
-        showReasoning: loadSettings().showReasoning === true,
+        reasoningVariantId: resolveReasoningVariant(runtime.reasoningVariants, runtime.reasoningDefault).id,
+        showReasoning: loadSettings().showReasoning !== false,
       },
     );
     await done;
@@ -641,7 +767,7 @@ async function runSession(workspaceRoot: string): Promise<void> {
   let controller;
   const connecting = ui.spinner({ text: 'Connecting to host…', discardStdin: false }).start();
   try {
-    controller = await connectDaemonSession(workspaceRoot, approveMcpServer, { custodian: true });
+    controller = await connectDaemonSession(workspaceRoot, { custodian: true });
     connecting.succeed('Connected to host.');
   } catch (error) {
     connecting.fail('Could not connect to host.');
@@ -664,18 +790,6 @@ async function runSession(workspaceRoot: string): Promise<void> {
   } else {
     ui.info('Detached. Background host is not running.');
   }
-}
-
-async function approveMcpServer(request: McpServerRequest): Promise<boolean> {
-  if (!process.stdin.isTTY) {
-    ui.warn(`No interactive terminal is available; MCP server ${request.id} was not started.`);
-    return false;
-  }
-  ui.section(`MCP server: ${request.id}`);
-  showMcpServerDetails(request);
-  ui.warn('The server may provide tools. Each tool call will be shown and approved separately.');
-  const { confirm } = await import('@inquirer/prompts');
-  return confirm({ message: 'Connect to this MCP server?', default: false });
 }
 
 function showMcpServerDetails(request: McpServerRequest): void {
@@ -788,8 +902,47 @@ function runAbout(): void {
   ui.kv('Version', getRaniteVersion());
   ui.kv('Runtime', `${process.version} (${process.platform}/${process.arch})`);
   ui.kv('Settings', getSettingsPath());
+  ui.kv('Secrets', getConfigPath());
   ui.kv('Runtime packages', listSupportedPackages().join(', '));
   ui.line();
+}
+
+interface TaskListRow extends BackgroundTaskState {
+  adapterState?: string;
+  adapterError?: string;
+  runtime: {
+    status: string;
+    statusError?: string;
+    lastRunAt?: number;
+    lastResult?: string;
+    lastError?: string;
+    runCount: number;
+  };
+  schedule: { human: string; nextDueAt: number | null };
+}
+
+function renderTaskRows(rows: TaskListRow[], age: (ms: number) => string): void {
+  ui.table(
+    ['ID', 'NAME', 'STATE', 'TRIGGER', 'SCHEDULE', 'LAST', 'RUNS'],
+    rows.map((row) => {
+      const state = !row.enabled
+        ? 'disabled'
+        : (row.adapterError ?? row.runtime.statusError)
+          ? 'error'
+          : row.runtime.status === 'running'
+            ? 'running'
+            : row.adapterState === 'completed'
+              ? 'completed'
+              : 'idle';
+      const last =
+        row.runtime.lastResult && row.runtime.lastRunAt ? `${row.runtime.lastResult} ${age(Date.now() - row.runtime.lastRunAt)} ago` : '—';
+      return [row.id, row.name, state, row.trigger.adapter, row.schedule.human, last, String(row.runtime.runCount)];
+    }),
+  );
+  for (const row of rows) {
+    const problem = row.adapterError ?? row.runtime.statusError ?? row.runtime.lastError;
+    if (problem) ui.warn(`${row.id}: ${problem}`);
+  }
 }
 
 async function runTasks(parsed: Parsed): Promise<void> {
@@ -806,24 +959,54 @@ async function runTasks(parsed: Parsed): Promise<void> {
       ui.info('No background tasks are configured. Ask Ranite to create a task, or use `ranite tasks add <task.json>`.');
       return;
     }
-    let runtime: Array<{ id: string; state: string; error?: string }> = [];
+    let rows: TaskListRow[];
+    const { formatTaskAge } = await import('./tools/background.js');
     if (await getDaemonStatus()) {
       const result = (await requestHost('background.manage', {
         input: { action: 'list' },
-      })) as { runtime: typeof runtime };
-      runtime = result.runtime;
+      })) as { tasks: TaskListRow[] };
+      rows = result.tasks;
+    } else {
+      // The host is down: say so once, then print the durable columns anyway.
+      ui.warn('Background host is not running; showing durable state. Timers arm when it starts.');
+      const { ActivityLedger } = await import('./activity-ledger.js');
+      const { describeTaskSchedule, readTaskRuntime } = await import('./tools/background.js');
+      const ledger = new ActivityLedger(getDataPath('state.db'), { readOnly: true });
+      try {
+        rows = tasks.map((task) => ({
+          ...task,
+          runtime: readTaskRuntime(ledger, task.id),
+          schedule: describeTaskSchedule(task, Date.now()),
+        }));
+      } finally {
+        ledger.close();
+      }
+    }
+    renderTaskRows(rows, formatTaskAge);
+    return;
+  }
+  if (action === 'log') {
+    const taskId = parsed.words[1];
+    if (!taskId) throw new Error('Usage: ranite tasks log <id>');
+    await startDaemon();
+    const result = (await requestHost('background.manage', {
+      input: { action: 'log', taskId },
+    })) as {
+      runs: Array<{ eventId: string; kind: string; status: string; occurredAt: string; scheduledAt?: string; error?: string }>;
+    };
+    if (result.runs.length === 0) {
+      ui.info(`No runs recorded for ${taskId}.`);
+      return;
     }
     ui.table(
-      ['ID', 'NAME', 'STATE', 'TRIGGER', 'WORKSPACE'],
-      tasks.map((task) => [
-        task.id,
-        task.name,
-        runtime.find((item) => item.id === task.id)?.state ?? (task.enabled ? 'host stopped' : 'disabled'),
-        task.trigger.adapter,
-        task.workspaceRoot,
+      ['TIME', 'EVENT', 'STATUS', 'DETAIL'],
+      result.runs.map((run) => [
+        run.occurredAt.slice(0, 16).replace('T', ' '),
+        run.kind,
+        run.status,
+        run.error ?? (run.scheduledAt ? `scheduled ${run.scheduledAt.slice(0, 16).replace('T', ' ')}` : ''),
       ]),
     );
-    for (const entry of runtime) if (entry.error) ui.warn(`${entry.id}: ${entry.error}`);
     return;
   }
   if (action === 'open') {
@@ -832,7 +1015,7 @@ async function runTasks(parsed: Parsed): Promise<void> {
     const task = tasks.find((candidate) => candidate.id === id);
     if (!task) throw new Error('Background task does not exist.');
     await startDaemon();
-    const client = await connectDaemonSession(task.workspaceRoot, approveMcpServer, { taskId: task.id });
+    const client = await connectDaemonSession(task.workspaceRoot, { taskId: task.id });
     try {
       const { runTerminalSession } = await import('./cli/terminal-session.js');
       await runTerminalSession(client);
@@ -852,7 +1035,7 @@ async function runTasks(parsed: Parsed): Promise<void> {
     input = { action, task };
   } else {
     if (!['remove', 'enable', 'disable', 'run'].includes(action))
-      throw new Error('Usage: ranite tasks [list|capabilities|add|update|remove|enable|disable|run|open]');
+      throw new Error('Usage: ranite tasks [list|log|capabilities|add|update|remove|enable|disable|run|open]');
     const taskId = parsed.words[1];
     if (!taskId) throw new Error('Provide a background task id.');
     input = { action, taskId };
@@ -871,11 +1054,26 @@ async function runTasks(parsed: Parsed): Promise<void> {
     input.task = { ...taskRecord, workspaceRoot: commandWorkspaceRoot };
   }
   await startDaemon();
-  const result = await requestHost('background.manage', {
+  const result = (await requestHost('background.manage', {
     input,
     ...(commandWorkspaceRoot ? { workspaceRoot: commandWorkspaceRoot } : {}),
-  });
-  ui.line(JSON.stringify(result, null, 2));
+  })) as { status?: string; task?: TaskListRow; taskId?: string; runtime?: { state?: string } };
+  if (action === 'run') {
+    ui.success(`Task ${result.taskId} queued. Watch it with: ranite tasks log ${result.taskId}`);
+    return;
+  }
+  if (action === 'remove') {
+    ui.success(`Task ${parsed.words[1]} removed. Run history stays in the ledger.`);
+    return;
+  }
+  if (action === 'enable' || action === 'disable') {
+    ui.success(`Task ${parsed.words[1]} ${action === 'enable' ? 'enabled' : 'disabled'}.`);
+    return;
+  }
+  const { describeTaskSchedule: describe } = await import('./tools/background.js');
+  const saved = result.task ?? tasks.find((candidate) => candidate.id === (input.task as Record<string, unknown>)?.id);
+  const schedule = saved ? describe(saved, Date.now()).human : '';
+  ui.success(`Task ${saved?.id ?? ''} saved (${schedule}). Timers are live.`);
 }
 
 /**
@@ -1438,6 +1636,11 @@ async function main(): Promise<void> {
       await runConfig();
       return;
     }
+    case 'keys': {
+      const { runKeysCommand } = await import('./cli/keys.js');
+      await runKeysCommand(parsed.words[0] ?? '', parsed.words[1] ?? '');
+      return;
+    }
     case 'workspace': {
       runWorkspaceCommand(parsed);
       return;
@@ -1475,6 +1678,11 @@ async function main(): Promise<void> {
       await runTelegram(parsed);
       return;
     }
+    case 'team': {
+      const { runTeamCommand } = await import('./cli/team.js');
+      await runTeamCommand(parsed);
+      return;
+    }
     case 'events': {
       await runActivityLedger(parsed, 'events');
       return;
@@ -1493,6 +1701,10 @@ async function main(): Promise<void> {
     }
     case 'skills': {
       await runSkills(parsed);
+      return;
+    }
+    case 'approve': {
+      await runApprove(parsed);
       return;
     }
     case 'uninstall': {

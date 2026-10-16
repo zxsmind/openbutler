@@ -108,13 +108,13 @@ export function validateTextWrite(content: string, path: string, workspaceRoot: 
         failure: {
           status: 'invalid_memory_path',
           path,
-          error: `Memory files belong at user/preferences.md, user/profile.md, topics/*.md, areas/*.md, or ${paths.workspaceFile} with descriptive English kebab-case .md names.`,
+          error: `Memory files belong at user/preferences.md, user/profile.md, topics/*.md, areas/*.md, self/identity.md, self/peers/*.md, team/<team>/*.md, or ${paths.workspaceFile} with descriptive English kebab-case .md names.`,
         },
       };
     }
     const errors = validateMemoryDocument(
       content,
-      document.kind === 'profile' ? (document.scope === 'user' ? 'user' : 'project') : undefined,
+      document.kind === 'profile' ? (document.scope === 'user' ? 'user' : document.scope === 'self' ? undefined : 'project') : undefined,
     );
     if (errors.length)
       return {

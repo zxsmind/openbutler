@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOwnerNotificationRoute, sameReplyRoute } from '../src/communication.js';
+import { resolveApprovalFanout, resolveOwnerNotificationRoute, sameReplyRoute } from '../src/communication.js';
 
 describe('host-owned owner routes', () => {
   it('uses presence only for proactive auto delivery and keeps explicit Telegram replies independent', () => {
@@ -14,5 +14,9 @@ describe('host-owned owner routes', () => {
     expect(sameReplyRoute({ channel: 'telegram', chatId: '42' }, { channel: 'telegram', chatId: '7' })).toBe(false);
     expect(sameReplyRoute({ channel: 'terminal' }, { channel: 'telegram', chatId: '42' })).toBe(false);
     expect(sameReplyRoute(undefined, undefined)).toBe(false);
+  });
+  it('decides approval in exactly one place: live terminal or Telegram, never both', () => {
+    expect(resolveApprovalFanout(true)).toEqual({ telegram: false, broadcast: false });
+    expect(resolveApprovalFanout(false)).toEqual({ telegram: true, broadcast: true });
   });
 });

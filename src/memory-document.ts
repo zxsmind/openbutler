@@ -5,7 +5,7 @@ export const MEMORY_DOCUMENT_REVISION = 'markdown-v3';
 export const MEMORY_INDEX_MAX_LINES = 200;
 export const MEMORY_INDEX_MAX_BYTES = 25 * 1024;
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
-export type MemoryScope = 'user' | `workspace:${string}`;
+export type MemoryScope = 'user' | 'self' | `team:${string}` | `workspace:${string}`;
 const TYPES: readonly MemoryType[] = ['user', 'feedback', 'project', 'reference'];
 const CHUNK_CHAR_LIMIT = 1_400;
 

@@ -1,7 +1,7 @@
 /** Host-owned communication facts; channel adapters never choose agent identity. */
 export type OwnerReplyRoute = { channel: 'terminal' } | { channel: 'telegram'; chatId: string };
 export type TurnCommunication = {
-  source: 'terminal' | 'telegram' | 'owner-inbox' | 'background';
+  source: 'terminal' | 'telegram' | 'owner-inbox' | 'background' | 'team';
   replyTo?: OwnerReplyRoute;
 };
 export type OwnerInboxMessage = {
@@ -32,4 +32,14 @@ export function resolveOwnerNotificationRoute(
   }
   if (!telegramChatId) throw new Error('No owner Telegram chat is configured.');
   return { channel: 'telegram', chatId: telegramChatId };
+}
+
+/**
+ * Where a fresh approval goes. The owner decides in exactly one place: a
+ * terminal attached to that session sees it live, so Telegram stays silent;
+ * with no terminal on the session, Telegram pings and every client gets a
+ * pointer notice. Never both.
+ */
+export function resolveApprovalFanout(sessionHasTerminal: boolean): { telegram: boolean; broadcast: boolean } {
+  return sessionHasTerminal ? { telegram: false, broadcast: false } : { telegram: true, broadcast: true };
 }
