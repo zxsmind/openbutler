@@ -209,17 +209,14 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
     }
     store.touchMember(member.name, now);
     if (request.method === 'GET' && url.pathname === '/v1/status') {
-      const online = store.onlineMemberNames(now, PRESENCE_WINDOW_MS);
       sendJson(response, 200, {
         protocol: PROTOCOL_VERSION,
         team: teamName,
         you: member.name,
-        members: store.listMembers().map((entry) => ({
-          name: entry.name,
-          role: entry.role,
-          lastSeen: entry.lastSeen,
-          online: online.has(entry.name),
-        })),
+        memberCount: store.listMembers().length,
+        groupCursor: store.getGroupCursor(member.name),
+        groupLatestSeq: store.groupLatestSeq(),
+        members: store.memberSummaries(now, PRESENCE_WINDOW_MS),
       });
       return;
     }
@@ -289,6 +286,18 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
       }
       store.setGroupCursor(member.name, body.seq);
       sendJson(response, 200, { cursor: store.getGroupCursor(member.name) });
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/group/read') {
+      const body = (await readJson(request)) as { limit?: unknown };
+      const limit =
+        typeof body?.limit === 'number' && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), MAX_GROUP_PAGE) : 50;
+      // Read after the member's stored cursor and advance it, so a read is
+      // incremental and stateless for the caller.
+      const cursor = store.getGroupCursor(member.name);
+      const messages = store.groupMessages(cursor, limit);
+      if (messages.length > 0) store.setGroupCursor(member.name, messages.at(-1)!.seq);
+      sendJson(response, 200, { messages, cursor: store.getGroupCursor(member.name), latestSeq: store.groupLatestSeq() });
       return;
     }
     if (request.method === 'GET' && url.pathname === '/v1/inbox') {

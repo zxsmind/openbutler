@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ackInbox, fetchGroup, fetchInbox, postMessage, setGroupCursor } from '../src/team/client.js';
+import { ackInbox, fetchGroup, fetchInbox, postMessage, readGroup, setGroupCursor } from '../src/team/client.js';
 import { startTeamServer, type StartedTeamServer } from '../src/team/server.js';
 import { hashTicket, makeTicket } from '../src/team/service.js';
 import { localChannel, remoteChannel } from '../src/team/session.js';
@@ -52,6 +52,18 @@ describe('team messaging over the hub', () => {
     await postMessage(target, murphyTicket, { recipient: 'group', body: 'two' });
     const group = await fetchGroup(target, murphyTicket, first.seq!);
     expect(group.messages.map((message) => message.body)).toEqual(['two']);
+  });
+
+  it('reads the group incrementally and advances the stored cursor', async () => {
+    await postMessage(target, murphyTicket, { recipient: 'group', body: 'first' });
+    const read = await readGroup(target, murphyTicket, 50);
+    expect(read.messages.map((message) => message.body)).toEqual(['first']);
+    // A second read returns nothing new, proving the cursor advanced.
+    const again = await readGroup(target, murphyTicket, 50);
+    expect(again.messages).toHaveLength(0);
+    await postMessage(target, murphyTicket, { recipient: 'group', body: 'second' });
+    const third = await readGroup(target, murphyTicket, 50);
+    expect(third.messages.map((message) => message.body)).toEqual(['second']);
   });
 
   it('holds DMs until the recipient acknowledges, and never delivers them to the group', async () => {

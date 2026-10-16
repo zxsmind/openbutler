@@ -18,11 +18,24 @@ export interface HubFingerprint {
 export type JoinPollResult =
   { status: 'pending' } | { status: 'denied' } | { status: 'approved'; ticket: string; team: string; memberName: string };
 
+export interface HubMember {
+  name: string;
+  role: string;
+  online?: boolean;
+  lastSeen?: number;
+  lastMessageAt?: number | null;
+  lastMessageTo?: string | null;
+  lastMemoryAt?: number | null;
+}
+
 export interface HubStatus {
   protocol: string;
   team: string;
   you: string;
-  members: Array<{ name: string; role: string; lastSeen?: number; online?: boolean }>;
+  memberCount?: number;
+  groupCursor?: number;
+  groupLatestSeq?: number;
+  members: HubMember[];
 }
 
 function baseUrl(target: JoinTarget): string {
@@ -165,6 +178,21 @@ export async function setGroupCursor(target: JoinTarget, ticket: string, seq: nu
     body: JSON.stringify({ seq }),
   });
   if (status !== 200) throw hubError(status, body, 'Cursor update failed.');
+}
+
+/** Authenticated: read new group messages after this member's stored cursor, advancing it. */
+export async function readGroup(
+  target: JoinTarget,
+  ticket: string,
+  limit: number,
+): Promise<{ messages: TeamMessage[]; cursor: number; latestSeq: number }> {
+  const { status, body } = await requestJson(`${baseUrl(target)}/v1/group/read`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ limit }),
+  });
+  if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'Group read failed.');
+  return body as unknown as { messages: TeamMessage[]; cursor: number; latestSeq: number };
 }
 
 /** Authenticated: unread DMs for this member. */

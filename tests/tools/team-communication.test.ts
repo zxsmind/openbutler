@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createTeamInboxTool, createTeamSendTool } from '../../src/tools/team-communication.js';
+import { createTeamGroupTool, createTeamInboxTool, createTeamSendTool, createTeamStatusTool } from '../../src/tools/team-communication.js';
 import { shouldWakeForTeamDms } from '../../src/team/service.js';
 
 describe('team_send tool', () => {
@@ -31,6 +31,28 @@ describe('team_inbox tool', () => {
     const bad = (await tool.execute!({ limit: 999 })) as { status: string };
     expect(bad.status).toBe('invalid');
     expect(inbox).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('team_group tool', () => {
+  it('reads the group with a limit and validates it', async () => {
+    const group = vi.fn(async () => ({ status: 'ok', count: 0, messages: [] }));
+    const tool = createTeamGroupTool(group);
+    await tool.execute!({ limit: 10 });
+    expect(group).toHaveBeenCalledWith(10);
+    const bad = (await tool.execute!({ limit: 0 })) as { status: string };
+    expect(bad.status).toBe('invalid');
+    expect(group).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('team_status tool', () => {
+  it('returns the roster from the host', async () => {
+    const status = vi.fn(async () => ({ status: 'ok', memberCount: 2 }));
+    const tool = createTeamStatusTool(status);
+    const result = (await tool.execute!({})) as { memberCount: number };
+    expect(result.memberCount).toBe(2);
+    expect(status).toHaveBeenCalledTimes(1);
   });
 });
 

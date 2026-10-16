@@ -30,6 +30,8 @@ export interface CreateAgentRuntimeOptions {
   ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
   teamInbox?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamGroup?: (limit: number) => Promise<unknown>;
+  teamStatus?: () => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
@@ -123,6 +125,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         ...(options.ownerInboxRead ? { ownerInboxRead: options.ownerInboxRead } : {}),
         ...(options.teamSend ? { teamSend: options.teamSend } : {}),
         ...(options.teamInbox ? { teamInbox: options.teamInbox } : {}),
+        ...(options.teamGroup ? { teamGroup: options.teamGroup } : {}),
+        ...(options.teamStatus ? { teamStatus: options.teamStatus } : {}),
         ...(options.teamRemember ? { teamRemember: options.teamRemember } : {}),
         ...(options.sessionMessage ? { sessionMessage: options.sessionMessage } : {}),
         ...(options.subagent ? { subagent: options.subagent } : {}),

@@ -122,6 +122,16 @@ export interface TeamAuditEntry {
   createdAt: number;
 }
 
+export interface MemberSummary {
+  name: string;
+  role: 'hub' | 'member';
+  online: boolean;
+  lastSeen: number;
+  lastMessageAt: number | null;
+  lastMessageTo: string | null;
+  lastMemoryAt: number | null;
+}
+
 /**
  * Hub-side team database. Tickets live here hashed; the single raw ticket of
  * an approved join stays only until the joiner picks it up once, then it is
@@ -439,11 +449,35 @@ export class TeamStore {
       .all(limit) as unknown as TeamAuditEntry[];
   }
 
-  /** Active members seen within `windowMs` of `now`, for a presence view. */
+  /**
+   * Active members considered online: the hub always (it is answering this
+   * very query), and any member seen within `windowMs`. The hub talks to its
+   * own store directly, so it never touches its own last_seen; treating it as
+   * online while it serves is the honest reading.
+   */
   onlineMemberNames(now: number, windowMs: number): Set<string> {
     const rows = this.database
-      .prepare('SELECT name FROM team_members WHERE removed_at IS NULL AND last_seen >= ?')
+      .prepare("SELECT name FROM team_members WHERE removed_at IS NULL AND (role = 'hub' OR last_seen >= ?)")
       .all(now - windowMs) as unknown as Array<{ name: string }>;
     return new Set(rows.map((row) => row.name));
+  }
+
+  /**
+   * One row per active member with presence and last activity: when they last
+   * sent a message (and where), and when they last wrote shared memory. The
+   * hub derives this so every member sees the same picture.
+   */
+  memberSummaries(now: number, windowMs: number): MemberSummary[] {
+    const online = this.onlineMemberNames(now, windowMs);
+    const rows = this.database
+      .prepare(
+        `SELECT m.name AS name, m.role AS role, m.last_seen AS lastSeen,
+           (SELECT created_at FROM team_messages WHERE sender = m.name ORDER BY seq DESC LIMIT 1) AS lastMessageAt,
+           (SELECT recipient FROM team_messages WHERE sender = m.name ORDER BY seq DESC LIMIT 1) AS lastMessageTo,
+           (SELECT created_at FROM team_memory WHERE author = m.name ORDER BY seq DESC LIMIT 1) AS lastMemoryAt
+         FROM team_members m WHERE m.removed_at IS NULL ORDER BY m.created_at`,
+      )
+      .all() as unknown as Array<Omit<MemberSummary, 'online'>>;
+    return rows.map((row) => ({ ...row, online: online.has(row.name) }));
   }
 }

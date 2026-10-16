@@ -118,9 +118,7 @@ describe('team hub server', () => {
     expect(await pollJoin(target, requestId)).toEqual({ status: 'pending' });
   });
 
-  it('reports presence for members seen recently', async () => {
-    // Start the injected clock at the same instant the store was seeded, so
-    // presence windows line up with the hub member's last_seen.
+  it('reports presence: the hub is always online, members by recency', async () => {
     let clock = Date.now();
     const started = await startTeamServer({ store, bindAddress: '127.0.0.1', port: 0, allowLoopback: true, now: () => clock });
     target = { host: '127.0.0.1', port: Number(new URL(started.url).port) };
@@ -131,13 +129,21 @@ describe('team hub server', () => {
     const ticket = makeTicket();
     store.decideJoin(requestId, true, ticket, hashTicket(ticket), clock);
     store.revealTicket(requestId);
+    // A second member who never polls.
+    store.createJoinRequest('jr_z', 'Zephyr-Ranite', 'kartal-5678', clock);
+    const zephyrTicket = makeTicket();
+    store.decideJoin('jr_z', true, zephyrTicket, hashTicket(zephyrTicket), clock);
 
     const live = await fetchHubStatus(target, ticket);
     expect(live.members.find((entry) => entry.name === 'Murphy-Ranite')?.online).toBe(true);
+    // The hub answers this query, so it is online by definition.
+    expect(live.members.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(true);
+    expect(live.memberCount).toBe(3);
 
-    // Long after the poll window, the hub member (never polled since init) is offline.
+    // After the poll window, a member that has not polled falls offline.
     clock += 60_000;
     const later = await fetchHubStatus(target, ticket);
-    expect(later.members.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(false);
+    expect(later.members.find((entry) => entry.name === 'Zephyr-Ranite')?.online).toBe(false);
+    expect(later.members.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(true);
   });
 });

@@ -44,6 +44,8 @@ const ALWAYS_OFFERED = [
   'read_owner_messages',
   'team_send',
   'team_inbox',
+  'team_group',
+  'team_status',
   'team_remember',
   'session_message',
   'subagent',

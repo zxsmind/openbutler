@@ -317,6 +317,54 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
   }
 
+  /** `team_group`: read new group messages since this machine's cursor. */
+  async function readTeamGroup(limit: number): Promise<unknown> {
+    try {
+      return await withTeamChannel(async (channel) => {
+        const result = await channel.groupRead(limit);
+        return {
+          status: 'ok',
+          count: result.messages.length,
+          latestSeq: result.latestSeq,
+          messages: result.messages.map((message) => ({
+            id: message.msgId,
+            from: message.sender,
+            at: new Date(message.createdAt).toISOString(),
+            text: message.body,
+          })),
+        };
+      });
+    } catch (error) {
+      return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** `team_status`: the roster with presence and last activity. */
+  async function readTeamStatus(): Promise<unknown> {
+    try {
+      return await withTeamChannel(async (channel) => {
+        const view = await channel.status();
+        return {
+          status: 'ok',
+          team: view.team,
+          you: view.you,
+          memberCount: view.memberCount,
+          members: view.members.map((member) => ({
+            name: member.name,
+            role: member.role,
+            online: member.online,
+            lastSeen: member.lastSeen ? new Date(member.lastSeen).toISOString() : null,
+            lastMessageAt: member.lastMessageAt ? new Date(member.lastMessageAt).toISOString() : null,
+            lastMessageTo: member.lastMessageTo,
+            lastMemoryAt: member.lastMemoryAt ? new Date(member.lastMemoryAt).toISOString() : null,
+          })),
+        };
+      });
+    } catch (error) {
+      return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   /** `team_remember`: append a signed entry to shared team memory, then refresh the local mirror. */
   async function executeTeamRemember(input: { topic: 'decisions' | 'shared'; text: string }): Promise<unknown> {
     try {
@@ -343,17 +391,16 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   /**
-   * Member-side wake. Polls the hub for unread direct messages and, when new
-   * ones appear and the session is idle, wakes it once with a summary. Group
-   * messages never wake: they are ambient. A busy session is left alone; the
-   * next idle tick delivers the same wake.
+   * Polls for unread direct messages and, when new ones appear and the session
+   * is idle, wakes it once with a summary. Group messages never wake: they are
+   * ambient. A busy session is left alone; the next idle tick delivers the same
+   * wake. Runs on every team machine, hub included (the hub is a member too).
    */
   async function pollTeamInbox(): Promise<void> {
     if (closing) return;
     const team = loadSettings().team;
-    if (team?.role !== 'member') return;
-    const ticket = loadSecrets().teamTicket;
-    if (!ticket) return;
+    if (!team) return;
+    if (team.role === 'member' && !loadSecrets().teamTicket) return;
     let inbox: { count: number; messages: Array<{ seq: number; msgId: string; sender: string }> };
     try {
       inbox = await withTeamChannel((channel) => channel.inbox());
@@ -620,6 +667,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       ownerInboxRead: readOwnerInbox,
       teamSend: executeTeamSend,
       teamInbox: readTeamInbox,
+      teamGroup: readTeamGroup,
+      teamStatus: readTeamStatus,
       teamRemember: executeTeamRemember,
       sessionMessage: deliverSessionMessage,
       subagent: spawnSubagent,
@@ -675,6 +724,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         ownerInboxRead: readOwnerInbox,
         teamSend: executeTeamSend,
         teamInbox: readTeamInbox,
+        teamGroup: readTeamGroup,
+        teamStatus: readTeamStatus,
         teamRemember: executeTeamRemember,
         sessionMessage: deliverSessionMessage,
         subagent: spawnSubagent,

@@ -142,4 +142,35 @@ describe('TeamStore', () => {
     expect(store.nameTaken('murphy-ranite')).toBe(true);
     store.close();
   });
+
+  it('summarizes members with presence and last activity', async () => {
+    const { TeamStore } = await import('../src/team/store.js');
+    const store = new TeamStore(join(dataDir, 'team.db'));
+    const now = 10_000;
+    store.initHub('hub-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-1', now);
+    const ticket = makeTicket();
+    store.decideJoin('jr_m', true, ticket, hashTicket(ticket), now);
+    store.revealTicket('jr_m');
+
+    store.postMessage({ msgId: 'm_1', sender: 'Murphy-Ranite', recipient: 'group', body: 'hi', createdAt: now + 5 });
+    store.appendMemory({ topic: 'decisions', author: 'Murphy-Ranite', body: 'x', createdAt: now + 6 });
+    store.touchMember('Murphy-Ranite', now + 7);
+
+    const summaries = store.memberSummaries(now + 8, 15_000);
+    const murphy = summaries.find((entry) => entry.name === 'Murphy-Ranite')!;
+    const hub = summaries.find((entry) => entry.name === 'Atreus-Ranite')!;
+    expect(murphy.online).toBe(true);
+    expect(murphy.lastMessageAt).toBe(now + 5);
+    expect(murphy.lastMessageTo).toBe('group');
+    expect(murphy.lastMemoryAt).toBe(now + 6);
+    // The hub is always online; it has never messaged or written memory.
+    expect(hub.online).toBe(true);
+    expect(hub.lastMessageAt).toBeNull();
+    // Long after the window, a quiet member falls offline but the hub stays online.
+    const later = store.memberSummaries(now + 60_000, 15_000);
+    expect(later.find((entry) => entry.name === 'Murphy-Ranite')?.online).toBe(false);
+    expect(later.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(true);
+    store.close();
+  });
 });

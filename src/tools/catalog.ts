@@ -18,7 +18,13 @@ import { createSubagentStopTool } from './subagent-stop.js';
 import { createSubagentTool, type SubagentRequest } from './subagent.js';
 import type { ToolDefinition } from './registry.js';
 import { createReadOwnerMessagesTool, createSendMessageToOwnerTool } from './owner-communication.js';
-import { createTeamInboxTool, createTeamRememberTool, createTeamSendTool } from './team-communication.js';
+import {
+  createTeamGroupTool,
+  createTeamInboxTool,
+  createTeamRememberTool,
+  createTeamSendTool,
+  createTeamStatusTool,
+} from './team-communication.js';
 
 export interface ToolCatalogueOptions {
   workspaceRoot: string;
@@ -32,6 +38,8 @@ export interface ToolCatalogueOptions {
   ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
   teamInbox?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamGroup?: (limit: number) => Promise<unknown>;
+  teamStatus?: () => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
@@ -79,6 +87,8 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     createTeamInboxTool(
       options.teamInbox ?? (async () => ({ status: 'unavailable' as const, error: 'team_inbox is not available in this session.' })),
     ),
+    createTeamGroupTool(options.teamGroup ?? unavailable('team_group')),
+    createTeamStatusTool(options.teamStatus ?? unavailable('team_status')),
     createTeamRememberTool(
       options.teamRemember ?? (async () => ({ status: 'unavailable' as const, error: 'team_remember is not available in this session.' })),
     ),

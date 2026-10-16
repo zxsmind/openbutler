@@ -30,6 +30,28 @@ export interface TeamMemoryEntry {
   createdAt: number;
 }
 
+export interface TeamMemberView {
+  name: string;
+  role: string;
+  online: boolean;
+  lastSeen: number;
+  lastMessageAt: number | null;
+  lastMessageTo: string | null;
+  lastMemoryAt: number | null;
+}
+
+export interface TeamStatusView {
+  team: string;
+  you: string;
+  memberCount: number;
+  groupCursor: number;
+  groupLatestSeq: number;
+  members: TeamMemberView[];
+}
+
+/** A member counts as online when it has polled within this window (poll is 1s). */
+const PRESENCE_WINDOW_MS = 15_000;
+
 /**
  * One way to talk to a team, whether this machine is the hub or a member.
  * The hub reads and writes its own store directly (no network to itself);
@@ -41,6 +63,10 @@ export interface TeamChannel {
   group(since: number): Promise<{ latestSeq: number; messages: TeamMessage[] }>;
   groupCursor(): number;
   setGroupCursor(seq: number): Promise<void>;
+  /** Read new group messages after this member's cursor, advancing it. */
+  groupRead(limit: number): Promise<{ messages: TeamMessage[]; cursor: number; latestSeq: number }>;
+  /** Team roster with presence and last activity. */
+  status(): Promise<TeamStatusView>;
   inbox(): Promise<{ count: number; messages: TeamMessage[] }>;
   ack(msgIds: readonly string[]): Promise<{ acknowledged: number; remaining: number }>;
   memory(since: number): Promise<{ latestSeq: number; entries: TeamMemoryEntry[] }>;
@@ -71,6 +97,22 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
     },
     async setGroupCursor(seq) {
       store.setGroupCursor(memberName, seq);
+    },
+    async groupRead(limit) {
+      const cursor = store.getGroupCursor(memberName);
+      const messages = store.groupMessages(cursor, limit);
+      if (messages.length > 0) store.setGroupCursor(memberName, messages.at(-1)!.seq);
+      return { messages, cursor: store.getGroupCursor(memberName), latestSeq: store.groupLatestSeq() };
+    },
+    async status() {
+      return {
+        team: store.getMeta('team_name') ?? 'team',
+        you: memberName,
+        memberCount: store.listMembers().length,
+        groupCursor: store.getGroupCursor(memberName),
+        groupLatestSeq: store.groupLatestSeq(),
+        members: store.memberSummaries(Date.now(), PRESENCE_WINDOW_MS),
+      };
     },
     async inbox() {
       return { count: store.unreadDmCount(memberName), messages: store.unreadDms(memberName, 200) };
@@ -106,6 +148,28 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
     async setGroupCursor(seq) {
       cursor = seq;
       await client.setGroupCursor(target, ticket, seq);
+    },
+    groupRead(limit) {
+      return client.readGroup(target, ticket, limit);
+    },
+    async status() {
+      const live = await client.fetchHubStatus(target, ticket);
+      return {
+        team: live.team,
+        you: live.you,
+        memberCount: live.memberCount ?? live.members.length,
+        groupCursor: live.groupCursor ?? 0,
+        groupLatestSeq: live.groupLatestSeq ?? 0,
+        members: live.members.map((member) => ({
+          name: member.name,
+          role: member.role,
+          online: member.online ?? false,
+          lastSeen: member.lastSeen ?? 0,
+          lastMessageAt: member.lastMessageAt ?? null,
+          lastMessageTo: member.lastMessageTo ?? null,
+          lastMemoryAt: member.lastMemoryAt ?? null,
+        })),
+      };
     },
     inbox() {
       return client.fetchInbox(target, ticket);

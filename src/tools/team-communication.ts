@@ -3,6 +3,8 @@ import { MAX_TOOL_INPUT_CHARS, type ToolDefinition } from './registry.js';
 
 type TeamSend = (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
 type TeamInbox = (limit: number, acknowledge?: string[]) => Promise<unknown>;
+type TeamGroup = (limit: number) => Promise<unknown>;
+type TeamStatus = () => Promise<unknown>;
 type TeamRemember = (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
 
 /**
@@ -74,6 +76,56 @@ export function createTeamInboxTool(inbox: TeamInbox): ToolDefinition {
         return Promise.resolve({ status: 'invalid', error: 'acknowledge must be an array of up to 50 message ids.' });
       return inbox(Number(limit), acknowledge as string[]);
     },
+  };
+}
+
+/**
+ * The shared group channel: read the messages the team posted since this
+ * ranite last looked. Group traffic is ambient and never wakes a session, so
+ * this is how a ranite catches up on the group on its own terms.
+ */
+export function createTeamGroupTool(group: TeamGroup): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_group',
+    maxInputChars: 128,
+    description:
+      'Read new messages from the shared team group channel, oldest first, advancing your read position. The group is ambient: posting to it never wakes anyone, so use this to catch up on group traffic. To send to the group, use team_send with recipient "group".',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Maximum messages to read; defaults to 50.' },
+      },
+    },
+    effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
+    autoApprove: () => true,
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: (input) => {
+      const limit = input.limit ?? 50;
+      if (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 100)
+        return Promise.resolve({ status: 'invalid', error: 'limit must be an integer between 1 and 100.' });
+      return group(Number(limit));
+    },
+  };
+}
+
+/**
+ * The team roster: who is in the team, who is online right now, and what each
+ * member last did (last message and its destination, last shared-memory write).
+ */
+export function createTeamStatusTool(status: TeamStatus): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_status',
+    maxInputChars: 64,
+    description:
+      'Show the team roster: every member, whether they are online now, when they were last seen, and their last activity (last message sent and where, and their last shared-memory write). Use this to see who is around and what the team has been doing before coordinating.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
+    autoApprove: () => true,
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: () => status(),
   };
 }
 

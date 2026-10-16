@@ -11,8 +11,6 @@ import * as ui from './ui.js';
 const JOIN_POLL_INTERVAL_MS = 2000;
 const JOIN_POLL_TIMEOUT_MS = 10 * 60_000;
 const INVITE_TTL_DEFAULT_MS = 10 * 60_000;
-/** A member is shown online when it has polled within this window (poll is 1s). */
-const PRESENCE_WINDOW_MS = 15_000;
 
 const USAGE = `Usage:
   ranite team init --as <name> [--name <team>] [--port <n>]
@@ -268,36 +266,36 @@ async function runDecide(parsed: Parsed, approve: boolean): Promise<void> {
 }
 
 async function runMembers(): Promise<void> {
-  const settings = loadSettings();
-  if (!settings.team) throw new Error('This machine is not in a team.');
-  if (settings.team.role === 'hub') {
-    const store = openStore();
-    try {
-      const now = Date.now();
-      const online = store.onlineMemberNames(now, PRESENCE_WINDOW_MS);
-      ui.table(
-        ['MEMBER', 'ROLE', 'PRESENCE', 'LAST SEEN'],
-        store
-          .listMembers()
-          .map((entry) => [
-            entry.name,
-            entry.role,
-            online.has(entry.name) ? 'online' : 'offline',
-            entry.lastSeen === entry.createdAt ? 'never' : `${Math.max(0, Math.round((now - entry.lastSeen) / 1000))}s ago`,
-          ]),
-      );
-    } finally {
-      store.close();
-    }
-    return;
+  const { channel, close } = openChannel();
+  try {
+    const view = await channel.status();
+    const now = Date.now();
+    ui.info(`${view.memberCount} member${view.memberCount === 1 ? '' : 's'} in "${view.team}".`);
+    ui.table(
+      ['MEMBER', 'ROLE', 'PRESENCE', 'LAST SEEN', 'LAST ACTED'],
+      view.members.map((member) => [
+        member.name,
+        member.role,
+        member.online ? 'online' : 'offline',
+        member.lastSeen ? `${Math.max(0, Math.round((now - member.lastSeen) / 1000))}s ago` : 'never',
+        lastAction(member),
+      ]),
+    );
+  } finally {
+    close();
   }
-  const ticket = loadSecrets().teamTicket;
-  if (!ticket) throw new Error('No member ticket stored. Rejoin the team.');
-  const status = await fetchHubStatus({ host: settings.team.hubHost, port: settings.team.hubPort }, ticket);
-  ui.table(
-    ['MEMBER', 'ROLE', 'PRESENCE'],
-    status.members.map((entry) => [entry.name, entry.role, entry.online === false ? 'offline' : 'online']),
-  );
+}
+
+/** One short phrase for what a member last did: a message (and where) or a memory write. */
+function lastAction(member: { lastMessageAt: number | null; lastMessageTo: string | null; lastMemoryAt: number | null }): string {
+  const message = member.lastMessageAt ?? 0;
+  const memory = member.lastMemoryAt ?? 0;
+  if (message === 0 && memory === 0) return 'nothing yet';
+  if (message >= memory) {
+    const where = member.lastMessageTo === 'group' ? 'group' : `DM to ${member.lastMessageTo}`;
+    return `messaged ${where}`;
+  }
+  return 'wrote team memory';
 }
 
 async function runLeave(): Promise<void> {
@@ -430,13 +428,14 @@ async function runDm(parsed: Parsed): Promise<void> {
 async function runInbox(): Promise<void> {
   const { channel, close } = openChannel();
   try {
-    const [inbox, group] = await Promise.all([channel.inbox(), channel.group(channel.groupCursor())]);
-    const newGroup = Math.max(0, group.latestSeq - channel.groupCursor());
+    const [inbox, view] = await Promise.all([channel.inbox(), channel.status()]);
+    const newGroup = Math.max(0, view.groupLatestSeq - view.groupCursor);
     ui.info(`${inbox.count} unread DM${inbox.count === 1 ? '' : 's'}, ${newGroup} new group message${newGroup === 1 ? '' : 's'}.`);
     if (inbox.count > 0) {
       renderMessages(inbox.messages);
       ui.info('Read them with: ranite team read');
     }
+    if (newGroup > 0) ui.info('Read the group with: ranite team read --group');
   } finally {
     close();
   }
@@ -448,15 +447,13 @@ async function runRead(parsed: Parsed): Promise<void> {
   const { channel, close } = openChannel();
   try {
     if (group) {
-      const since = channel.groupCursor();
-      const result = await channel.group(since);
+      const result = await channel.groupRead(100);
       const messages = from ? result.messages.filter((message) => message.sender.toLowerCase() === from) : result.messages;
       if (messages.length === 0) {
         ui.info('No new group messages.');
         return;
       }
       renderMessages(messages);
-      await channel.setGroupCursor(result.latestSeq);
       return;
     }
     const inbox = await channel.inbox();
