@@ -121,6 +121,7 @@ function runtime(): AgentEnvironment {
     saveShowReasoningPreference: () => {},
     approvalMode: 'auto-review',
     getReasoningProviderOptions: () => ({}),
+    getReviewProviderOptions: () => ({}),
     registry,
     selectModel: async () => {},
     close: async () => {},
@@ -188,22 +189,34 @@ describe('auto-review history summary', () => {
 describe('auto-review records its verdict and still lets the decision through', () => {
   it('keeps the selected reasoning settings for agent, reviewer, and title requests', async () => {
     const providerOptions = { fixture: { reasoningEffort: 'xhigh', cache_salt: 'conversation-cache' } };
+    const reviewVerdict = JSON.stringify({
+      verdict: 'allow',
+      confidence: 'high',
+      risk: 'low',
+      reason: 'The user requested this inspection.',
+      authority: 'explicit',
+    });
     model = new MockLanguageModelV3({
-      doGenerate: [
+      doGenerate: [titleResponse()],
+      doStream: [
+        toolCallStream('inspect', 'call-1'),
         {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ verdict: 'allow', confidence: 'high', risk: 'low', reason: 'The user requested this inspection.' }),
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId: 'review-1',
+                toolName: 'auto_review_decision',
+                input: reviewVerdict,
+              });
+              controller.enqueue({ type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage });
+              controller.close();
             },
-          ],
-          finishReason: { unified: 'stop', raw: 'stop' },
-          usage,
-          warnings: [],
+          }),
         },
-        titleResponse(),
+        textStream('Auto-review fixture complete'),
       ],
-      doStream: [toolCallStream('inspect', 'call-1'), textStream('Auto-review fixture complete')],
     });
     const environment = runtime();
     environment.getReasoningProviderOptions = () => providerOptions;
@@ -211,17 +224,85 @@ describe('auto-review records its verdict and still lets the decision through', 
     controller = new AgentSessionController(environment, (action) => ledger.recordToolAction(action));
     await controller.sendMessage({ text: 'Inspect the fixture', images: [] }, { reasoningVariantId: 'xhigh', showReasoning: false });
     expect(execute).toHaveBeenCalledOnce();
-    expect(model.doGenerateCalls).toHaveLength(2);
-    expect(model.doStreamCalls).toHaveLength(2);
-    for (const request of [...model.doGenerateCalls, ...model.doStreamCalls]) expect(request.providerOptions).toEqual(providerOptions);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(model.doGenerateCalls[0]!.providerOptions).toEqual(providerOptions);
+    expect(model.doStreamCalls).toHaveLength(3);
+    // The review streams without the turn's reasoning effort; agent steps keep it.
+    const reviewCalls = model.doStreamCalls.filter((call) => Object.keys(call.providerOptions ?? {}).length === 0);
+    expect(reviewCalls).toHaveLength(1);
+    for (const request of model.doStreamCalls.filter((call) => call !== reviewCalls[0])) {
+      expect(request.providerOptions).toEqual(providerOptions);
+    }
     for (const request of model.doGenerateCalls) expect(request.maxOutputTokens).toBeUndefined();
+    const [row] = ledger.listActions();
+    const reviewed = ledger.actionTransitions(row!.requestId).find((entry) => entry.state === 'reviewed');
+    expect(reviewed?.detail).toMatchObject({ verdict: 'allow', authority: 'explicit' });
+  });
+
+  it('reviews an identical side-effect-free action once per turn and stays quiet on allow', async () => {
+    const reviewer = vi.fn(async () => verdict());
+    const session = await startSession(reviewer as never);
+    model.doStream = vi
+      .fn()
+      .mockImplementationOnce(async () => toolCallStream('inspect', 'call-1'))
+      .mockImplementationOnce(async () => toolCallStream('inspect', 'call-2'))
+      .mockImplementation(async () => textStream('Auto-review fixture complete'));
+    await session.sendMessage({ text: 'Inspect the fixture twice', images: [] }, preferences);
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(reviewer).toHaveBeenCalledOnce();
+    const reviewed = ledger
+      .listActions()
+      .flatMap((row) => ledger.actionTransitions(row.requestId))
+      .filter((entry) => entry.state === 'reviewed');
+    expect(reviewed).toHaveLength(2);
+    expect(reviewed.filter((entry) => (entry.detail as { repeated?: boolean })?.repeated === true)).toHaveLength(1);
+    const notices = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'notice');
+    expect(notices.some((entry) => entry.kind === 'notice' && entry.text.includes('Auto-review approved'))).toBe(false);
+  });
+
+  it('retries a denied action once after user approval, with the override visible to the reviewer', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const reviewer = vi.fn(async (options: Record<string, unknown>) => {
+      seen.push(options);
+      return seen.length === 1 ? verdict({ verdict: 'deny', risk: 'high', reason: 'Outside the request.' }) : verdict();
+    });
+    const session = await startSession(reviewer as never);
+    model.doStream = vi
+      .fn()
+      .mockImplementationOnce(async () => toolCallStream('inspect', 'call-1'))
+      .mockImplementationOnce(async () => textStream('First attempt denied.'))
+      .mockImplementationOnce(async () => toolCallStream('inspect', 'call-2'))
+      .mockImplementation(async () => textStream('Second attempt complete.'));
+
+    await session.sendMessage({ text: 'Inspect the fixture', images: [] }, preferences);
+    expect(execute).not.toHaveBeenCalled();
+    expect(reviewer).toHaveBeenCalledTimes(1);
+
+    const overrides = await import('../src/review-overrides.js');
+    const [denied] = overrides.listDeniedActions();
+    expect(denied).toMatchObject({ name: 'inspect' });
+    expect(overrides.approveDeniedAction(denied!.fingerprint)).toBeTruthy();
+
+    await session.sendMessage({ text: 'Inspect the fixture again', images: [] }, preferences);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(seen[1]).toMatchObject({ userOverride: true });
+    expect(seen[0]).not.toHaveProperty('userOverride');
+    expect(overrides.listDeniedActions()).toHaveLength(0);
   });
 
   it('writes reviewed and approved transitions for an allowed action, then executes it', async () => {
-    const session = await startSession(async () => verdict());
+    const seen: Array<Record<string, unknown>> = [];
+    const session = await startSession((async (options: Record<string, unknown>) => {
+      seen.push(options);
+      return verdict();
+    }) as never);
     await session.sendMessage({ text: 'Inspect the fixture', images: [] }, preferences);
 
     expect(execute).toHaveBeenCalledTimes(1);
+    // The fixture tool declares no workspace scope, so review carries the gate reason.
+    expect(seen[0]).toMatchObject({ gateReason: 'unknown-scope' });
     const [row] = ledger.listActions();
     expect(row?.state).toBe('completed');
     expect(ledger.actionTransitions(row!.requestId).map((entry) => entry.state)).toEqual([
@@ -234,6 +315,28 @@ describe('auto-review records its verdict and still lets the decision through', 
     const reviewed = ledger.actionTransitions(row!.requestId).find((entry) => entry.state === 'reviewed');
     expect(reviewed?.detail).toMatchObject({ verdict: 'allow', risk: 'moderate' });
     expect(session.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant')).toBe(true);
+    // One status row: "checking" is replaced in place by the decided state, carrying the reason.
+    const reviewNotices = session
+      .getSnapshot()
+      .session.entries.filter((entry) => entry.kind === 'notice' && entry.text.includes('Auto-review checked'));
+    expect(reviewNotices).toHaveLength(1);
+    expect(reviewNotices[0]).toMatchObject({ text: expect.stringContaining('allow') });
+    expect(reviewNotices[0]?.kind === 'notice' && reviewNotices[0].detail).toContain('Within the stated request.');
+  });
+
+  it('runs the reviewer on the configured review model when one is set', async () => {
+    const seen: unknown[] = [];
+    const reviewModel = { provider: 'review-fixture-model' } as never;
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    controller = new AgentSessionController({ ...runtime(), reviewModel }, (action) => ledger.recordToolAction(action), {
+      autoReviewer: (async (options: { model: unknown }) => {
+        seen.push(options.model);
+        return verdict();
+      }) as never,
+    });
+    await controller.sendMessage({ text: 'Inspect the fixture', images: [] }, preferences);
+    expect(seen[0]).toBe(reviewModel);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('denies without executing and stops nothing else when the reviewer rejects the action', async () => {
@@ -244,6 +347,11 @@ describe('auto-review records its verdict and still lets the decision through', 
     const [row] = ledger.listActions();
     expect(row?.state).toBe('denied');
     expect(ledger.actionTransitions(row!.requestId).map((entry) => entry.state)).toEqual(['proposed', 'reviewed', 'denied']);
+    const decided = session
+      .getSnapshot()
+      .session.entries.filter((entry) => entry.kind === 'notice' && entry.text.includes('Auto-review checked'));
+    expect(decided).toHaveLength(1);
+    expect(decided[0]).toMatchObject({ text: expect.stringContaining('denied') });
   });
 
   it('escalates to the user, records why, and executes only after the human allows it', async () => {

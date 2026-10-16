@@ -10,8 +10,11 @@ import {
   type SavedSession,
   type SessionEntry,
   type SessionSummary,
+  type NoticeTone,
 } from './session-store.js';
 import { isToolRequestWhitelisted, rememberToolRequest } from './tool-permissions.js';
+import { ensureHostOwnedRoots } from './host-owned-paths.js';
+import { consumeApproval, recordDeniedAction } from './review-overrides.js';
 import type { ReasoningSupport, ReasoningVariant } from './provider/registry.js';
 import { loadSettings, type ApprovalMode } from './settings.js';
 import { autoReviewFingerprint, reviewToolRequest, type AutoReviewOptions, type AutoReviewResult } from './auto-review.js';
@@ -66,10 +69,14 @@ export interface AgentSessionRuntimeView {
 
 export interface AgentEnvironment extends AgentSessionRuntimeView {
   model: LanguageModel;
+  /** Model the permission reviewer runs on; unset means the main model. */
+  reviewModel?: LanguageModel;
   outputLimitTokens: number | null;
   supportsImageToolResult: boolean;
   disableImageInput?: () => void;
   getReasoningProviderOptions: (variantId: string, visible: boolean) => ReasoningVariant['providerOptions'];
+  /** Cheapest expressible reasoning options for permission reviews; live with model switches. */
+  getReviewProviderOptions: () => ReasoningVariant['providerOptions'];
   registry: ToolRegistry;
   selectWorkspaceRoot?: (workspaceRoot: string) => Promise<void>;
   selectModel: (providerId: string, modelId: string) => Promise<void>;
@@ -127,7 +134,7 @@ export interface AgentSessionClient {
   addEntry(entry: SessionEntry): void;
   approveToolCall(decision: ApprovalDecision, requestId?: string): void;
   answerQuestion(answer: string | null, questionId?: string): void;
-  stop(options?: { keepQueue?: boolean }): void;
+  stop(options?: { keepQueue?: boolean; holdQueue?: boolean }): void;
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void>;
   compact(preferences: AgentTurnPreferences, recovery?: boolean): Promise<void>;
   selectModel(providerId: string, modelId: string): Promise<void>;
@@ -146,6 +153,12 @@ const STREAM_RENDER_INTERVAL_MS = 50;
  * and closes, and the abandoned stream is left to its own abort handling.
  */
 const CLOSE_IDLE_TIMEOUT_MS = 5_000;
+/**
+ * How long a manual approval prompt waits for a human decision when nothing
+ * is configured. Expiry denies the action but never stops the run, so an
+ * unattended agent keeps working instead of hanging on a prompt nobody sees.
+ */
+const DEFAULT_APPROVAL_TIMEOUT_SECONDS = 60;
 
 /** Owns conversation/session state and runs independently of any terminal UI. */
 export class AgentSessionController implements AgentSessionClient {
@@ -154,6 +167,13 @@ export class AgentSessionController implements AgentSessionClient {
   private conversationArchive: ModelMessage[] = [];
   private readonly listeners = new Set<() => void>();
   private readonly queuedMessages: QueuedTurn[] = [];
+  /**
+   * Set by an Esc-style stop: queued messages are kept visible in the chat but
+   * never start a run on their own. The next explicit send releases the hold
+   * and the held messages run together with it. Plain and keepQueue stops do
+   * not set this; only a stop that passes `holdQueue` does.
+   */
+  private queueHold = false;
   private readonly eventRunResults = new Map<string, AgentEventRunResult>();
   private activeEventOutputs: AgentEventOutput[] | null = null;
   private activeEventAssistantText = '';
@@ -169,9 +189,9 @@ export class AgentSessionController implements AgentSessionClient {
   private autoReviewConsecutiveDenials = 0;
   private autoReviewRecentDenials: boolean[] = [];
   private readonly autoReviewDeniedFingerprints = new Map<string, string>();
+  private readonly autoReviewAllowedFingerprints = new Set<string>();
   private currentReviewAuthorization: QueuedMessage['reviewAuthorization'] | null = null;
   private currentReviewMessages: ModelMessage[] = [];
-  private currentReviewProviderOptions: AgentProviderOptions = {};
   private activeRunAbort: AbortController | null = null;
   private lastContextUsage: number | undefined;
   private lastContextEstimate: number | undefined;
@@ -204,6 +224,11 @@ export class AgentSessionController implements AgentSessionClient {
     private readonly recordAction?: (action: ToolActionUpdate) => void | Promise<void>,
     private readonly options: AgentSessionOptions = {},
   ) {
+    // Every session (foreground, background, worker) provisions the host-owned
+    // roots first, so the dated scratch directory exists before the first
+    // tool call classifies against it. Best-effort by design; see
+    // ensureHostOwnedRoots.
+    ensureHostOwnedRoots();
     this.session = createSession(
       runtime.providerId,
       runtime.modelId,
@@ -334,8 +359,9 @@ export class AgentSessionController implements AgentSessionClient {
     this.publish();
   }
 
-  addNotice(text: string): void {
-    this.addEntry({ kind: 'notice', text });
+  addNotice(text: string, tone: NoticeTone = 'info'): void {
+    // Info stays unmarked so persisted transcripts keep the established shape.
+    this.addEntry(tone === 'info' ? { kind: 'notice', text } : { kind: 'notice', text, tone });
   }
 
   listSessions(): SessionSummary[] {
@@ -442,6 +468,7 @@ export class AgentSessionController implements AgentSessionClient {
       } catch (error) {
         this.addNotice(
           `Could not save the allowlist; this request will be allowed once. ${error instanceof Error ? error.message : String(error)}`,
+          'warn',
         );
       }
     }
@@ -458,11 +485,17 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   /**
-   * Stops the current work. By default queued messages are dropped too (the TUI's Esc path);
-   * `keepQueue` keeps them for the next turn (the owner's `/stop` semantics).
+   * Stops the current work. By default queued messages are dropped too (a plain
+   * stop); `keepQueue` keeps them and they start automatically in a fresh turn
+   * (the owner's `/stop` semantics); `holdQueue` implies `keepQueue` and additionally
+   * holds them back so they stay visible in the chat without starting a run on
+   * their own (the TUI's Esc semantics). The hold is released by the next
+   * explicit send, which runs the held messages together with the new one.
    */
-  stop(options: { keepQueue?: boolean } = {}): void {
-    if (options.keepQueue !== true) {
+  stop(options: { keepQueue?: boolean; holdQueue?: boolean } = {}): void {
+    if (options.holdQueue === true) {
+      this.queueHold = true;
+    } else if (options.keepQueue !== true) {
       for (const turn of this.queuedMessages.splice(0)) turn.reject(new Error('Run cancelled before execution.'));
     }
     this.activeRunAbort?.abort();
@@ -546,6 +579,19 @@ export class AgentSessionController implements AgentSessionClient {
       // A repaint batch keeps the current message open; tool/run boundaries finish it.
       this.streamFlushTimer = setTimeout(() => this.flushStreamedDeltas(), STREAM_RENDER_INTERVAL_MS);
     }
+  }
+
+  /**
+   * Turn preferences as they are right now, not as they were when the turn
+   * started. Settings changed mid-run (reasoning variant, thinking visibility)
+   * apply to the running turn immediately instead of waiting for it to end:
+   * the next streamed delta and the next model step already see them.
+   */
+  private liveTurnPreferences(): AgentTurnPreferences {
+    return {
+      reasoningVariantId: this.runtime.reasoningDefault,
+      showReasoning: this.runtime.showReasoningDefault,
+    };
   }
 
   private flushStreamedDeltas(): void {
@@ -684,13 +730,17 @@ export class AgentSessionController implements AgentSessionClient {
     if (approvalMode === 'full-access') return true;
     if (approvalMode === 'auto-review') {
       if (this.isAutoReviewCircuitOpen()) {
-        this.addNotice('Auto-review paused after repeated denials. This action needs your approval.');
+        this.addNotice('Auto-review paused after repeated denials. This action needs your approval.', 'warn');
         await this.recordAutoReviewState(request, 'review_unavailable', { code: 'circuit-open', status: 'circuit-open' });
         return this.requestManualApproval(request);
       }
 
       const fingerprint = autoReviewFingerprint(request);
-      const previousDenial = this.autoReviewDeniedFingerprints.get(fingerprint);
+      // A one-time user approval beats the same-turn denial memory: the retry
+      // still goes through review, with the override visible to the reviewer.
+      const override = consumeApproval(this.runtime.workspaceRoot, request);
+      if (override) this.addNotice(`Retrying ${request.providerId}/${request.name} with your one-time approval…`);
+      const previousDenial = !override ? this.autoReviewDeniedFingerprints.get(fingerprint) : undefined;
       if (previousDenial) {
         this.recordAutoReviewDenial(true);
         const reason = `The same exact action was already denied in this turn. Previous reason: ${previousDenial}`;
@@ -702,21 +752,55 @@ export class AgentSessionController implements AgentSessionClient {
           reason,
           repeated: true,
         });
-        this.addNotice(`Auto-review denied a repeated tool request: ${previousDenial}`);
+        this.addNotice(`Auto-review denied a repeated tool request: ${previousDenial}`, 'warn');
         return { approved: false, source: 'auto-review', reason };
       }
 
-      this.addNotice(`Auto-review is checking ${request.providerId}/${request.name}…`);
+      // One status row per review: it starts as "checking" and is replaced in
+      // place when the review decides, so the transcript never shows a stale
+      // check. Pressing it (mouse) reveals the recorded reason and assessment.
+      const checking: SessionEntry = { kind: 'notice', text: `Auto-review is checking ${request.providerId}/${request.name}…` };
+      this.addEntry(checking);
+      const settleReviewStatus = (text: string, detail: string) => this.replaceEntry(checking, { kind: 'notice', text, detail });
+      const decisionDetail = (decision: { confidence: string; risk: string; authority?: string; reason: string }) =>
+        `${decision.reason}\nRisk: ${decision.risk} · Confidence: ${decision.confidence}${decision.authority ? ` · Authority: ${decision.authority}` : ''}`;
       // Read fresh so a `ranite permissions --review-timeout` change applies without a host restart.
       const reviewTimeoutSeconds = loadSettings().autoReviewTimeoutSeconds;
+      // The review is a classification call: it never inherits the turn's
+      // reasoning effort, so a heavy thinking setup cannot slow every
+      // permission check into a timeout.
+      // An identical action already allowed in this turn is not reviewed
+      // again, but only when repeating it cannot change anything outside the
+      // model: reads whose result stays inside the session. Anything that
+      // writes, executes, or reaches another party is reviewed every time.
+      const repeatableRead =
+        request.effect.change === 'none' && (request.effect.outbound === 'none' || request.effect.outbound === 'model');
+      if (repeatableRead && this.autoReviewAllowedFingerprints.has(fingerprint)) {
+        const reason = 'The identical side-effect-free action was already allowed in this turn.';
+        await this.recordAutoReviewState(request, 'reviewed', {
+          reviewer: 'auto-review',
+          verdict: 'allow',
+          confidence: 'high',
+          risk: 'low',
+          reason,
+          repeated: true,
+        });
+        settleReviewStatus(
+          `Auto-review checked ${request.providerId}/${request.name}: allow · low risk`,
+          `${reason}\nRisk: low · Confidence: high`,
+        );
+        return { approved: true, source: 'auto-review', reason, risk: 'low' };
+      }
       let outcome: AutoReviewResult;
       try {
         outcome = await (this.options.autoReviewer ?? reviewToolRequest)({
-          model: this.runtime.model,
+          model: this.runtime.reviewModel ?? this.runtime.model,
           request,
           messages: [...this.currentReviewMessages],
           workspaceRoot: this.runtime.workspaceRoot,
-          providerOptions: this.currentReviewProviderOptions,
+          providerOptions: this.runtime.getReviewProviderOptions(),
+          ...(request.gateReason ? { gateReason: request.gateReason } : {}),
+          ...(override ? { userOverride: true } : {}),
           ...(reviewTimeoutSeconds === undefined ? {} : { timeoutMs: reviewTimeoutSeconds * 1000 }),
           ...(this.currentReviewAuthorization ? { authorizedBackgroundTask: this.currentReviewAuthorization } : {}),
           ...(signal ? { signal } : {}),
@@ -737,7 +821,7 @@ export class AgentSessionController implements AgentSessionClient {
         this.recordAutoReviewDenial(false);
         const reason = String(outcome.reason).slice(0, 500);
         await this.recordAutoReviewState(request, 'review_unavailable', { reviewer: 'auto-review', code: outcome.code, reason });
-        this.addNotice(`Auto-review needs your approval: ${reason}`);
+        settleReviewStatus(`Auto-review checked ${request.providerId}/${request.name}: needs your approval`, `${outcome.code}: ${reason}`);
         return this.requestManualApproval(request);
       }
 
@@ -749,30 +833,62 @@ export class AgentSessionController implements AgentSessionClient {
         verdict: decision.verdict,
         confidence: decision.confidence,
         risk: decision.risk,
+        authority: decision.authority,
         reason: decision.reason,
+        ...(override ? { override: true } : {}),
       });
       if (decision.verdict === 'allow') {
         this.recordAutoReviewDenial(false);
-        this.addNotice(`Auto-review approved ${request.providerId}/${request.name}: ${decision.reason}`);
-        return { approved: true, source: 'auto-review', reason: decision.reason };
+        if (repeatableRead) this.autoReviewAllowedFingerprints.add(fingerprint);
+        settleReviewStatus(
+          `Auto-review checked ${request.providerId}/${request.name}: allow · ${decision.risk} risk`,
+          decisionDetail(decision),
+        );
+        return { approved: true, source: 'auto-review', reason: decision.reason, risk: decision.risk };
       }
       if (decision.verdict === 'deny') {
         this.recordAutoReviewDenial(true);
         this.autoReviewDeniedFingerprints.set(fingerprint, decision.reason);
-        this.addNotice(`Auto-review denied ${request.providerId}/${request.name}: ${decision.reason}`);
+        recordDeniedAction(this.runtime.workspaceRoot, request, decision.reason);
+        settleReviewStatus(`Auto-review checked ${request.providerId}/${request.name}: denied`, decisionDetail(decision));
         return { approved: false, source: 'auto-review', reason: decision.reason };
       }
 
       this.recordAutoReviewDenial(false);
-      this.addNotice(`Auto-review could not decide: ${decision.reason} Your approval is required.`);
+      settleReviewStatus(`Auto-review checked ${request.providerId}/${request.name}: needs your approval`, decisionDetail(decision));
       return this.requestManualApproval(request);
     }
     return this.requestManualApproval(request);
   }
 
-  private requestManualApproval(request: ToolCallRequest): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      this.approvalResolver = (decision) => resolve(decision !== 'deny');
+  private requestManualApproval(request: ToolCallRequest): Promise<boolean | ToolApprovalOutcome> {
+    // Read fresh so a `ranite permissions --approval-timeout` change applies without a host restart.
+    const timeoutSeconds = loadSettings().approvalTimeoutSeconds ?? DEFAULT_APPROVAL_TIMEOUT_SECONDS;
+    return new Promise<boolean | ToolApprovalOutcome>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // Drop the prompt everywhere: a later click finds no pending approval and no-ops.
+        this.approvalResolver = null;
+        this.pendingApproval = null;
+        this.pendingApprovalId = null;
+        this.addNotice(`No approval decision within ${timeoutSeconds} seconds; the action was not run.`, 'warn');
+        this.publish();
+        resolve({
+          approved: false,
+          source: 'approval-timeout',
+          reason: `Nobody approved or declined within ${timeoutSeconds} seconds.`,
+          timeoutSeconds,
+        });
+      }, timeoutSeconds * 1000);
+      timer.unref?.();
+      this.approvalResolver = (decision) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(decision !== 'deny');
+      };
       this.pendingApproval = request;
       this.pendingApprovalId = request.requestId;
       this.publish();
@@ -825,6 +941,7 @@ export class AgentSessionController implements AgentSessionClient {
     } catch (error) {
       this.addNotice(
         `The activity ledger could not record the auto-review verdict (${state}): ${error instanceof Error ? error.message : String(error)}`,
+        'warn',
       );
     }
   }
@@ -843,6 +960,7 @@ export class AgentSessionController implements AgentSessionClient {
     this.autoReviewConsecutiveDenials = 0;
     this.autoReviewRecentDenials = [];
     this.autoReviewDeniedFingerprints.clear();
+    this.autoReviewAllowedFingerprints.clear();
   }
 
   private reportTurnProgress(progress: AgentTurnProgress): void {
@@ -875,7 +993,7 @@ export class AgentSessionController implements AgentSessionClient {
     if (message.images.length > 0 && !this.runtime.supportsVision) {
       const count = message.images.length;
       const unavailable = `[${count} image attachment${count === 1 ? '' : 's'} omitted: ${this.runtime.modelName} does not support image input.]`;
-      this.addNotice(`This model cannot read images. The attachment was not sent; continuing with the text portion.`);
+      this.addNotice(`This model cannot read images. The attachment was not sent; continuing with the text portion.`, 'warn');
       message = {
         ...message,
         text: [message.text === 'User attached image' ? '' : message.text.trim(), unavailable].filter(Boolean).join('\n\n'),
@@ -885,7 +1003,11 @@ export class AgentSessionController implements AgentSessionClient {
     return new Promise<void>((resolve, reject) => {
       this.queuedMessages.push({ message, preferences, resolve, reject });
       if (this.busy) this.publish();
-      else void this.runQueuedMessages();
+      else {
+        // An explicit send releases an Esc hold: held messages run together with this one.
+        this.queueHold = false;
+        void this.runQueuedMessages();
+      }
     });
   }
 
@@ -938,7 +1060,6 @@ export class AgentSessionController implements AgentSessionClient {
         const currentTurn = nextTurn;
         activeTurn = currentTurn;
         const current = currentTurn.message;
-        const preferences = currentTurn.preferences;
         this.resetAutoReviewTurn();
         this.runError = null;
         this.activeEventOutputs = [];
@@ -1027,7 +1148,6 @@ export class AgentSessionController implements AgentSessionClient {
               ...(this.options.systemInstruction ? { systemInstruction: this.options.systemInstruction } : {}),
               compactBeforeStep: async (context) => {
                 this.currentReviewMessages = context.messages;
-                this.currentReviewProviderOptions = context.providerOptions ?? {};
                 const recentContextGrowthTokens = this.contextGrowthThisTurn ?? growthBeforeRun;
                 try {
                   const compacted = await compactConversation({
@@ -1045,7 +1165,7 @@ export class AgentSessionController implements AgentSessionClient {
                     },
                     onTextDelta: (delta) => this.queueStreamDelta('assistant', delta),
                     onReasoningDelta: (delta) => {
-                      if (preferences.showReasoning) this.queueStreamDelta('reasoning', delta);
+                      if (this.liveTurnPreferences().showReasoning) this.queueStreamDelta('reasoning', delta);
                     },
                     abortSignal: abortController.signal,
                   });
@@ -1074,14 +1194,15 @@ export class AgentSessionController implements AgentSessionClient {
                 const admitted: ReturnType<typeof queuedUserMessageToModelMessage>[] = [];
                 for (;;) {
                   const next = this.queuedMessages[0];
+                  const live = this.liveTurnPreferences();
                   if (
                     this.options.sessionWorkspaceRoot !== null ||
                     !next ||
                     (next.message.communication?.source !== 'owner-inbox' &&
                       !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
                     (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
-                    next.preferences.reasoningVariantId !== preferences.reasoningVariantId ||
-                    next.preferences.showReasoning !== preferences.showReasoning
+                    next.preferences.reasoningVariantId !== live.reasoningVariantId ||
+                    next.preferences.showReasoning !== live.showReasoning
                   )
                     break;
                   this.queuedMessages.shift();
@@ -1093,7 +1214,10 @@ export class AgentSessionController implements AgentSessionClient {
                 }
                 return admitted;
               },
-              getProviderOptions: () => this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning),
+              getProviderOptions: () => {
+                const live = this.liveTurnPreferences();
+                return this.runtime.getReasoningProviderOptions(live.reasoningVariantId, live.showReasoning);
+              },
               onTextDelta: (delta) => {
                 streamedTextReceived = true;
                 this.activeEventAssistantText += delta;
@@ -1101,7 +1225,7 @@ export class AgentSessionController implements AgentSessionClient {
                 this.queueStreamDelta('assistant', delta);
               },
               onReasoningDelta: (delta) => {
-                if (preferences.showReasoning) this.queueStreamDelta('reasoning', delta);
+                if (this.liveTurnPreferences().showReasoning) this.queueStreamDelta('reasoning', delta);
               },
               onConversationProgress: (conversation, responseMessages) => {
                 this.conversation = conversation;
@@ -1130,7 +1254,7 @@ export class AgentSessionController implements AgentSessionClient {
               this.reportTurnProgress({ kind: 'assistant-delta', text });
             }
             if (tools.shouldRestart()) refreshTools = true;
-            else if (tools.shouldStop()) this.addNotice('The tool call was denied; this run has stopped.');
+            else if (tools.shouldStop()) this.addNotice('The tool call was denied; this run has stopped.', 'warn');
           } catch (error) {
             this.flushStreamedEntries();
             this.flushEventAssistantText();
@@ -1142,7 +1266,7 @@ export class AgentSessionController implements AgentSessionClient {
                 : error instanceof Error
                   ? error.message
                   : String(error);
-            if (!abortController.signal.aborted) this.addNotice(this.runError);
+            if (!abortController.signal.aborted) this.addNotice(this.runError, 'error');
           }
         } while (refreshTools && !abortController.signal.aborted);
         this.settleToolPreviews();
@@ -1161,7 +1285,10 @@ export class AgentSessionController implements AgentSessionClient {
               abortSignal: abortController.signal,
               sessionId: this.session.id,
               systemInstruction: `${this.options.systemInstruction ?? ''}\nThe owner's request requires a visible answer. Compose it from the settled work and tool results. Do not call tools or repeat actions.`,
-              getProviderOptions: () => this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning),
+              getProviderOptions: () => {
+                const live = this.liveTurnPreferences();
+                return this.runtime.getReasoningProviderOptions(live.reasoningVariantId, live.showReasoning);
+              },
               onTextDelta: (delta) => {
                 this.activeEventAssistantText += delta;
                 this.reportTurnProgress({ kind: 'assistant-delta', text: delta });
@@ -1182,7 +1309,7 @@ export class AgentSessionController implements AgentSessionClient {
                 : error instanceof Error
                   ? error.message
                   : String(error);
-            if (!abortController.signal.aborted) this.addNotice(this.runError);
+            if (!abortController.signal.aborted) this.addNotice(this.runError, 'error');
           }
         }
 
@@ -1190,7 +1317,8 @@ export class AgentSessionController implements AgentSessionClient {
           const request = titleRequest;
           titleRequest = null;
           try {
-            const providerOptions = this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning);
+            const live = this.liveTurnPreferences();
+            const providerOptions = this.runtime.getReasoningProviderOptions(live.reasoningVariantId, live.showReasoning);
             const title = await generateSessionTitle(this.runtime.model, request.message, abortController.signal, providerOptions);
             if (this.session.id === request.sessionId) {
               this.session = { ...this.session, title };
@@ -1229,7 +1357,7 @@ export class AgentSessionController implements AgentSessionClient {
           : error instanceof Error
             ? error.message
             : String(error);
-      if (!abortController.signal.aborted) this.addNotice(this.runError);
+      if (!abortController.signal.aborted) this.addNotice(this.runError, 'error');
       if (activeTurn) {
         if (activeTurn.message.eventId) {
           this.eventRunResults.set(activeTurn.message.eventId, {
@@ -1258,14 +1386,14 @@ export class AgentSessionController implements AgentSessionClient {
       reportSessionActivity(this.session.id, false);
       if (this.activeRunAbort === abortController) this.activeRunAbort = null;
       this.publish();
-      if (!this.closed && this.queuedMessages.length > 0) void this.runQueuedMessages();
+      if (!this.closed && !this.queueHold && this.queuedMessages.length > 0) void this.runQueuedMessages();
     }
   }
 
   async compact(preferences: AgentTurnPreferences, recovery = false): Promise<void> {
     if (this.closed) return;
     if (this.busy) {
-      this.addNotice('Wait for the current run to finish before compacting.');
+      this.addNotice('Wait for the current run to finish before compacting.', 'warn');
       return;
     }
     if (this.conversation.length === 0) {
@@ -1324,13 +1452,14 @@ export class AgentSessionController implements AgentSessionClient {
           unsupportedImageInput
             ? 'The provider rejected image input. Image input is disabled for this model, and the conversation can continue.'
             : `Compaction failed: ${error instanceof Error ? error.message : String(error)}`,
+          unsupportedImageInput ? 'warn' : 'error',
         );
     } finally {
       this.busy = false;
       reportSessionActivity(this.session.id, false);
       if (this.activeRunAbort === abortController) this.activeRunAbort = null;
       this.publish();
-      if (!this.closed && this.queuedMessages.length > 0) void this.runQueuedMessages();
+      if (!this.closed && !this.queueHold && this.queuedMessages.length > 0) void this.runQueuedMessages();
     }
   }
 
@@ -1861,7 +1990,9 @@ function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
         ? '[Host context: owner message via terminal]'
         : source === 'owner-inbox'
           ? '[Host context: Telegram owner inbox signal]'
-          : '';
+          : source === 'team'
+            ? '[Host context: team direct message signal]'
+            : '';
   const workspaceLabel = message.workspaceRoot ? `[Host context: active workspace ${message.workspaceRoot.replace(/[\r\n]/g, ' ')}]` : '';
   if (message.text || sourceLabel || workspaceLabel)
     content.push({ type: 'text', text: [sourceLabel, workspaceLabel, message.text].filter(Boolean).join('\n') });

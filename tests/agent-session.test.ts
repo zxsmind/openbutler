@@ -59,6 +59,7 @@ function runtimeFor(model: MockLanguageModelV3, registry = new ToolRegistry()): 
     showReasoningDefault: true,
     saveShowReasoningPreference: () => {},
     getReasoningProviderOptions: () => ({}),
+    getReviewProviderOptions: () => ({}),
     registry,
     selectModel: async () => {},
     close: async () => {},
@@ -881,7 +882,10 @@ describe('session compaction persistence and continuation', () => {
     else await session.sendMessage({ text: 'Continue.', images: [] }, selected);
     expect(model.doStreamCalls).toHaveLength(mode === 'manual' ? 1 : 2);
     for (const request of model.doStreamCalls) expect(request.providerOptions).toEqual(providerOptions);
-    expect(runtime.getReasoningProviderOptions).toHaveBeenCalledWith('xhigh', true);
+    // Manual compaction honors its explicit argument; a running turn follows the
+    // live runtime preference instead of its send-time capture, so a mid-run
+    // settings change applies immediately.
+    expect(runtime.getReasoningProviderOptions).toHaveBeenCalledWith(mode === 'manual' ? 'xhigh' : 'default', true);
   });
 
   it('retains measured context when selecting the same model on another provider, then compacts before continuing', async () => {
@@ -1304,5 +1308,73 @@ describe('session activity reporting', () => {
     await vi.waitFor(() => expect(session!.getSnapshot().busy).toBe(false));
     expect(session.getSnapshot().queuedMessageCount).toBe(0);
     expect(session.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Second request.')).toBe(false);
+  });
+
+  it('holds queued messages on a holdQueue stop: they stay visible without starting a run', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    let calls = 0;
+    const endless = () => {
+      let timer: NodeJS.Timeout | undefined;
+      return {
+        stream: new ReadableStream<LanguageModelV3StreamPart>({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: 'endless' });
+            controller.enqueue({ type: 'text-delta', id: 'endless', delta: 'Still working…' });
+            timer = setInterval(() => {
+              try {
+                controller.enqueue({ type: 'text-delta', id: 'endless', delta: '.' });
+              } catch {
+                if (timer) clearInterval(timer);
+              }
+            }, 25);
+          },
+          cancel() {
+            if (timer) clearInterval(timer);
+          },
+        }),
+      };
+    };
+    const answer = (id: string, text: string) => async () => {
+      calls++;
+      if (calls === 1) return endless();
+      return delayedStream([
+        { type: 'text-start', id },
+        { type: 'text-delta', id, delta: text },
+        { type: 'text-end', id },
+      ]);
+    };
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi.fn().mockImplementation(async () => answer(`answer-${calls + 1}`, `Answer ${calls + 1}.`)()),
+    });
+    session = new AgentSessionController(runtimeFor(model));
+    void session.sendMessage({ text: 'First request.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(
+        session!.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text.includes('Still working')),
+      ).toBe(true),
+    );
+    void session.sendMessage({ text: 'Second request.', images: [] }, preferences);
+    await vi.waitFor(() => expect(session!.getSnapshot().queuedMessageCount).toBe(1));
+
+    session.stop({ keepQueue: true, holdQueue: true });
+    await vi.waitFor(() => expect(session!.getSnapshot().busy).toBe(false));
+    // The Esc contract: the queue survives visibly in the chat, but nothing restarts on its own.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(calls).toBe(1);
+    expect(session.getSnapshot().queuedMessageCount).toBe(1);
+
+    // The next explicit send releases the hold: held and new messages run together.
+    void session.sendMessage({ text: 'Third request.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(session!.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Second request.')).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(session!.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Third request.')).toBe(true),
+    );
+    await vi.waitFor(() => expect(session!.getSnapshot().queuedMessageCount).toBe(0));
+    await session.close();
+    session = undefined;
   });
 });

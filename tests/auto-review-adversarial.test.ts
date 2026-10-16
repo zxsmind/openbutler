@@ -39,11 +39,37 @@ function decisionModel(json: string): MockLanguageModelV3 {
       usage,
       warnings: [],
     }),
+    doStream: async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({
+            type: 'tool-call',
+            toolCallId: 'review-1',
+            toolName: 'auto_review_decision',
+            input: json,
+          });
+          controller.enqueue({
+            type: 'finish',
+            finishReason: { unified: 'stop' as const, raw: 'stop' as const },
+            usage,
+          });
+          controller.close();
+        },
+      }),
+    }),
   });
 }
 
 function validDecision(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({ verdict: 'allow', confidence: 'high', risk: 'low', reason: 'Within the stated request.', ...overrides });
+  return JSON.stringify({
+    authority: 'explicit',
+    verdict: 'allow',
+    confidence: 'high',
+    risk: 'low',
+    reason: 'Within the stated request.',
+    ...overrides,
+  });
 }
 
 function request(overrides: Partial<ToolCallRequest> = {}): ToolCallRequest {
@@ -76,7 +102,7 @@ async function capturedCall(messages: ModelMessage[]): Promise<string> {
     messages,
     workspaceRoot: process.cwd(),
   });
-  const call = model.doGenerateCalls[0]!;
+  const call = model.doStreamCalls[0]!;
   const parts: string[] = [];
   for (const message of call.prompt) {
     if (typeof message.content === 'string') parts.push(message.content);

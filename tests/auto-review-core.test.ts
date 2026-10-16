@@ -29,27 +29,79 @@ function decisionModel(json: string): MockLanguageModelV3 {
       usage,
       warnings: [],
     }),
+    doStream: async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({
+            type: 'tool-call',
+            toolCallId: 'review-1',
+            toolName: 'auto_review_decision',
+            input: json,
+          });
+          controller.enqueue({
+            type: 'finish',
+            finishReason: { unified: 'stop' as const, raw: 'stop' as const },
+            usage,
+          });
+          controller.close();
+        },
+      }),
+    }),
   });
 }
 
 function validDecision(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({ verdict: 'allow', confidence: 'high', risk: 'low', reason: 'Within the stated request.', ...overrides });
+  return JSON.stringify({
+    authority: 'explicit',
+    verdict: 'allow',
+    confidence: 'high',
+    risk: 'low',
+    reason: 'Within the stated request.',
+    ...overrides,
+  });
 }
 
 /** A model that never answers on its own; it only settles when the caller aborts. */
 function hangingModel(): MockLanguageModelV3 {
+  const hang = ({ abortSignal }: LanguageModelV3CallOptions) =>
+    new Promise<never>((_resolve, reject) => {
+      if (abortSignal?.aborted) return reject(new Error('aborted'));
+      abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
   return new MockLanguageModelV3({
-    doGenerate: ({ abortSignal }: LanguageModelV3CallOptions) =>
-      new Promise((_resolve, reject) => {
-        if (abortSignal?.aborted) return reject(new Error('aborted'));
-        abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    doGenerate: hang,
+    doStream: async ({ abortSignal }: LanguageModelV3CallOptions) => ({
+      stream: new ReadableStream({
+        start(controller) {
+          if (abortSignal?.aborted) {
+            controller.error(new Error('aborted'));
+            return;
+          }
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          abortSignal?.addEventListener(
+            'abort',
+            () => {
+              try {
+                controller.error(new Error('aborted'));
+              } catch {
+                // The stream already settled; the abort still rejects the call.
+              }
+            },
+            { once: true },
+          );
+        },
       }),
+    }),
   });
 }
 
 function throwingModel(): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => {
+      throw new Error('provider exploded');
+    },
+    doStream: async () => {
       throw new Error('provider exploded');
     },
   });
@@ -92,7 +144,7 @@ describe('reviewToolRequest decisions', () => {
     const result = await review({ model: decisionModel(validDecision()) });
     expect(result).toEqual({
       status: 'decision',
-      decision: { verdict: 'allow', confidence: 'high', risk: 'low', reason: 'Within the stated request.' },
+      decision: { verdict: 'allow', confidence: 'high', risk: 'low', authority: 'explicit', reason: 'Within the stated request.' },
     });
   });
 
@@ -154,6 +206,60 @@ describe('reviewToolRequest preparation and failure handling', () => {
     const result = await review({ model: hangingModel(), timeoutMs: 40 });
     expect(result).toMatchObject({ status: 'unavailable', code: 'timeout' });
     expect(result.status === 'unavailable' && result.reason).toContain('timed out');
+  });
+
+  it('does not time out while the reviewer keeps streaming, even past the idle budget', async () => {
+    const json = validDecision();
+    const chunks = 6;
+    const model = new MockLanguageModelV3({
+      doStream: async ({ abortSignal }: LanguageModelV3CallOptions) => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: 'thinking' });
+            let index = 0;
+            const timer = setInterval(() => {
+              if (abortSignal?.aborted) {
+                clearInterval(timer);
+                try {
+                  controller.error(new Error('aborted'));
+                } catch {
+                  // Already settled.
+                }
+                return;
+              }
+              index++;
+              if (index <= chunks) {
+                controller.enqueue({ type: 'text-delta', id: 'thinking', delta: 'still considering. ' });
+              } else {
+                clearInterval(timer);
+                controller.enqueue({ type: 'text-end', id: 'thinking' });
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallId: 'review-1',
+                  toolName: 'auto_review_decision',
+                  input: json,
+                });
+                controller.enqueue({
+                  type: 'finish',
+                  finishReason: { unified: 'stop' as const, raw: 'stop' as const },
+                  usage,
+                });
+                controller.close();
+              }
+            }, 20);
+          },
+        }),
+      }),
+    });
+    // Six progress ticks at 20ms intervals take ~120ms wall time, well past
+    // the 40ms idle budget. An absolute deadline would kill this review;
+    // steady progress must keep it alive.
+    const result = await review({ model, timeoutMs: 40 });
+    expect(result).toEqual({
+      status: 'decision',
+      decision: { verdict: 'allow', confidence: 'high', risk: 'low', authority: 'explicit', reason: 'Within the stated request.' },
+    });
   });
 
   it('reports a model failure as model-error rather than a decision', async () => {
