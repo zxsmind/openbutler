@@ -295,13 +295,26 @@ export class TeamStore {
     return true;
   }
 
-  /** Returns the raw ticket exactly once, then forgets it. */
-  revealTicket(id: string): string | null {
-    const row = this.database.prepare("SELECT ticket FROM team_join_requests WHERE id = ? AND status = 'approved'").get(id) as
-      { ticket: string | null } | undefined;
+  /**
+   * Returns the approved ticket without consuming it, so a lost response can be
+   * retried. The ticket is forgotten only on explicit confirmation or after the
+   * pickup TTL, so delivery survives a dropped connection.
+   */
+  peekTicket(id: string, now: number, ttlMs: number): string | null {
+    const row = this.database
+      .prepare("SELECT ticket, decided_at AS decidedAt FROM team_join_requests WHERE id = ? AND status = 'approved'")
+      .get(id) as { ticket: string | null; decidedAt: number | null } | undefined;
     if (!row || !row.ticket) return null;
-    this.database.prepare('UPDATE team_join_requests SET ticket = NULL WHERE id = ?').run(id);
+    if (row.decidedAt !== null && now - row.decidedAt > ttlMs) {
+      this.database.prepare('UPDATE team_join_requests SET ticket = NULL WHERE id = ?').run(id);
+      return null;
+    }
     return row.ticket;
+  }
+
+  /** Marks an approved ticket as picked up, so it is never handed out again. */
+  confirmTicket(id: string): void {
+    this.database.prepare('UPDATE team_join_requests SET ticket = NULL WHERE id = ?').run(id);
   }
 
   /** Revokes the member: ticket hash dropped, name retired (never reusable). */

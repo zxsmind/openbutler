@@ -114,9 +114,24 @@ describe('TeamStore', () => {
     expect(store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now)).toBe(true);
     expect(store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now)).toBe(false);
     expect(store.getJoinRequest('jr_1')?.status).toBe('approved');
-    expect(store.revealTicket('jr_1')).toBe(ticket);
-    expect(store.revealTicket('jr_1')).toBeNull();
+    // Pickup is idempotent: the ticket is returned until confirmed or it expires.
+    expect(store.peekTicket('jr_1', now, 60_000)).toBe(ticket);
+    expect(store.peekTicket('jr_1', now, 60_000)).toBe(ticket);
+    store.confirmTicket('jr_1');
+    expect(store.peekTicket('jr_1', now, 60_000)).toBeNull();
     expect(store.findByTicketHash(hashTicket(ticket))?.name).toBe('Murphy-Ranite');
+    store.close();
+  });
+
+  it('expires an unconfirmed ticket after the pickup TTL', async () => {
+    const { TeamStore } = await import('../src/team/store.js');
+    const store = new TeamStore(join(dataDir, 'team.db'));
+    const now = 1_000;
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
+    const ticket = makeTicket();
+    store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now);
+    expect(store.peekTicket('jr_1', now + 60_001, 60_000)).toBeNull();
     store.close();
   });
 
@@ -128,7 +143,7 @@ describe('TeamStore', () => {
     store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
     const ticket = makeTicket();
     store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now);
-    store.revealTicket('jr_1');
+    store.confirmTicket('jr_1');
 
     // A second Murphy cannot slip in even if a request exists.
     store.createJoinRequest('jr_2', 'murphy-ranite', 'kartal-5678', now);
@@ -151,7 +166,7 @@ describe('TeamStore', () => {
     store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-1', now);
     const ticket = makeTicket();
     store.decideJoin('jr_m', true, ticket, hashTicket(ticket), now);
-    store.revealTicket('jr_m');
+    store.confirmTicket('jr_m');
 
     store.postMessage({ msgId: 'm_1', sender: 'Murphy-Ranite', recipient: 'group', body: 'hi', createdAt: now + 5 });
     store.appendMemory({ topic: 'decisions', author: 'Murphy-Ranite', body: 'x', createdAt: now + 6 });

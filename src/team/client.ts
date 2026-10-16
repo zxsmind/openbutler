@@ -115,6 +115,11 @@ export async function pollJoin(target: JoinTarget, requestId: string): Promise<J
   throw hubError(status, body, 'Join status is unknown.');
 }
 
+/** Confirms a ticket was received, so the hub stops handing it out. */
+export async function confirmJoin(target: JoinTarget, requestId: string): Promise<void> {
+  await requestJson(`${baseUrl(target)}/v1/join/${encodeURIComponent(requestId)}/confirm`, { method: 'POST' }).catch(() => undefined);
+}
+
 /** Authenticated: who the hub sees and who else is in the team. */
 export async function fetchHubStatus(target: JoinTarget, ticket: string): Promise<HubStatus> {
   const { status, body } = await requestJson(`${baseUrl(target)}/v1/status`, { headers: { authorization: `Bearer ${ticket}` } });

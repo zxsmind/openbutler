@@ -8,6 +8,8 @@ const MAX_BODY_BYTES = 65_536;
 const MAX_GROUP_PAGE = 200;
 const MAX_INBOX_PAGE = 200;
 const MAX_MEMORY_PAGE = 500;
+/** How long an approved ticket may be re-fetched before it is forgotten. */
+const JOIN_TICKET_TTL_MS = 60 * 60_000;
 const PROTOCOL_VERSION = 'ranite-team/1';
 /** Brute-force brake: after this many failed joins from one address, refuse it for a while. */
 const JOIN_FAILURE_LIMIT = 3;
@@ -184,12 +186,20 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
         sendJson(response, 200, { status: 'denied' });
         return;
       }
-      const ticket = store.revealTicket(entry.id);
+      // Idempotent pickup: the ticket is returned until the joiner confirms it
+      // or the pickup TTL passes, so a lost response is recoverable.
+      const ticket = store.peekTicket(entry.id, now, JOIN_TICKET_TTL_MS);
       if (!ticket) {
-        sendJson(response, 410, { error: 'This approval was already picked up.' });
+        sendJson(response, 410, { error: 'This approval was already picked up or expired.' });
         return;
       }
       sendJson(response, 200, { status: 'approved', ticket, team: teamName, teamId: store.teamId(), memberName: entry.name });
+      return;
+    }
+    const joinConfirm = /^\/v1\/join\/([A-Za-z0-9_-]+)\/confirm$/.exec(url.pathname);
+    if (request.method === 'POST' && joinConfirm) {
+      store.confirmTicket(joinConfirm[1]!);
+      sendJson(response, 200, { confirmed: true });
       return;
     }
     // Everything below needs a member ticket. The database lookup on the

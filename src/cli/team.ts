@@ -1,7 +1,7 @@
 import { confirm } from '@inquirer/prompts';
 import type { Parsed } from './args.js';
 import { loadSecrets, loadSettings, saveSecrets, saveSettings } from '../settings.js';
-import { fetchHubFingerprint, fetchHubStatus, pollJoin, postJoin, postLeave, type JoinPollResult } from '../team/client.js';
+import { confirmJoin, fetchHubFingerprint, fetchHubStatus, pollJoin, postJoin, postLeave, type JoinPollResult } from '../team/client.js';
 import {
   fingerprintOf,
   hashTicket,
@@ -185,6 +185,8 @@ async function runJoin(parsed: Parsed): Promise<void> {
     teamId: approved.teamId,
   };
   saveSettings(next);
+  // The ticket is stored; tell the hub it is safe to forget it.
+  await confirmJoin(target, requestId);
   ui.success(`Joined "${approved.team}" as ${approved.memberName}.`);
 }
 
@@ -227,6 +229,7 @@ async function runJoinStatus(parsed: Parsed): Promise<void> {
     teamId: result.teamId,
   };
   saveSettings(settings);
+  await confirmJoin(target, requestId);
   ui.success(`Joined "${result.team}" as ${result.memberName}.`);
 }
 

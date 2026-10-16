@@ -23,7 +23,7 @@ beforeEach(async () => {
   store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-2222', now);
   murphyTicket = makeTicket();
   store.decideJoin('jr_m', true, murphyTicket, hashTicket(murphyTicket), now);
-  store.revealTicket('jr_m');
+  store.confirmTicket('jr_m');
   const started = await startTeamServer({ store, bindAddress: '127.0.0.1', port: 0, allowLoopback: true });
   target = { host: '127.0.0.1', port: Number(new URL(started.url).port) };
   server = started;

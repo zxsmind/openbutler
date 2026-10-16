@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fetchHubFingerprint, fetchHubStatus, pollJoin, postJoin, postLeave } from '../src/team/client.js';
+import { confirmJoin, fetchHubFingerprint, fetchHubStatus, pollJoin, postJoin, postLeave } from '../src/team/client.js';
 import { startTeamServer, type StartedTeamServer } from '../src/team/server.js';
 import { hashTicket, makeTicket } from '../src/team/service.js';
 import { TeamStore } from '../src/team/store.js';
@@ -56,8 +56,11 @@ describe('team hub server', () => {
     const approved = await pollJoin(target, requestId);
     expect(approved).toMatchObject({ status: 'approved', memberName: 'Murphy-Ranite', team: 'MyTeam' });
     expect(approved.status === 'approved' && approved.ticket).toBe(ticket);
-    // The ticket is a one-time reveal.
-    expect(store.revealTicket(requestId)).toBeNull();
+    // Pickup is idempotent until the joiner confirms; a lost response is recoverable.
+    const retry = await pollJoin(target, requestId);
+    expect(retry.status === 'approved' && retry.ticket).toBe(ticket);
+    await confirmJoin(target, requestId);
+    expect(store.peekTicket(requestId, Date.now(), 60_000)).toBeNull();
 
     const status = await fetchHubStatus(target, ticket);
     expect(status.you).toBe('Murphy-Ranite');
@@ -128,7 +131,7 @@ describe('team hub server', () => {
     const requestId = await postJoin(target, 'kartal-1234', 'Murphy-Ranite');
     const ticket = makeTicket();
     store.decideJoin(requestId, true, ticket, hashTicket(ticket), clock);
-    store.revealTicket(requestId);
+    store.confirmTicket(requestId);
     // A second member who never polls.
     store.createJoinRequest('jr_z', 'Zephyr-Ranite', 'kartal-5678', clock);
     const zephyrTicket = makeTicket();

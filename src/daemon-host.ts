@@ -230,6 +230,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   let teamFlushInFlight = false;
   /** The team this host is currently serving, so a switch can drop the old queue. */
   let activeTeamId: string | null = null;
+  /** Guards a concurrent hub-server start attempt. */
+  let teamServerStarting = false;
 
   /**
    * Runs `fn` against this machine's team channel. The hub talks to its own
@@ -437,19 +439,33 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const workspace = await getCustodianWorkspace(root);
     const controller = workspace.controller;
     if (!shouldWakeForTeamDms({ count: inbox.count, highestSeq: highest, seenSeq: teamWakeSeenSeq, busy: controller.isBusy })) return;
-    teamWakeSeenSeq = highest;
     const senders = [...new Set(inbox.messages.map((message) => message.sender))].join(', ');
-    await controller.sendMessage(
-      {
-        text: `Team: ${inbox.count} unread direct message${inbox.count === 1 ? '' : 's'} (from ${senders}). Call team_inbox to read them, act on each, and acknowledge the ids you have handled. Do not reply to this wake-up signal itself.`,
-        images: [],
-        communication: { source: 'team' },
-      },
-      {
-        reasoningVariantId: workspace.runtime.reasoningDefault,
-        showReasoning: workspace.runtime.showReasoningDefault,
-      },
-    );
+    // The wake carries an id so its run outcome can be read back. The cursor is
+    // advanced only when the run completes without error: a failed run leaves
+    // the messages unread and the cursor where it was, so the next idle tick
+    // wakes again instead of leaving the work waiting on a human.
+    const wakeId = `team-wake:${highest}:${Date.now()}`;
+    try {
+      await controller.sendMessage(
+        {
+          text: `Team: ${inbox.count} unread direct message${inbox.count === 1 ? '' : 's'} (from ${senders}). Call team_inbox to read them and act on each. Do not reply to this wake-up signal itself.`,
+          images: [],
+          eventId: wakeId,
+          communication: { source: 'team' },
+        },
+        {
+          reasoningVariantId: workspace.runtime.reasoningDefault,
+          showReasoning: workspace.runtime.showReasoningDefault,
+        },
+      );
+      await controller.flushSave();
+      const result = controller.takeEventRunResult(wakeId);
+      const error = result ? result.error : controller.getLastRunError();
+      if (!error) teamWakeSeenSeq = highest;
+      else options.log(`team wake did not complete (${error}); it will retry.`);
+    } catch (error) {
+      options.log(`team wake failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   function startTeamPoller(): void {
@@ -458,6 +474,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       void pollTeamInbox().catch((error: unknown) => options.log(String(error)));
       void refreshTeamMemory().catch((error: unknown) => options.log(String(error)));
       void flushTeamOutbox().catch((error: unknown) => options.log(String(error)));
+      // A hub whose first bind failed (tailnet not up yet, port busy) retries on
+      // the poll rather than waiting for an unrelated reload.
+      if (loadSettings().team?.role === 'hub' && teamServer === null) {
+        void ensureTeamServer(loadSettings()).catch((error: unknown) => options.log(String(error)));
+      }
     }, 1000);
     teamPollerTimer.unref?.();
   }
@@ -489,6 +510,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   async function ensureTeamServer(settings: SettingsStore): Promise<void> {
+    if (teamServerStarting) return;
     const team = settings.team;
     const endpoint = team?.role === 'hub' ? `${team.hubHost}:${team.hubPort}` : null;
     if (teamServer && teamServerEndpoint === endpoint && team?.role === 'hub') {
@@ -512,6 +534,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       options.log(`team hub: tailnet is ${tailnet} but settings say ${team.hubHost}; the hub stays down until they match.`);
       return;
     }
+    teamServerStarting = true;
     teamStore = new TeamStore();
     try {
       teamServer = await startTeamServer({
@@ -527,6 +550,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       teamStore.close();
       teamStore = null;
       options.log(`team hub failed to start: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      teamServerStarting = false;
     }
   }
 
