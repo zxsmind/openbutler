@@ -14,16 +14,19 @@ export type FrameSelection = { anchor: SelectionCell; focus: SelectionCell };
 export type NormalizedSelection = { start: SelectionCell; end: SelectionCell };
 
 /**
- * Zero-width markers that wrap layout chrome (borders, quote bars, prefixes) in
- * the rendered frame. They are invisible in the terminal, so they never shift a
- * cell, but the copy path removes the marked characters: what you copy is the
- * content, not the decoration the renderer drew around it.
+ * A zero-width marker placed at the end of a layout prefix (a quote or code
+ * bar, an entry glyph). It is invisible in the terminal, so it never shifts a
+ * cell, but the copy path treats everything before it on that line as chrome
+ * and drops it.
+ *
+ * The marker must sit *after* the prefix, never at the start of a line: Ink
+ * (via its text pipeline) trims leading zero-width format characters, so a
+ * marker at the very start would be removed before it ever reached the frame.
  */
-export const DECORATION_START = '\u2060';
-export const DECORATION_END = '\u2061';
+export const DECORATION_MARKER = '\u200c';
 
-export function decorate(text: string): string {
-  return `${DECORATION_START}${text}${DECORATION_END}`;
+export function decorate(prefix: string): string {
+  return `${prefix}${DECORATION_MARKER}`;
 }
 
 const ANSI_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -49,18 +52,14 @@ export function parseFrameLines(chunk: string): { lines: string[]; decoration: b
   for (const line of raw) {
     let text = '';
     const mask: boolean[] = [];
-    let inDecor = false;
     for (const character of line) {
-      if (character === DECORATION_START) {
-        inDecor = true;
-        continue;
-      }
-      if (character === DECORATION_END) {
-        inDecor = false;
+      if (character === DECORATION_MARKER) {
+        // Everything before the marker on this line is layout chrome.
+        for (let index = 0; index < mask.length; index++) mask[index] = true;
         continue;
       }
       text += character;
-      mask.push(inDecor);
+      mask.push(false);
     }
     lines.push(text);
     decoration.push(mask);
@@ -138,6 +137,12 @@ function injectSelectionSegment(segment: string, from: number, to: number): stri
   let index = 0;
   while (index < segment.length) {
     const character = segment[index]!;
+    if (character === DECORATION_MARKER) {
+      // Zero width: emit it but do not count a column or highlight it.
+      output += character;
+      index += 1;
+      continue;
+    }
     if (character === '\u001b') {
       ANSI_AT.lastIndex = index;
       const match = ANSI_AT.exec(segment);
