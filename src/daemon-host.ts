@@ -558,25 +558,30 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   let peerReportInFlight = false;
-  let peerReportAt = 0;
-  let peerReportKey = '';
+  /** Signature of the last capability report, so an unchanged one is not re-sent. */
+  let lastCapabilityContent = '';
 
+  /**
+   * Reports this machine's host capabilities to the team, but only when they
+   * actually change (platform, MCP servers/tools, or busy state). The hub
+   * stamps observedAt, so a periodic re-send would be pure traffic.
+   */
   async function publishPeerCapabilities(): Promise<void> {
     const team = loadSettings().team;
     const workspace = custodianWorkspace;
     if (!team || !workspace?.runtime.getPeerCapabilities || peerReportInFlight || closing) return;
-    const key = `${team.teamId}:${team.memberName}`;
-    if (key === peerReportKey && Date.now() - peerReportAt < 15_000) return;
+    const report = { ...workspace.runtime.getPeerCapabilities(), custodianBusy: workspace.controller.isBusy };
+    // The team key is part of the signature, so joining a different team always
+    // re-reports even if the machine itself looks unchanged.
+    const content = JSON.stringify({ team: `${team.teamId}:${team.memberName}`, report });
+    if (content === lastCapabilityContent) return;
     peerReportInFlight = true;
     try {
-      const report = { ...workspace.runtime.getPeerCapabilities(), custodianBusy: workspace.controller.isBusy };
       await withTeamChannel((channel) => channel.reportCapabilities(report));
-      peerReportAt = Date.now();
-      peerReportKey = key;
+      lastCapabilityContent = content;
     } catch (error) {
-      // Directory metadata must not make normal team communication unavailable.
-      peerReportAt = Date.now();
-      peerReportKey = key;
+      // Directory metadata must not make normal team communication unavailable;
+      // the unchanged signature means the next poll retries.
       options.log(`team capability report: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       peerReportInFlight = false;
