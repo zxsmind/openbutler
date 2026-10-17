@@ -256,10 +256,11 @@ export class TeamStore {
     return rows.map((row) => JSON.parse(row.value) as PeerWork);
   }
 
+  /** Work the member has accepted but not yet closed: the active load. */
   activePeerWorkCount(member: string): number {
     const terminal = TERMINAL_WORK_STATES.map(() => '?').join(', ');
     const row = this.database
-      .prepare(`SELECT COUNT(*) AS count FROM team_work WHERE assignee = ? AND state NOT IN (${terminal}, 'proposed', 'countered')`)
+      .prepare(`SELECT COUNT(*) AS count FROM team_work WHERE assignee = ? AND state = 'accepted' AND state NOT IN (${terminal})`)
       .get(member, ...TERMINAL_WORK_STATES) as { count: number };
     return row.count;
   }

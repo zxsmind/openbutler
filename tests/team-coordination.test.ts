@@ -91,36 +91,21 @@ describe('peer identity and capability provenance', () => {
 });
 
 describe('independent peer agreements', () => {
-  it('negotiates a counteroffer before execution, then records a result with evidence', async () => {
+  it('records an agreement from proposal to completion with evidence', async () => {
     const proposed = await propose();
     expect(proposed).toMatchObject({ requester: 'Hub', assignee: 'Peer', state: 'proposed', revision: 1 });
-    await expect(hub.work({ action: 'accept', id: proposed.id, expectedRevision: 1, note: 'Assign it.' })).rejects.toThrow(
-      'receiving party',
-    );
-    await expect(peer.work({ action: 'start', id: proposed.id, expectedRevision: 1, note: 'Start.' })).rejects.toThrow('accepted');
-    const counter = (await peer.work({
-      action: 'counter',
-      id: proposed.id,
-      expectedRevision: 1,
-      note: 'I can inspect logs, but need the owner to supply the dashboard output.',
-    })) as PeerWork;
-    expect(counter.state).toBe('countered');
-    await expect(peer.work({ action: 'accept', id: proposed.id, expectedRevision: 2, note: 'Accept my offer.' })).rejects.toThrow(
-      'receiving party',
-    );
-    await hub.work({ action: 'accept', id: proposed.id, expectedRevision: 2, note: 'That limited scope is useful.' });
+    await expect(hub.work({ action: 'accept', id: proposed.id, expectedRevision: 1, note: 'Assign it.' })).rejects.toThrow('assignee');
+    await peer.work({ action: 'accept', id: proposed.id, expectedRevision: 1, note: 'Accepted, read-only.' });
     expect((await hub.status()).members.find((member) => member.name === 'Peer')?.activeWorkCount).toBe(1);
-    await peer.work({ action: 'start', id: proposed.id, expectedRevision: 3, note: 'Inspecting logs.' });
     const done = (await peer.work({
       action: 'complete',
       id: proposed.id,
-      expectedRevision: 4,
+      expectedRevision: 2,
       note: 'Log event 42 confirms the upstream timeout; no changes were made.',
     })) as PeerWork;
     expect(done).toMatchObject({
       state: 'completed',
-      revision: 5,
-      terms: counter.terms,
+      revision: 3,
       result: 'Log event 42 confirms the upstream timeout; no changes were made.',
     });
     expect(await hub.work({ action: 'list' })).toEqual([]);
@@ -156,22 +141,15 @@ describe('independent peer agreements', () => {
     await expect(hub.work({ action: 'complete', id: work.id, expectedRevision: 2, note: 'Pretend done.' })).rejects.toThrow('assignee');
     await expect(peer.work({ action: 'cancel', id: work.id, expectedRevision: 2, note: 'Cannot.' })).rejects.toThrow('requester');
     await hub.work({ action: 'cancel', id: work.id, expectedRevision: 2, note: 'Owner changed the request.' });
-    await expect(peer.work({ action: 'start', id: work.id, expectedRevision: 3, note: 'Continue.' })).rejects.toThrow('closed');
+    await expect(peer.work({ action: 'complete', id: work.id, expectedRevision: 3, note: 'Continue.' })).rejects.toThrow('closed');
   });
 
-  it('allows clarification, refusal, and blocked work without inventing acceptance', async () => {
+  it('allows clarification and refusal without inventing acceptance', async () => {
     const work = await propose();
     await peer.work({ action: 'note', id: work.id, expectedRevision: 1, note: 'Which service do you mean?' });
     expect(((await hub.work({ action: 'read', id: work.id })) as PeerWork).state).toBe('proposed');
     await peer.work({ action: 'reject', id: work.id, expectedRevision: 2, note: 'I do not have access.' });
-    const second = await propose('request-2');
-    await peer.work({ action: 'accept', id: second.id, expectedRevision: 1, note: 'Accepted.' });
-    await peer.work({ action: 'block', id: second.id, expectedRevision: 2, note: 'Waiting for the requested log.' });
-    await hub.work({ action: 'note', id: second.id, expectedRevision: 3, note: 'The log is now available.' });
-    expect(((await peer.work({ action: 'read', id: second.id })) as PeerWork).state).toBe('blocked');
-    expect(((await peer.work({ action: 'start', id: second.id, expectedRevision: 4, note: 'Log received.' })) as PeerWork).state).toBe(
-      'working',
-    );
+    expect(((await hub.work({ action: 'read', id: work.id })) as PeerWork).state).toBe('rejected');
   });
 
   it('rolls back a new agreement if its notification cannot be persisted', async () => {

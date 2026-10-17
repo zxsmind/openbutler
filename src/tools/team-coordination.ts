@@ -34,14 +34,14 @@ export function createTeamWorkTool(execute: PeerOperation): ToolDefinition {
     name: 'team_work',
     maxInputChars: 10000,
     description:
-      "Track a bounded agreement between independent team peers. Use team_send for simple questions. Propose with a unique stable id, peer and terms containing outcome, scope, constraints and expected evidence; reuse the same id and terms after an ambiguous network result. Proposal does not mean acceptance. The assignee can accept, counter with replacement terms in note, or reject; the requester must accept or reject a counteroffer. After acceptance only the assignee can start, block, complete or fail. Either party may add a note; only the requester cancels. A cancellation records intent and notifies the peer, but cannot forcibly stop remote actions. Every change after propose requires expectedRevision and a meaningful note. complete needs the result and verification evidence in note; it reports the peer's outcome, not independent verification. Changes notify the other party atomically. Read the current record before acting on a notification. list defaults to your open agreements; read retrieves one by id. Reading inbox messages does not complete work. Agreements never grant owner authorization or remote access.",
+      'Track a bounded agreement between team peers. Use team_send for a plain question or request that needs no tracking; use team_work when you need a durable record of who owns a piece of work and where it stands. Propose with a unique id, a peer, and terms (outcome, scope, constraints, expected evidence); reuse the same id and terms after an ambiguous network result. The assignee accepts or rejects; only the assignee reports complete or fail, and only the requester cancels. Either party may add a note. Every change after propose requires expectedRevision and a meaningful note. complete needs the result and verification evidence in the note. Changes notify the other party atomically; read the record before acting on a notification. list defaults to your open agreements; read retrieves one by id. Reading a message never accepts or completes work. An agreement never grants owner authorization or remote access.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'read', 'propose', 'counter', 'accept', 'reject', 'start', 'block', 'complete', 'fail', 'cancel', 'note'],
+          enum: ['list', 'read', 'propose', 'accept', 'reject', 'complete', 'fail', 'cancel', 'note'],
         },
         id: {
           type: 'string',

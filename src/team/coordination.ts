@@ -16,8 +16,8 @@ export interface PeerCapabilities {
   observedAt: number;
 }
 
-export type WorkState = 'proposed' | 'countered' | 'accepted' | 'working' | 'blocked' | 'completed' | 'rejected' | 'cancelled' | 'failed';
-export type WorkAction = 'propose' | 'counter' | 'accept' | 'reject' | 'start' | 'block' | 'complete' | 'fail' | 'cancel' | 'note';
+export type WorkState = 'proposed' | 'accepted' | 'completed' | 'failed' | 'rejected' | 'cancelled';
+export type WorkAction = 'propose' | 'accept' | 'reject' | 'complete' | 'fail' | 'cancel' | 'note';
 
 export interface PeerWork {
   id: string;
@@ -149,7 +149,7 @@ export class TeamCoordination {
       throw new TeamError('No accessible peer work with this id.', 404);
     if (input.action === 'read') return current;
     const action = input.action;
-    const allowed: WorkAction[] = ['counter', 'accept', 'reject', 'start', 'block', 'complete', 'fail', 'cancel', 'note'];
+    const allowed: WorkAction[] = ['accept', 'reject', 'complete', 'fail', 'cancel', 'note'];
     if (!allowed.includes(action as WorkAction)) throw new TeamError('Unknown peer work action.', 400);
     const expected = revision(input.expectedRevision);
     const note = text(input.note, 'note');
@@ -160,32 +160,17 @@ export class TeamCoordination {
     const assigned = current.assignee === actor;
     let state = current.state;
     switch (action) {
-      case 'counter':
-        if (!assigned || !['proposed', 'countered'].includes(state))
-          throw new TeamError('Only the proposed assignee may counter before acceptance.', 409);
-        state = 'countered';
-        break;
       case 'accept':
-        if (!((assigned && state === 'proposed') || (!assigned && state === 'countered')))
-          throw new TeamError('The receiving party must accept the current proposal or counteroffer.', 409);
-        state = 'accepted';
-        break;
       case 'reject':
-        if (!((assigned && state === 'proposed') || (!assigned && state === 'countered')))
-          throw new TeamError('Only the receiving party may reject an unaccepted offer.', 409);
-        state = 'rejected';
+        // Only the assignee answers a fresh proposal; the requester cannot
+        // accept its own offer.
+        if (!assigned || state !== 'proposed') throw new TeamError('Only the assignee may answer a fresh proposal.', 409);
+        state = action === 'accept' ? 'accepted' : 'rejected';
         break;
-      case 'start':
-        if (!assigned || !['accepted', 'blocked'].includes(state))
-          throw new TeamError('The assignee may start only accepted work or resume blocked work.', 409);
-        state = 'working';
-        break;
-      case 'block':
       case 'complete':
       case 'fail':
-        if (!assigned || !['accepted', 'working', 'blocked'].includes(state))
-          throw new TeamError('Only the assignee may report execution of accepted work.', 409);
-        state = action === 'block' ? 'blocked' : action === 'complete' ? 'completed' : 'failed';
+        if (!assigned || state !== 'accepted') throw new TeamError('Only the assignee may report an accepted agreement.', 409);
+        state = action === 'complete' ? 'completed' : 'failed';
         break;
       case 'cancel':
         if (assigned) throw new TeamError('Only the requester may cancel; report a failure if you cannot continue.', 403);
@@ -202,7 +187,6 @@ export class TeamCoordination {
       lastActor: actor,
       lastAction: action as WorkAction,
       lastNote: note,
-      terms: action === 'counter' ? note : current.terms,
       result: action === 'complete' ? note : current.result,
     };
     this.save(next, expected);
