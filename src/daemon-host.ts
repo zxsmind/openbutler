@@ -70,13 +70,14 @@ import { shouldWakeForTeamDms } from './team/service.js';
 import { materializeTeamMemory } from './team/memory-mirror.js';
 import { teamSlug } from './memory-paths.js';
 import { readAllTeamMemory } from './team/session.js';
+import { defaultInboxPath } from './team/files.js';
+import { isForbiddenHostPath } from './host-owned-paths.js';
 import { TeamOutbox } from './team/outbox.js';
 import { HubUnreachableError } from './team/client.js';
-import { todayLocalDate } from './file-write-core.js';
+import { todayLocalDate, resolveFilePath } from './file-write-core.js';
 import type { ToolCallRequest } from './tools/registry.js';
 import { getDataPath } from './paths.js';
 import { imageTypeFromBytes } from './image.js';
-import { resolveFilePath } from './file-write-core.js';
 
 const MAX_MESSAGE_TEXT_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -386,9 +387,59 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
   }
 
+  /** `team_send_file`: stream a local file to a member or the group. */
+  async function sendTeamFile(input: { path: string; to: string }): Promise<unknown> {
+    try {
+      const absolute = resolveFilePath(input.path, custodianWorkspace?.runtime.workspaceRoot ?? process.cwd());
+      // The secret store may never leave the machine, by any path, including
+      // this one: a prompt-injected agent must not be able to exfiltrate keys.
+      if (isForbiddenHostPath(absolute)) return { status: 'refused', error: 'That file is the secret store and can never be sent.' };
+      return await withTeamChannel(async (channel) => {
+        const result = await channel.sendFile({ recipient: input.to, path: absolute });
+        return { status: 'sent', to: input.to, fileId: result.id };
+      });
+    } catch (error) {
+      return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** `team_receive_file`: download a shared file to this machine (the approval point). */
+  async function receiveTeamFile(input: { id: string; to?: string }): Promise<unknown> {
+    try {
+      const team = loadSettings().team;
+      if (!team) return { status: 'error', error: 'This machine is not in a team.' };
+      const teamKey = team.teamId || teamSlug(team.teamName);
+      return await withTeamChannel(async (channel) => {
+        let destination = input.to;
+        if (!destination) {
+          const meta = (await channel.listFiles()).find((file) => file.id === input.id);
+          if (!meta) return { status: 'error', error: `No such file: ${input.id}` };
+          destination = defaultInboxPath(teamKey, meta.name);
+        }
+        const result = await channel.receiveFile({ id: input.id, to: destination });
+        return { status: 'received', path: result.path, name: result.name, size: result.size };
+      });
+    } catch (error) {
+      return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** `team_files`: shared files this member can receive. */
+  async function listTeamFiles(): Promise<unknown> {
+    try {
+      return await withTeamChannel(async (channel) => {
+        const files = await channel.listFiles();
+        return { status: 'ok', count: files.length, files };
+      });
+    } catch (error) {
+      return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   /** `team_status`: the roster with presence and last activity. */
   async function readTeamStatus(): Promise<unknown> {
     try {
+      await publishPeerCapabilities();
       return await withTeamChannel(async (channel) => {
         const view = await channel.status();
         return {
@@ -404,6 +455,10 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
             lastMessageAt: member.lastMessageAt ? new Date(member.lastMessageAt).toISOString() : null,
             lastMessageTo: member.lastMessageTo,
             lastMemoryAt: member.lastMemoryAt ? new Date(member.lastMemoryAt).toISOString() : null,
+            profile: member.profile ?? null,
+            capabilities: member.capabilities ?? null,
+            capabilitiesStale: !member.capabilities || Date.now() - member.capabilities.observedAt > 45_000,
+            activeWorkCount: member.activeWorkCount ?? 0,
           })),
         };
       });
@@ -413,6 +468,15 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   /** `team_remember`: append a signed entry to shared team memory, then refresh the local mirror. */
+  async function executePeerOperation(kind: 'profile' | 'work', input: Record<string, unknown>): Promise<unknown> {
+    try {
+      const result = await withTeamChannel((channel) => channel[kind](input));
+      return { status: 'ok', result };
+    } catch (error) {
+      return { status: 'error', error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   async function executeTeamRemember(input: { topic: 'decisions' | 'shared'; text: string }): Promise<unknown> {
     try {
       const result = await withTeamChannel((channel) => channel.remember(input.topic, input.text));
@@ -493,12 +557,39 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
   }
 
+  let peerReportInFlight = false;
+  let peerReportAt = 0;
+  let peerReportKey = '';
+
+  async function publishPeerCapabilities(): Promise<void> {
+    const team = loadSettings().team;
+    const workspace = custodianWorkspace;
+    if (!team || !workspace?.runtime.getPeerCapabilities || peerReportInFlight || closing) return;
+    const key = `${team.teamId}:${team.memberName}`;
+    if (key === peerReportKey && Date.now() - peerReportAt < 15_000) return;
+    peerReportInFlight = true;
+    try {
+      const report = { ...workspace.runtime.getPeerCapabilities(), custodianBusy: workspace.controller.isBusy };
+      await withTeamChannel((channel) => channel.reportCapabilities(report));
+      peerReportAt = Date.now();
+      peerReportKey = key;
+    } catch (error) {
+      // Directory metadata must not make normal team communication unavailable.
+      peerReportAt = Date.now();
+      peerReportKey = key;
+      options.log(`team capability report: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      peerReportInFlight = false;
+    }
+  }
+
   function startTeamPoller(): void {
     if (teamPollerTimer !== null) return;
     teamPollerTimer = setInterval(() => {
       void pollTeamInbox().catch((error: unknown) => options.log(String(error)));
       void refreshTeamMemory().catch((error: unknown) => options.log(String(error)));
       void flushTeamOutbox().catch((error: unknown) => options.log(String(error)));
+      void publishPeerCapabilities().catch((error: unknown) => options.log(String(error)));
       // A hub whose first bind failed (tailnet not up yet, port busy) retries on
       // the poll rather than waiting for an unrelated reload.
       if (loadSettings().team?.role === 'hub' && teamServer === null) {
@@ -743,6 +834,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       teamGroup: readTeamGroup,
       teamHistory: readTeamHistory,
       teamStatus: readTeamStatus,
+      teamSendFile: sendTeamFile,
+      teamReceiveFile: receiveTeamFile,
+      teamFiles: listTeamFiles,
+      teamProfile: (input) => executePeerOperation('profile', input),
+      teamWork: (input) => executePeerOperation('work', input),
       teamRemember: executeTeamRemember,
       sessionMessage: deliverSessionMessage,
       subagent: spawnSubagent,
@@ -801,6 +897,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         teamGroup: readTeamGroup,
         teamHistory: readTeamHistory,
         teamStatus: readTeamStatus,
+        teamSendFile: sendTeamFile,
+        teamReceiveFile: receiveTeamFile,
+        teamFiles: listTeamFiles,
+        teamProfile: (input) => executePeerOperation('profile', input),
+        teamWork: (input) => executePeerOperation('work', input),
         teamRemember: executeTeamRemember,
         sessionMessage: deliverSessionMessage,
         subagent: spawnSubagent,

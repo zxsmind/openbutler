@@ -20,9 +20,9 @@ afterEach(() => {
 });
 
 describe('self and team memory scopes', () => {
-  it('classifies identity, peer notes, and team files as their own scopes', () => {
+  it('keeps legacy identity inactive and classifies peer notes and team files', () => {
     const paths = getMemoryPaths(workspace);
-    expect(getMemoryDocumentPath(paths.identityFile, workspace)?.scope).toBe('self');
+    expect(getMemoryDocumentPath(paths.identityFile, workspace)).toBeNull();
     expect(getMemoryDocumentPath(join(paths.peersDirectory, 'atreus.md'), workspace)?.scope).toBe('self');
     expect(getMemoryDocumentPath(getTeamMemoryPaths('myteam', workspace).decisionsFile, workspace)?.scope).toBe('team:myteam');
     expect(getMemoryDocumentPath(getTeamMemoryPaths('myteam', workspace).sharedFile, workspace)?.scope).toBe('team:myteam');
@@ -30,7 +30,7 @@ describe('self and team memory scopes', () => {
 
   it('keeps self writable but the shared team mirror read-only', () => {
     const paths = getMemoryPaths(workspace);
-    expect(isMemoryDocumentPath(paths.identityFile, workspace)).toBe(true);
+    expect(isMemoryDocumentPath(paths.identityFile, workspace)).toBe(false);
     expect(isMemoryDocumentPath(join(paths.peersDirectory, 'murphy.md'), workspace)).toBe(true);
     // The shared team mirror is never a writable memory document.
     expect(isMemoryDocumentPath(getTeamMemoryPaths('myteam', workspace).sharedFile, workspace)).toBe(false);

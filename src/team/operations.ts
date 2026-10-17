@@ -1,7 +1,9 @@
-import { GROUP_RECIPIENT, isGroupRecipient, makeMessageId, validateMemberName } from './service.js';
+import { GROUP_RECIPIENT, isGroupRecipient, makeFileId, makeMessageId, validateMemberName } from './service.js';
 import type { TeamMemoryTopic, TeamMessage, TeamStore } from './store.js';
 
 export const MAX_MESSAGE_CHARS = 8000;
+/** Largest file the hub will accept and relay, in bytes. */
+export const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 
 /**
  * A rejected team operation carrying the HTTP status the transport should use.
@@ -82,5 +84,32 @@ export class TeamOperations {
     if (!body.trim()) throw new TeamError('A memory entry cannot be empty.', 400);
     if (body.length > MAX_MESSAGE_CHARS) throw new TeamError(`A memory entry is limited to ${MAX_MESSAGE_CHARS} characters.`, 400);
     return this.store.appendMemory({ topic, author, body, createdAt: Date.now() });
+  }
+
+  /**
+   * Records a shared file's metadata and posts the message that announces it.
+   * The bytes are stored on the hub's disk by the transport before this runs;
+   * this owns the rules: canonical recipient, a sane name, a bounded size, and
+   * a well-formed sha256. Sending a file needs no approval; receiving it does.
+   */
+  registerFile(sender: string, input: { recipient: string; name: string; size: number; sha256: string; fileId?: string }): TeamMessage {
+    const name = input.name.trim();
+    if (!name || name.length > 255 || /[\r\n]/.test(name))
+      throw new TeamError('A file name must be 1-255 characters without line breaks.', 400);
+    if (!Number.isInteger(input.size) || input.size < 0) throw new TeamError('A file size must be a non-negative integer.', 400);
+    if (input.size > MAX_FILE_BYTES) throw new TeamError(`A file is limited to ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB.`, 413);
+    if (!/^[0-9a-f]{64}$/.test(input.sha256)) throw new TeamError('A file needs a lowercase hex sha256.', 400);
+    const recipient = this.resolveRecipient(input.recipient);
+    const id = input.fileId && input.fileId.trim() ? input.fileId : makeFileId();
+    this.store.insertFile({ id, name, size: input.size, sha256: input.sha256, sender, recipient, createdAt: Date.now() });
+    return this.store.postMessage({
+      msgId: makeMessageId(),
+      sender,
+      recipient,
+      kind: 'file',
+      body: name,
+      fileId: id,
+      createdAt: Date.now(),
+    });
   }
 }

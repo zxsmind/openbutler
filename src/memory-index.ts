@@ -360,7 +360,6 @@ export class MemoryIndex {
     if (owned(this.paths.areasDirectory)) await addMarkdownTree(userFiles, this.paths.areasDirectory, 'user');
     // Per-agent self scope and the ACTIVE team scope are searchable; other
     // teams' folders (from a left team) are never indexed or searched.
-    if (owned(this.paths.identityFile)) await addMarkdownFile(userFiles, this.paths.identityFile, 'self');
     if (owned(this.paths.peersDirectory)) await addMarkdownTree(userFiles, this.paths.peersDirectory, 'self');
     const teamKey = activeTeamKey();
     if (teamKey && owned(this.paths.teamRoot)) await addMarkdownTree(userFiles, join(this.paths.teamRoot, teamKey), `team:${teamKey}`);

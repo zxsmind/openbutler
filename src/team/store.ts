@@ -1,6 +1,7 @@
 import { chmodSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { getDataPath } from '../paths.js';
+import { TERMINAL_WORK_STATES, type PeerProfile, type PeerCapabilities, type PeerWork } from './coordination.js';
 
 const TEAM_SCHEMA = `
 CREATE TABLE IF NOT EXISTS team_meta (
@@ -37,11 +38,22 @@ CREATE TABLE IF NOT EXISTS team_messages (
   msg_id TEXT NOT NULL UNIQUE,
   sender TEXT NOT NULL,
   recipient TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
   body TEXT NOT NULL,
+  file_id TEXT,
   created_at INTEGER NOT NULL,
   reply_to TEXT
 );
 CREATE INDEX IF NOT EXISTS team_messages_recipient_seq_idx ON team_messages(recipient, seq);
+CREATE TABLE IF NOT EXISTS team_files (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  sender TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS team_group_cursors (
   member TEXT PRIMARY KEY,
   last_seq INTEGER NOT NULL DEFAULT 0
@@ -65,6 +77,26 @@ CREATE TABLE IF NOT EXISTS team_audit (
   detail TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS team_profiles (
+  member TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_capabilities (
+  member TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_work (
+  id TEXT PRIMARY KEY,
+  requester TEXT NOT NULL,
+  assignee TEXT NOT NULL,
+  state TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  value TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS team_work_requester_idx ON team_work(requester, updated_at);
+CREATE INDEX IF NOT EXISTS team_work_assignee_idx ON team_work(assignee, updated_at);
 `;
 
 export interface TeamMember {
@@ -90,9 +122,21 @@ export interface TeamMessage {
   msgId: string;
   sender: string;
   recipient: string;
+  kind: string;
   body: string;
+  fileId: string | null;
   createdAt: number;
   replyTo: string | null;
+}
+
+export interface TeamFile {
+  id: string;
+  name: string;
+  size: number;
+  sha256: string;
+  sender: string;
+  recipient: string;
+  createdAt: number;
 }
 
 export interface JoinRequest {
@@ -130,6 +174,9 @@ export interface MemberSummary {
   lastMessageAt: number | null;
   lastMessageTo: string | null;
   lastMemoryAt: number | null;
+  profile: PeerProfile | null;
+  capabilities: PeerCapabilities | null;
+  activeWorkCount: number;
 }
 
 /**
@@ -144,6 +191,12 @@ export class TeamStore {
     this.database = new DatabaseSync(path);
     this.database.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;');
     this.database.exec(TEAM_SCHEMA);
+    // Older databases predate the message kind/file columns; add them in place.
+    const messageColumns = this.database.prepare('PRAGMA table_info(team_messages)').all() as unknown as Array<{ name: string }>;
+    if (!messageColumns.some((column) => column.name === 'kind'))
+      this.database.exec("ALTER TABLE team_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'");
+    if (!messageColumns.some((column) => column.name === 'file_id'))
+      this.database.exec('ALTER TABLE team_messages ADD COLUMN file_id TEXT');
     try {
       chmodSync(path, 0o600);
     } catch {
@@ -158,6 +211,87 @@ export class TeamStore {
   getMeta(key: string): string | null {
     const row = this.database.prepare('SELECT value FROM team_meta WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  peerProfile(member: string): PeerProfile | null {
+    const row = this.database.prepare('SELECT value FROM team_profiles WHERE member = ?').get(member) as { value: string } | undefined;
+    return row ? (JSON.parse(row.value) as PeerProfile) : null;
+  }
+
+  savePeerProfile(member: string, profile: PeerProfile, expected: number): boolean {
+    const result =
+      expected === 0
+        ? this.database
+            .prepare('INSERT OR IGNORE INTO team_profiles (member, revision, value) VALUES (?, ?, ?)')
+            .run(member, profile.revision, JSON.stringify(profile))
+        : this.database
+            .prepare('UPDATE team_profiles SET revision = ?, value = ? WHERE member = ? AND revision = ?')
+            .run(profile.revision, JSON.stringify(profile), member, expected);
+    return result.changes === 1;
+  }
+
+  peerCapabilities(member: string): PeerCapabilities | null {
+    const row = this.database.prepare('SELECT value FROM team_capabilities WHERE member = ?').get(member) as { value: string } | undefined;
+    return row ? (JSON.parse(row.value) as PeerCapabilities) : null;
+  }
+
+  savePeerCapabilities(member: string, report: PeerCapabilities): void {
+    this.database
+      .prepare('INSERT INTO team_capabilities (member, value) VALUES (?, ?) ON CONFLICT(member) DO UPDATE SET value = excluded.value')
+      .run(member, JSON.stringify(report));
+  }
+
+  peerWork(id: string): PeerWork | null {
+    const row = this.database.prepare('SELECT value FROM team_work WHERE id = ?').get(id) as { value: string } | undefined;
+    return row ? (JSON.parse(row.value) as PeerWork) : null;
+  }
+
+  listPeerWork(member: string, includeClosed: boolean, limit: number, offset: number): PeerWork[] {
+    const terminal = TERMINAL_WORK_STATES.map(() => '?').join(', ');
+    const rows = this.database
+      .prepare(
+        `SELECT value FROM team_work WHERE (requester = ? OR assignee = ?) ${includeClosed ? '' : `AND state NOT IN (${terminal})`} ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`,
+      )
+      .all(member, member, ...(includeClosed ? [] : TERMINAL_WORK_STATES), limit, offset) as unknown as Array<{ value: string }>;
+    return rows.map((row) => JSON.parse(row.value) as PeerWork);
+  }
+
+  activePeerWorkCount(member: string): number {
+    const terminal = TERMINAL_WORK_STATES.map(() => '?').join(', ');
+    const row = this.database
+      .prepare(`SELECT COUNT(*) AS count FROM team_work WHERE assignee = ? AND state NOT IN (${terminal}, 'proposed', 'countered')`)
+      .get(member, ...TERMINAL_WORK_STATES) as { count: number };
+    return row.count;
+  }
+
+  savePeerWork(
+    work: PeerWork,
+    expected: number,
+    notice: { msgId: string; sender: string; recipient: string; body: string; createdAt: number },
+  ): boolean {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const result =
+        expected === 0
+          ? this.database
+              .prepare(
+                'INSERT OR IGNORE INTO team_work (id, requester, assignee, state, revision, updated_at, value) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              )
+              .run(work.id, work.requester, work.assignee, work.state, work.revision, work.updatedAt, JSON.stringify(work))
+          : this.database
+              .prepare('UPDATE team_work SET state = ?, revision = ?, updated_at = ?, value = ? WHERE id = ? AND revision = ?')
+              .run(work.state, work.revision, work.updatedAt, JSON.stringify(work), work.id, expected);
+      if (result.changes !== 1) {
+        this.database.exec('ROLLBACK');
+        return false;
+      }
+      this.postMessage(notice);
+      this.database.exec('COMMIT');
+      return true;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   setMeta(key: string, value: string): void {
@@ -366,16 +500,24 @@ export class TeamStore {
     body: string;
     createdAt: number;
     replyTo?: string | null;
+    kind?: string;
+    fileId?: string | null;
   }): TeamMessage {
+    const kind = input.kind ?? 'text';
+    const fileId = input.fileId ?? null;
     const info = this.database
-      .prepare('INSERT INTO team_messages (msg_id, sender, recipient, body, created_at, reply_to) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(input.msgId, input.sender, input.recipient, input.body, input.createdAt, input.replyTo ?? null);
+      .prepare(
+        'INSERT INTO team_messages (msg_id, sender, recipient, kind, body, file_id, created_at, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(input.msgId, input.sender, input.recipient, kind, input.body, fileId, input.createdAt, input.replyTo ?? null);
     return {
       seq: Number(info.lastInsertRowid),
       msgId: input.msgId,
       sender: input.sender,
       recipient: input.recipient,
+      kind,
       body: input.body,
+      fileId,
       createdAt: input.createdAt,
       replyTo: input.replyTo ?? null,
     };
@@ -385,7 +527,7 @@ export class TeamStore {
   groupMessages(sinceSeq: number, limit: number): TeamMessage[] {
     return this.database
       .prepare(
-        "SELECT seq, msg_id AS msgId, sender, recipient, body, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE recipient = 'group' AND seq > ? ORDER BY seq LIMIT ?",
+        "SELECT seq, msg_id AS msgId, sender, recipient, kind, body, file_id AS fileId, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE recipient = 'group' AND seq > ? ORDER BY seq LIMIT ?",
       )
       .all(sinceSeq, limit) as unknown as TeamMessage[];
   }
@@ -395,7 +537,7 @@ export class TeamStore {
     const ceiling = beforeSeq > 0 ? beforeSeq : Number.MAX_SAFE_INTEGER;
     return this.database
       .prepare(
-        "SELECT seq, msg_id AS msgId, sender, recipient, body, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE recipient = 'group' AND seq < ? ORDER BY seq DESC LIMIT ?",
+        "SELECT seq, msg_id AS msgId, sender, recipient, kind, body, file_id AS fileId, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE recipient = 'group' AND seq < ? ORDER BY seq DESC LIMIT ?",
       )
       .all(ceiling, limit) as unknown as TeamMessage[];
   }
@@ -405,7 +547,7 @@ export class TeamStore {
     const ceiling = beforeSeq > 0 ? beforeSeq : Number.MAX_SAFE_INTEGER;
     return this.database
       .prepare(
-        'SELECT seq, msg_id AS msgId, sender, recipient, body, created_at AS createdAt, reply_to AS replyTo FROM team_messages ' +
+        'SELECT seq, msg_id AS msgId, sender, recipient, kind, body, file_id AS fileId, created_at AS createdAt, reply_to AS replyTo FROM team_messages ' +
           'WHERE ((sender = ? AND recipient = ?) OR (sender = ? AND recipient = ?)) AND seq < ? ORDER BY seq DESC LIMIT ?',
       )
       .all(memberA, memberB, memberB, memberA, ceiling, limit) as unknown as TeamMessage[];
@@ -435,7 +577,7 @@ export class TeamStore {
   unreadDms(member: string, limit: number): TeamMessage[] {
     return this.database
       .prepare(
-        'SELECT m.seq AS seq, m.msg_id AS msgId, m.sender AS sender, m.recipient AS recipient, m.body AS body, m.created_at AS createdAt, m.reply_to AS replyTo ' +
+        'SELECT m.seq AS seq, m.msg_id AS msgId, m.sender AS sender, m.recipient AS recipient, m.kind AS kind, m.body AS body, m.file_id AS fileId, m.created_at AS createdAt, m.reply_to AS replyTo ' +
           'FROM team_messages m LEFT JOIN team_dm_acks a ON a.msg_id = m.msg_id ' +
           'WHERE m.recipient = ? AND a.msg_id IS NULL ORDER BY m.seq LIMIT ?',
       )
@@ -530,6 +672,40 @@ export class TeamStore {
          FROM team_members m WHERE m.removed_at IS NULL ORDER BY m.created_at`,
       )
       .all() as unknown as Array<Omit<MemberSummary, 'online'>>;
-    return rows.map((row) => ({ ...row, online: online.has(row.name) }));
+    return rows.map((row) => ({
+      ...row,
+      online: online.has(row.name),
+      profile: this.peerProfile(row.name),
+      capabilities: this.peerCapabilities(row.name),
+      activeWorkCount: this.activePeerWorkCount(row.name),
+    }));
+  }
+
+  /** Records a shared file's metadata. The bytes live on the hub's disk, keyed by id. */
+  insertFile(input: TeamFile): void {
+    this.database
+      .prepare('INSERT INTO team_files (id, name, size, sha256, sender, recipient, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(input.id, input.name, input.size, input.sha256, input.sender, input.recipient, input.createdAt);
+  }
+
+  getFile(id: string): TeamFile | null {
+    const row = this.database
+      .prepare('SELECT id, name, size, sha256, sender, recipient, created_at AS createdAt FROM team_files WHERE id = ?')
+      .get(id) as TeamFile | undefined;
+    return row ?? null;
+  }
+
+  /** Files a member can receive: addressed to them, or shared with the whole team. */
+  filesForMember(member: string): TeamFile[] {
+    return this.database
+      .prepare(
+        "SELECT id, name, size, sha256, sender, recipient, created_at AS createdAt FROM team_files WHERE recipient = ? OR recipient = 'group' ORDER BY created_at DESC",
+      )
+      .all(member) as unknown as TeamFile[];
+  }
+
+  /** Removes a file's metadata. The hub owner deletes the bytes separately. */
+  removeFile(id: string): boolean {
+    return this.database.prepare('DELETE FROM team_files WHERE id = ?').run(id).changes === 1;
   }
 }

@@ -1,7 +1,13 @@
 import * as client from './client.js';
+import { makeFileId } from './service.js';
 import { TeamOperations } from './operations.js';
+import { copyFileSync, mkdirSync, statSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { ensureFilesDir, fileExists, filePath, hashFile } from './files.js';
 import type { TeamStore } from './store.js';
 import type { JoinTarget } from './tailnet.js';
+import { TeamCoordination, type PeerProfile, type PeerCapabilities } from './coordination.js';
 
 export interface TeamMessage {
   seq: number;
@@ -38,6 +44,9 @@ export interface TeamMemberView {
   lastMessageAt: number | null;
   lastMessageTo: string | null;
   lastMemoryAt: number | null;
+  profile?: PeerProfile | null;
+  capabilities?: PeerCapabilities | null;
+  activeWorkCount?: number;
 }
 
 export interface TeamStatusView {
@@ -78,6 +87,9 @@ export async function readAllTeamMemory(channel: TeamChannel): Promise<{ entries
  */
 export interface TeamChannel {
   readonly name: string;
+  profile(input: Record<string, unknown>): Promise<unknown>;
+  work(input: Record<string, unknown>): Promise<unknown>;
+  reportCapabilities(input: Omit<PeerCapabilities, 'observedAt'>): Promise<void>;
   send(recipient: string, body: string, replyTo?: string, msgId?: string): Promise<SendResult>;
   group(since: number): Promise<{ latestSeq: number; messages: TeamMessage[] }>;
   groupCursor(): number;
@@ -86,6 +98,12 @@ export interface TeamChannel {
   groupRead(limit: number): Promise<{ messages: TeamMessage[]; cursor: number; latestSeq: number }>;
   /** Page older messages from the group or a DM conversation, newest first. */
   history(query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }): Promise<{ messages: TeamMessage[] }>;
+  /** Send a local file to a member or the group. No approval; receiving needs it. */
+  sendFile(input: { recipient: string; path: string }): Promise<{ id: string; seq: number }>;
+  /** Download a shared file to a local path, verifying its hash. */
+  receiveFile(input: { id: string; to: string }): Promise<{ path: string; name: string; size: number }>;
+  /** Files this member can receive (addressed to them or the group). */
+  listFiles(): Promise<client.TeamFileInfo[]>;
   /** Team roster with presence and last activity. */
   status(): Promise<TeamStatusView>;
   inbox(): Promise<{ count: number; messages: TeamMessage[] }>;
@@ -99,8 +117,18 @@ export interface TeamChannel {
 /** The hub's own view: straight through the same operation owner as the HTTP path. */
 export function localChannel(store: TeamStore, memberName: string): TeamChannel {
   const operations = new TeamOperations(store);
+  const coordination = new TeamCoordination(store);
   return {
     name: memberName,
+    async profile(input) {
+      return coordination.profile(memberName, input);
+    },
+    async work(input) {
+      return coordination.work(memberName, input);
+    },
+    async reportCapabilities(input) {
+      coordination.reportCapabilities(memberName, input);
+    },
     async send(recipient, body, replyTo, msgId) {
       const result = operations.postMessage(memberName, {
         recipient,
@@ -133,6 +161,33 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
       const canonical = query.peer ? store.canonicalMemberName(query.peer) : null;
       if (!canonical) throw new Error(`No member named "${query.peer ?? ''}" in this team.`);
       return { messages: store.dmHistory(memberName, canonical, before, limit) };
+    },
+    async sendFile(input) {
+      const info = statSync(input.path);
+      if (!info.isFile()) throw new Error(`${input.path} is not a file.`);
+      const sha256 = await hashFile(input.path);
+      const id = makeFileId();
+      ensureFilesDir();
+      copyFileSync(input.path, filePath(id));
+      const message = operations.registerFile(memberName, {
+        recipient: input.recipient,
+        name: basename(input.path),
+        size: info.size,
+        sha256,
+        fileId: id,
+      });
+      return { id, seq: message.seq };
+    },
+    async receiveFile(input) {
+      const file = store.getFile(input.id);
+      if (!file) throw new Error(`No such file: ${input.id}`);
+      if (!fileExists(file.id)) throw new Error(`The bytes for ${file.name} are no longer on the hub.`);
+      mkdirSync(dirname(input.to), { recursive: true });
+      copyFileSync(filePath(file.id), input.to);
+      return { path: input.to, name: file.name, size: file.size };
+    },
+    async listFiles() {
+      return store.filesForMember(memberName);
     },
     async status() {
       return {
@@ -176,6 +231,15 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
   let cursor = groupCursorStart;
   return {
     name: memberName,
+    profile(input) {
+      return client.peerOperation(target, ticket, 'profile', input);
+    },
+    work(input) {
+      return client.peerOperation(target, ticket, 'work', input);
+    },
+    async reportCapabilities(input) {
+      await client.peerOperation(target, ticket, 'capabilities', input);
+    },
     send(recipient, body, replyTo, msgId) {
       return client.postMessage(target, ticket, { recipient, body, ...(replyTo ? { replyTo } : {}), ...(msgId ? { msgId } : {}) });
     },
@@ -195,6 +259,25 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
     history(query) {
       return client.fetchHistory(target, ticket, query);
     },
+    async sendFile(input) {
+      const info = statSync(input.path);
+      if (!info.isFile()) throw new Error(`${input.path} is not a file.`);
+      const sha256 = await hashFile(input.path);
+      return client.uploadFile(target, ticket, {
+        recipient: input.recipient,
+        name: basename(input.path),
+        size: info.size,
+        sha256,
+        source: createReadStream(input.path),
+      });
+    },
+    async receiveFile(input) {
+      const result = await client.downloadFile(target, ticket, input.id, input.to);
+      return { path: input.to, name: result.name, size: result.size };
+    },
+    listFiles() {
+      return client.listFiles(target, ticket);
+    },
     async status() {
       const live = await client.fetchHubStatus(target, ticket);
       return {
@@ -211,6 +294,9 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
           lastMessageAt: member.lastMessageAt ?? null,
           lastMessageTo: member.lastMessageTo ?? null,
           lastMemoryAt: member.lastMemoryAt ?? null,
+          profile: member.profile ?? null,
+          capabilities: member.capabilities ?? null,
+          activeWorkCount: member.activeWorkCount ?? 0,
         })),
       };
     },

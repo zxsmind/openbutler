@@ -13,6 +13,9 @@ import {
   validateTeamName,
 } from '../team/service.js';
 import { localChannel, remoteChannel, type TeamChannel, type TeamMessage } from '../team/session.js';
+import { defaultInboxPath } from '../team/files.js';
+import { teamSlug } from '../memory-paths.js';
+import { resolve } from 'node:path';
 import { TeamStore } from '../team/store.js';
 import { TEAM_DEFAULT_PORT, findTailnetAddress, parseJoinTarget, type JoinTarget } from '../team/tailnet.js';
 import * as ui from './ui.js';
@@ -41,7 +44,10 @@ const USAGE = `Usage:
   ranite team dm <member> <message>
   ranite team inbox
   ranite team read [--group] [--from <member>]
-  ranite team history [--group | --with <member>] [--before <seq>] [--limit <n>]`;
+  ranite team history [--group | --with <member>] [--before <seq>] [--limit <n>]
+  ranite team send-file <member|group> <path>
+  ranite team files
+  ranite team get <file-id> [--to <path>]`;
 
 function words(parsed: Parsed): string[] {
   return parsed.words;
@@ -568,6 +574,59 @@ async function runHistory(parsed: Parsed): Promise<void> {
   }
 }
 
+async function runSendFile(parsed: Parsed): Promise<void> {
+  const arg = words(parsed);
+  const recipient = arg[1];
+  const path = arg.slice(2).join(' ').trim();
+  if (!recipient || !path) throw new Error('Usage: ranite team send-file <member|group> <path>');
+  const { channel, close } = openChannel();
+  try {
+    const result = await channel.sendFile({ recipient, path: resolve(path) });
+    ui.success(`Sent to ${recipient} (file ${result.id}).`);
+  } finally {
+    close();
+  }
+}
+
+async function runFiles(): Promise<void> {
+  const { channel, close } = openChannel();
+  try {
+    const files = await channel.listFiles();
+    if (files.length === 0) {
+      ui.info('No shared files.');
+      return;
+    }
+    ui.table(
+      ['FILE ID', 'NAME', 'SIZE', 'FROM', 'TO'],
+      files.map((file) => [file.id, file.name, String(file.size), file.sender, file.recipient]),
+    );
+  } finally {
+    close();
+  }
+}
+
+async function runGet(parsed: Parsed): Promise<void> {
+  const id = words(parsed)[1];
+  if (!id) throw new Error('Usage: ranite team get <file-id> [--to <path>]');
+  const to = flag(parsed, 'to');
+  const { channel, close } = openChannel();
+  try {
+    const destination = to ? resolve(to) : undefined;
+    const result = await channel.receiveFile({ id, to: destination ?? (await defaultDestination(channel, id)) });
+    ui.success(`Saved ${result.name} (${result.size} bytes) to ${result.path}.`);
+  } finally {
+    close();
+  }
+}
+
+/** The default inbox path for a file id, derived from its metadata. */
+async function defaultDestination(channel: TeamChannel, id: string): Promise<string> {
+  const team = loadSettings().team!;
+  const meta = (await channel.listFiles()).find((file) => file.id === id);
+  if (!meta) throw new Error(`No such file: ${id}`);
+  return defaultInboxPath(team.teamId || teamSlug(team.teamName), meta.name);
+}
+
 /** Usage: ranite team <subcommand> … (see USAGE). */
 export async function runTeamCommand(parsed: Parsed): Promise<void> {
   const action = words(parsed)[0] ?? 'status';
@@ -631,6 +690,15 @@ export async function runTeamCommand(parsed: Parsed): Promise<void> {
       return;
     case 'history':
       await runHistory(parsed);
+      return;
+    case 'send-file':
+      await runSendFile(parsed);
+      return;
+    case 'files':
+      await runFiles();
+      return;
+    case 'get':
+      await runGet(parsed);
       return;
     default:
       throw new Error(USAGE);

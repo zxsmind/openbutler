@@ -93,6 +93,11 @@ export function makeMessageId(): string {
   return `m_${randomBytes(12).toString('hex')}`;
 }
 
+/** File id. Keys the stored bytes on the hub and the metadata row. */
+export function makeFileId(): string {
+  return `f_${randomBytes(12).toString('hex')}`;
+}
+
 export function isGroupRecipient(value: string): boolean {
   return value.trim().toLowerCase() === GROUP_RECIPIENT;
 }

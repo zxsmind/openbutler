@@ -16,6 +16,7 @@ export interface MemoryPaths {
   workspaceFile: string;
   /** Per-agent, never-synced scope: who this ranite is and how it sees its peers. */
   selfDirectory: string;
+  /** Legacy path retained for locating old data; no longer an active identity or memory document. */
   identityFile: string;
   peersDirectory: string;
   /** Shared team scope root; each team materializes under its own slug. */
@@ -111,8 +112,7 @@ export function getMemoryDocumentPath(source: string, workspaceRoot = process.cw
     return { path: target, kind: 'note', scope: 'user', notePath: relative(paths.topicsDirectory, target) };
   if (isWithin(target, paths.areasDirectory))
     return { path: target, kind: 'note', scope: 'user', notePath: relative(paths.areasDirectory, target) };
-  // Per-agent self scope: identity and peer observations. Never synced.
-  if (samePath(target, paths.identityFile)) return { path: target, kind: 'profile', scope: 'self', notePath: null };
+  // Self scope holds local peer observations. Identity is the single team profile.
   if (isWithin(target, paths.peersDirectory))
     return { path: target, kind: 'note', scope: 'self', notePath: relative(paths.peersDirectory, target) };
   // Shared team scope: <root>/team/<team-key>/<file>.md. The key is structural.

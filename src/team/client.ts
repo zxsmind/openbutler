@@ -1,4 +1,10 @@
+import { createHash } from 'node:crypto';
+import { createWriteStream, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { JoinTarget } from './tailnet.js';
+import type { PeerProfile, PeerCapabilities } from './coordination.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -27,6 +33,9 @@ export interface HubMember {
   lastMessageAt?: number | null;
   lastMessageTo?: string | null;
   lastMemoryAt?: number | null;
+  profile?: PeerProfile | null;
+  capabilities?: PeerCapabilities | null;
+  activeWorkCount?: number;
 }
 
 export interface HubStatus {
@@ -72,6 +81,22 @@ async function requestJson(
 function hubError(status: number, body: Record<string, unknown>, fallback: string): Error {
   const detail = typeof body.error === 'string' && body.error ? body.error : fallback;
   return new Error(`Hub refused (${status}): ${detail}`);
+}
+
+/** The server binds the actor to the ticket; the input never selects an acting member. */
+export async function peerOperation(
+  target: JoinTarget,
+  ticket: string,
+  operation: 'profile' | 'work' | 'capabilities',
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  const { status, body } = await requestJson(`${baseUrl(target)}/v1/${operation}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (status !== 200) throw hubError(status, body, 'Peer operation failed.');
+  return body.result;
 }
 
 /** Who the hub claims to be. Compare the fingerprint with the invite before trusting it. */
@@ -222,6 +247,96 @@ export async function fetchHistory(
   });
   if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'History read failed.');
   return body as unknown as { messages: TeamMessage[] };
+}
+
+export interface TeamFileInfo {
+  id: string;
+  name: string;
+  size: number;
+  sha256: string;
+  sender: string;
+  recipient: string;
+  createdAt: number;
+}
+
+/** Authenticated: files this member can receive (addressed to them or to the group). */
+export async function listFiles(target: JoinTarget, ticket: string): Promise<TeamFileInfo[]> {
+  const { status, body } = await requestJson(`${baseUrl(target)}/v1/files`, { headers: { authorization: `Bearer ${ticket}` } });
+  if (status !== 200 || !Array.isArray(body.files)) throw hubError(status, body, 'File list failed.');
+  return body.files as TeamFileInfo[];
+}
+
+/**
+ * Streams a local file to the hub as a shared file, without buffering it in
+ * memory. The caller supplies the name, size, and sha256 it measured.
+ */
+export async function uploadFile(
+  target: JoinTarget,
+  ticket: string,
+  input: { recipient: string; name: string; size: number; sha256: string; source: NodeJS.ReadableStream },
+): Promise<{ id: string; seq: number }> {
+  const params = new URLSearchParams({ recipient: input.recipient, name: input.name, size: String(input.size), sha256: input.sha256 });
+  const response = await fetch(`${baseUrl(target)}/v1/files?${params.toString()}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/octet-stream', 'content-length': String(input.size) },
+    body: Readable.toWeb(input.source as Readable) as ReadableStream,
+    // Node's fetch needs this to send a streamed request body.
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await response.json()) as Record<string, unknown>;
+  } catch {
+    /* non-JSON hub answers surface as a status error below */
+  }
+  if (!response.ok || typeof body.id !== 'string') throw hubError(response.status, body, 'File upload failed.');
+  return body as unknown as { id: string; seq: number };
+}
+
+/**
+ * Streams a shared file from the hub to a local path, verifying size and
+ * sha256 as it writes. Writes to a temporary file and renames on success, so a
+ * failed transfer never leaves a partial file at the destination.
+ */
+export async function downloadFile(
+  target: JoinTarget,
+  ticket: string,
+  id: string,
+  destination: string,
+): Promise<{ name: string; size: number; sha256: string }> {
+  const response = await fetch(`${baseUrl(target)}/v1/files/${id}`, { headers: { authorization: `Bearer ${ticket}` } });
+  if (!response.ok || !response.body) {
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await response.json()) as Record<string, unknown>;
+    } catch {
+      /* ignore */
+    }
+    throw hubError(response.status, body, 'File download failed.');
+  }
+  const name = decodeURIComponent(response.headers.get('x-file-name') ?? '');
+  const sha256 = response.headers.get('x-file-sha256') ?? '';
+  const size = Number(response.headers.get('content-length') ?? '0');
+  mkdirSync(dirname(destination), { recursive: true });
+  const temporary = `${destination}.part`;
+  const hash = createHash('sha256');
+  let received = 0;
+  const meter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      received += chunk.length;
+      hash.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(Readable.fromWeb(response.body as never), meter, createWriteStream(temporary));
+    if (received !== size || hash.digest('hex') !== sha256) throw new Error('Downloaded bytes do not match the file hash.');
+    renameSync(temporary, destination);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+  return { name, size, sha256 };
 }
 
 /** Authenticated: unread DMs for this member. */

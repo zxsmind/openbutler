@@ -33,6 +33,11 @@ export interface CreateAgentRuntimeOptions {
   teamGroup?: (limit: number) => Promise<unknown>;
   teamHistory?: (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
+  teamSendFile?: (input: { path: string; to: string }) => Promise<unknown>;
+  teamReceiveFile?: (input: { id: string; to?: string }) => Promise<unknown>;
+  teamFiles?: () => Promise<unknown>;
+  teamProfile?: (input: Record<string, unknown>) => Promise<unknown>;
+  teamWork?: (input: Record<string, unknown>) => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
@@ -129,6 +134,11 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         ...(options.teamGroup ? { teamGroup: options.teamGroup } : {}),
         ...(options.teamHistory ? { teamHistory: options.teamHistory } : {}),
         ...(options.teamStatus ? { teamStatus: options.teamStatus } : {}),
+        ...(options.teamSendFile ? { teamSendFile: options.teamSendFile } : {}),
+        ...(options.teamReceiveFile ? { teamReceiveFile: options.teamReceiveFile } : {}),
+        ...(options.teamFiles ? { teamFiles: options.teamFiles } : {}),
+        ...(options.teamProfile ? { teamProfile: options.teamProfile } : {}),
+        ...(options.teamWork ? { teamWork: options.teamWork } : {}),
         ...(options.teamRemember ? { teamRemember: options.teamRemember } : {}),
         ...(options.sessionMessage ? { sessionMessage: options.sessionMessage } : {}),
         ...(options.subagent ? { subagent: options.subagent } : {}),
@@ -197,6 +207,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
           ? (minimalReasoningOptions(reviewResolved, reviewCatalogModel) ?? {})
           : (minimalReasoningOptions(activeResolved, activeCatalog.model) ?? {}),
       registry: createRegistry(activeInputModalities),
+      getPeerCapabilities: () => ({
+        platform: process.platform,
+        mcpServers: mcp!
+          .list()
+          .filter((server) => server.connected)
+          .map((server) => ({ name: server.id, toolCount: server.toolCount })),
+        mcpTools: mcp!.tools.map((tool) => `${tool.providerId}/${tool.name}`),
+      }),
       selectWorkspaceRoot: async (path) => {
         const run = workspaceSwitch.then(async () => {
           const nextRoot = canonicalWorkspaceRoot(path);

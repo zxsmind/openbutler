@@ -6,6 +6,9 @@ type TeamInbox = (limit: number) => Promise<unknown>;
 type TeamGroup = (limit: number) => Promise<unknown>;
 type TeamStatus = () => Promise<unknown>;
 type TeamHistory = (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
+type TeamSendFile = (input: { path: string; to: string }) => Promise<unknown>;
+type TeamReceiveFile = (input: { id: string; to?: string }) => Promise<unknown>;
+type TeamFiles = () => Promise<unknown>;
 type TeamRemember = (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
 
 /**
@@ -112,7 +115,7 @@ export function createTeamStatusTool(status: TeamStatus): ToolDefinition {
     name: 'team_status',
     maxInputChars: 64,
     description:
-      'Show the team roster: every member, whether they are online now, when they were last seen, and their last activity (last message sent and where, and their last shared-memory write). Use this to see who is around and what the team has been doing before coordinating.',
+      "Show the team roster, each member's self-authored identity profile, host-reported connected MCP servers/tools with observation time and staleness, accepted peer work, and whether the custodian conversation is busy. Use it to find a relevant peer; online means reachable, and an idle custodian does not prove the machine has no other work. A profile is a self-description and host reports describe connected tools, not proven expertise or permission. Ask a focused capability question when evidence is insufficient. A missing report means unknown; it does not mean the peer has no tools.",
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
     autoApprove: () => true,
@@ -156,6 +159,86 @@ export function createTeamHistoryTool(history: TeamHistory): ToolDefinition {
       const limit = typeof input.limit === 'number' ? input.limit : undefined;
       return history({ scope, ...(peer ? { peer } : {}), ...(before ? { before } : {}), ...(limit ? { limit } : {}) });
     },
+  };
+}
+
+/**
+ * Send a local file to a member or the shared group. The hub stores it and the
+ * recipient is woken; sending needs no approval, but the secret store can never
+ * be sent. Receiving (team_receive_file) is the approval point.
+ */
+export function createTeamSendFileTool(send: TeamSendFile): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_send_file',
+    maxInputChars: 1024,
+    description:
+      'Send a file from this machine to a team member or the shared group. Give the absolute path of the local file and the recipient (a member name, or "group"). The hub stores the file and wakes the recipient, who downloads it with team_receive_file. Any file type is allowed. The secret store can never be sent.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: { type: 'string', description: 'Absolute path of the local file to send.' },
+        to: { type: 'string', description: 'A member name, or "group" to share with everyone.' },
+      },
+      required: ['path', 'to'],
+    },
+    effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'none', outbound: 'model-and-tool-server' },
+    autoApprove: () => true,
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: (input) => {
+      const path = typeof input.path === 'string' ? input.path.trim() : '';
+      const to = typeof input.to === 'string' ? input.to.trim() : '';
+      if (!path || !to) return Promise.resolve({ status: 'invalid', error: 'team_send_file needs a path and a recipient.' });
+      return send({ path, to });
+    },
+  };
+}
+
+/**
+ * Download a shared file to this machine. Writing a file to disk is the risky
+ * step, so this goes through the normal approval gate.
+ */
+export function createTeamReceiveFileTool(receive: TeamReceiveFile): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_receive_file',
+    maxInputChars: 1024,
+    description:
+      'Download a shared team file to this machine. Pass the file id from the notification or from team_files. Omit to to write it to the default team inbox (appdata/ranite/team-inbox/<team>/<name>); pass an absolute path to choose the destination. The download is verified by sha256. This writes a local file, so it follows the active permission mode.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'string', description: 'The file id to download.' },
+        to: { type: 'string', description: 'Optional absolute destination path; defaults to the team inbox.' },
+      },
+      required: ['id'],
+    },
+    effect: { change: 'modify', data: 'sensitive', network: 'used', reversible: 'compensating', outbound: 'model-and-tool-server' },
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: (input) => {
+      const id = typeof input.id === 'string' ? input.id.trim() : '';
+      if (!id) return Promise.resolve({ status: 'invalid', error: 'team_receive_file needs a file id.' });
+      const to = typeof input.to === 'string' && input.to.trim() ? input.to.trim() : undefined;
+      return receive({ id, ...(to ? { to } : {}) });
+    },
+  };
+}
+
+/** List the shared files this member can receive. */
+export function createTeamFilesTool(files: TeamFiles): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_files',
+    maxInputChars: 64,
+    description:
+      'List the shared team files you can receive: files addressed to you or shared with the group. Returns each file id, name, size, sender, and recipient; download one with team_receive_file.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
+    autoApprove: () => true,
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: () => files(),
   };
 }
 

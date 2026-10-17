@@ -78,6 +78,7 @@ export interface AgentEnvironment extends AgentSessionRuntimeView {
   /** Cheapest expressible reasoning options for permission reviews; live with model switches. */
   getReviewProviderOptions: () => ReasoningVariant['providerOptions'];
   registry: ToolRegistry;
+  getPeerCapabilities?: () => { platform: string; mcpServers: Array<{ name: string; toolCount: number }>; mcpTools: string[] };
   selectWorkspaceRoot?: (workspaceRoot: string) => Promise<void>;
   selectModel: (providerId: string, modelId: string) => Promise<void>;
   close: () => Promise<void>;

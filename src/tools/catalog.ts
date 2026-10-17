@@ -18,11 +18,15 @@ import { createSubagentStopTool } from './subagent-stop.js';
 import { createSubagentTool, type SubagentRequest } from './subagent.js';
 import type { ToolDefinition } from './registry.js';
 import { createReadOwnerMessagesTool, createSendMessageToOwnerTool } from './owner-communication.js';
+import { createTeamProfileTool, createTeamWorkTool } from './team-coordination.js';
 import {
+  createTeamFilesTool,
   createTeamGroupTool,
   createTeamHistoryTool,
   createTeamInboxTool,
+  createTeamReceiveFileTool,
   createTeamRememberTool,
+  createTeamSendFileTool,
   createTeamSendTool,
   createTeamStatusTool,
 } from './team-communication.js';
@@ -42,6 +46,11 @@ export interface ToolCatalogueOptions {
   teamGroup?: (limit: number) => Promise<unknown>;
   teamHistory?: (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
+  teamSendFile?: (input: { path: string; to: string }) => Promise<unknown>;
+  teamReceiveFile?: (input: { id: string; to?: string }) => Promise<unknown>;
+  teamFiles?: () => Promise<unknown>;
+  teamProfile?: (input: Record<string, unknown>) => Promise<unknown>;
+  teamWork?: (input: Record<string, unknown>) => Promise<unknown>;
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
@@ -92,6 +101,11 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     createTeamGroupTool(options.teamGroup ?? unavailable('team_group')),
     createTeamHistoryTool(options.teamHistory ?? unavailable('team_history')),
     createTeamStatusTool(options.teamStatus ?? unavailable('team_status')),
+    createTeamSendFileTool(options.teamSendFile ?? unavailable('team_send_file')),
+    createTeamReceiveFileTool(options.teamReceiveFile ?? unavailable('team_receive_file')),
+    createTeamFilesTool(options.teamFiles ?? unavailable('team_files')),
+    createTeamProfileTool(options.teamProfile ?? unavailable('team_profile')),
+    createTeamWorkTool(options.teamWork ?? unavailable('team_work')),
     createTeamRememberTool(
       options.teamRemember ?? (async () => ({ status: 'unavailable' as const, error: 'team_remember is not available in this session.' })),
     ),

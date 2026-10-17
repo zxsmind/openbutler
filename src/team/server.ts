@@ -1,8 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import { isTailnetAddress } from './tailnet.js';
-import { fingerprintOf, hashTicket, makeRequestId, validateMemberName } from './service.js';
-import { TeamOperations, TeamError } from './operations.js';
+import { fingerprintOf, GROUP_RECIPIENT, hashTicket, makeFileId, makeRequestId, validateMemberName } from './service.js';
+import { TeamOperations, TeamError, MAX_FILE_BYTES } from './operations.js';
 import { TeamStore, type JoinRequest } from './store.js';
+import { TeamCoordination } from './coordination.js';
+import { deleteFileBytes, ensureFilesDir, fileExists, filePath, readFileStream } from './files.js';
 
 const MAX_BODY_BYTES = 65_536;
 const MAX_GROUP_PAGE = 200;
@@ -100,6 +106,7 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
   if (!hubId) throw new Error('Team store is not initialized. Run team init first.');
   const fingerprint = fingerprintOf(hubId);
   const operations = new TeamOperations(store);
+  const coordination = new TeamCoordination(store);
   const clock = options.now ?? Date.now;
   // Per-source-address join failures; cleared on a successful request.
   const joinFailures = new Map<string, { count: number; blockedUntil: number }>();
@@ -212,6 +219,30 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
       return;
     }
     store.touchMember(member.name, now);
+    if (request.method === 'POST' && ['/v1/profile', '/v1/work', '/v1/capabilities'].includes(url.pathname)) {
+      const input: unknown = await readJson(request);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        sendJson(response, 400, { error: 'An object is required.' });
+        return;
+      }
+      try {
+        const body = input as Record<string, unknown>;
+        const result =
+          url.pathname === '/v1/profile'
+            ? coordination.profile(member.name, body)
+            : url.pathname === '/v1/work'
+              ? coordination.work(member.name, body)
+              : coordination.reportCapabilities(member.name, body);
+        sendJson(response, 200, { result: result ?? null });
+      } catch (error) {
+        if (error instanceof TeamError) {
+          sendJson(response, error.status, { error: error.message });
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
     if (request.method === 'GET' && url.pathname === '/v1/status') {
       sendJson(response, 200, {
         protocol: PROTOCOL_VERSION,
@@ -311,6 +342,82 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
         return;
       }
       sendJson(response, 200, { messages: store.dmHistory(member.name, canonical, before, page) });
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/files') {
+      sendJson(response, 200, { files: store.filesForMember(member.name) });
+      return;
+    }
+    const fileMatch = /^\/v1\/files\/(f_[0-9a-f]+)$/.exec(url.pathname);
+    if (request.method === 'GET' && fileMatch) {
+      const file = store.getFile(fileMatch[1]!);
+      if (!file) {
+        sendJson(response, 404, { error: 'No such file.' });
+        return;
+      }
+      if (file.recipient !== member.name && file.recipient !== GROUP_RECIPIENT && file.sender !== member.name) {
+        sendJson(response, 403, { error: 'This file is not addressed to you.' });
+        return;
+      }
+      if (!fileExists(file.id)) {
+        sendJson(response, 410, { error: 'The file bytes are no longer on the hub.' });
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': file.size,
+        'x-file-name': encodeURIComponent(file.name),
+        'x-file-sha256': file.sha256,
+      });
+      await pipeline(readFileStream(file.id), response);
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/files') {
+      const recipient = url.searchParams.get('recipient') ?? '';
+      const name = url.searchParams.get('name') ?? '';
+      const sha256 = url.searchParams.get('sha256') ?? '';
+      const size = Number(url.searchParams.get('size') ?? '');
+      const id = makeFileId();
+      ensureFilesDir();
+      const destination = filePath(id);
+      const hash = createHash('sha256');
+      let received = 0;
+      let overflowed = false;
+      const meter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          received += chunk.length;
+          if (received > MAX_FILE_BYTES) {
+            overflowed = true;
+            callback(new Error('File exceeds the size limit.'));
+            return;
+          }
+          hash.update(chunk);
+          callback(null, chunk);
+        },
+      });
+      try {
+        await pipeline(request, meter, createWriteStream(destination));
+      } catch {
+        deleteFileBytes(id);
+        sendJson(response, overflowed ? 413 : 400, { error: overflowed ? 'File exceeds the size limit.' : 'Upload failed.' });
+        return;
+      }
+      if (received !== size || hash.digest('hex') !== sha256) {
+        deleteFileBytes(id);
+        sendJson(response, 400, { error: 'Uploaded bytes do not match the declared size or sha256.' });
+        return;
+      }
+      try {
+        const message = operations.registerFile(member.name, { recipient, name, size, sha256, fileId: id });
+        sendJson(response, 200, { id, seq: message.seq, msgId: message.msgId });
+      } catch (error) {
+        deleteFileBytes(id);
+        if (error instanceof TeamError) {
+          sendJson(response, error.status, { error: error.message });
+          return;
+        }
+        throw error;
+      }
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/inbox/read') {
