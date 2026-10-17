@@ -57,7 +57,7 @@ const ALWAYS_OFFERED = [
   'subagent_poll',
   'subagent_stop',
   'mcp_manage',
-  'background_manage',
+  'schedule',
 ];
 
 describe('tool catalogue', () => {
@@ -81,7 +81,7 @@ describe('tool catalogue', () => {
       registry.register(definition);
     }
     const built = await registry.createModelTools({ approve: async () => true, onResult: () => {} });
-    const result = (await built.tools.background_manage!.execute!({ action: 'list' }, { toolCallId: 'call-1', messages: [] })) as {
+    const result = (await built.tools.schedule!.execute!({ action: 'list' }, { toolCallId: 'call-1', messages: [] })) as {
       status: unknown;
     };
     expect(result.status).toBe('unavailable');

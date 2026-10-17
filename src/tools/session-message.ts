@@ -23,7 +23,7 @@ export function createSessionMessageTool(
   return {
     providerId: 'host',
     name: 'session_message',
-    description: `Send a short text message into another running Ranite session on this machine (steering). Only the machine custodian may send, only to live worker sessions such as background tasks; worker-to-worker messages are refused. The receiver sees the text as a message from another Ranite session, never from the user, and it can never approve actions or change settings by itself. Use it to redirect or correct work in progress; read the worker first with session_read when its state is unclear. Text only, at most ${MAX_SESSION_MESSAGE_CHARS} characters.`,
+    description: `Send a short text message into another running Ranite session on this machine (steering). Only the machine custodian may send, only to live worker sessions such as scheduled runs; worker-to-worker messages are refused. The receiver sees the text as a message from another Ranite session, never from the user, and it can never approve actions or change settings by itself. Use it to redirect or correct work in progress; read the worker first with session_read when its state is unclear. Text only, at most ${MAX_SESSION_MESSAGE_CHARS} characters.`,
     inputSchema: {
       type: 'object',
       properties: {

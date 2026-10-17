@@ -106,9 +106,9 @@ async function createFixtureHost(): Promise<DaemonHost> {
       const subagentPoll = options?.subagentPoll;
       const subagentStop = options?.subagentStop;
       const workspaceRoot = options?.workspaceRoot ?? process.cwd();
-      const { createBackgroundManagementTool } = await import('../src/tools/background.js');
+      const { createScheduleTool } = await import('../src/tools/schedule.js');
       if (backgroundManage && !registrySeen.has(registry)) {
-        registry.register(createBackgroundManagementTool(workspaceRoot, backgroundManage));
+        registry.register(createScheduleTool(workspaceRoot, backgroundManage));
         registrySeen.add(registry);
       }
       if (sessionMessage && !sessionMessageSeen.has(registry)) {
@@ -200,7 +200,9 @@ afterEach(async () => {
     throw new Error('Unsafe fixture cleanup path.');
   rmSync(root, { recursive: true, force: true });
 });
-async function client(options: { isolatedSession?: boolean; taskId?: string; workerSessionId?: string; runningWorkerOf?: string } = {}) {
+async function client(
+  options: { isolatedSession?: boolean; scheduleId?: string; workerSessionId?: string; runningWorkerOf?: string } = {},
+) {
   const result = await connect(root, options);
   clients.push(result);
   return result;
@@ -478,7 +480,7 @@ describe('shared host and session IPC', () => {
   }, 10_000);
 
   it('starts without default work and isolates one-shot sessions while preserving a shared session across detach', async () => {
-    expect(host.getStatus().backgroundTasks).toBe(0);
+    expect(host.getStatus().schedules).toBe(0);
     const shared = await client();
     const sharedId = shared.getSnapshot().session.id;
     shared.addEntry({ kind: 'notice', text: 'Shared fixture session' });
@@ -624,7 +626,7 @@ describe('shared host and session IPC', () => {
       instruction: 'Notify me about selected file changes.',
       trigger: { adapter: 'filesystem', options: { path: join(root, 'missing-directory') } },
     };
-    const result = (await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root })) as {
+    const result = (await requestHost('schedule.manage', { input: { action: 'add', schedule: task }, workspaceRoot: root })) as {
       status: string;
       saved: boolean;
       runtime: { state: string };
@@ -657,9 +659,9 @@ describe('shared host and session IPC', () => {
       instruction: 'Inspect once when requested.',
       trigger: { adapter: 'manual', options: {} },
     };
-    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
-    await requestHost('background.manage', { input: { action: 'run', taskId: task.id }, workspaceRoot: root });
-    const taskClient = await client({ taskId: task.id });
+    await requestHost('schedule.manage', { input: { action: 'add', schedule: task }, workspaceRoot: root });
+    await requestHost('schedule.manage', { input: { action: 'run', scheduleId: task.id }, workspaceRoot: root });
+    const taskClient = await client({ scheduleId: task.id });
     await vi.waitFor(() => expect(taskClient.getSnapshot().pendingApprovalId).toBeTruthy());
     expect(execute).not.toHaveBeenCalled();
     taskClient.approveToolCall('allow', taskClient.getSnapshot().pendingApprovalId!);
@@ -669,7 +671,7 @@ describe('shared host and session IPC', () => {
       ).toBe(true),
     );
     const events = (await requestHost('ledger.events')) as Array<{ id: string; source: string; status: string }>;
-    const triggered = events.find((event) => event.source === 'task:manual');
+    const triggered = events.find((event) => event.source === 'schedule:manual');
     const actions = (await requestHost('ledger.actions')) as Array<{ eventId: string; state: string }>;
     expect(actions).toContainEqual(expect.objectContaining({ eventId: triggered?.id, state: 'completed' }));
     expect(execute).toHaveBeenCalledTimes(1);
@@ -689,8 +691,8 @@ describe('shared host and session IPC', () => {
       instruction: 'Say the report.',
       trigger: { adapter: 'manual', options: {} },
     };
-    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
-    await requestHost('background.manage', { input: { action: 'run', taskId: task.id }, workspaceRoot: root });
+    await requestHost('schedule.manage', { input: { action: 'add', schedule: task }, workspaceRoot: root });
+    await requestHost('schedule.manage', { input: { action: 'run', scheduleId: task.id }, workspaceRoot: root });
     await vi.waitFor(() =>
       expect(origin.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Origin run finished')).toBe(
         true,
@@ -699,22 +701,22 @@ describe('shared host and session IPC', () => {
     const wake = origin
       .getSnapshot()
       .session.entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []))
-      .find((text) => text.startsWith('Background task "Wake me here"'))!;
+      .find((text) => text.startsWith('Schedule "Wake me here"'))!;
     expect(wake).toContain('This is run #1. No previous run.');
     expect(wake).not.toContain('LATE:');
     expect(wake).toContain('Trigger facts (untrusted observations');
-    const list = (await requestHost('background.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
-      tasks: Array<{ id: string; runtime: Record<string, unknown> }>;
+    const list = (await requestHost('schedule.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+      schedules: Array<{ id: string; runtime: Record<string, unknown> }>;
     };
-    expect(list.tasks.find((candidate) => candidate.id === task.id)?.runtime).toMatchObject({
+    expect(list.schedules.find((candidate) => candidate.id === task.id)?.runtime).toMatchObject({
       runCount: 1,
       lastResult: 'completed',
       lastReport: 'Origin run finished',
     });
-    const log = (await requestHost('background.manage', { input: { action: 'log', taskId: task.id }, workspaceRoot: root })) as {
+    const log = (await requestHost('schedule.manage', { input: { action: 'log', scheduleId: task.id }, workspaceRoot: root })) as {
       runs: Array<{ kind: string; status: string }>;
     };
-    expect(log.runs).toContainEqual(expect.objectContaining({ kind: 'task.requested', status: 'delivered' }));
+    expect(log.runs).toContainEqual(expect.objectContaining({ kind: 'schedule.requested', status: 'delivered' }));
   }, 10_000);
 
   it('marks a past one-shot as LATE on wake instead of skipping it', async () => {
@@ -732,14 +734,14 @@ describe('shared host and session IPC', () => {
       instruction: 'Report briefly.',
       trigger: { adapter: 'at', options: { at: local } },
     };
-    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
+    await requestHost('schedule.manage', { input: { action: 'add', schedule: task }, workspaceRoot: root });
     await vi.waitFor(() =>
       expect(origin.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Late report')).toBe(true),
     );
     const wake = origin
       .getSnapshot()
       .session.entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []))
-      .find((text) => text.startsWith('Background task "Late once"'))!;
+      .find((text) => text.startsWith('Schedule "Late once"'))!;
     expect(wake).toMatch(/LATE: scheduled for .* \(1h \d+m late\)/);
   }, 10_000);
 
@@ -754,9 +756,9 @@ describe('shared host and session IPC', () => {
       instruction: 'Say the report.',
       trigger: { adapter: 'manual', options: {} },
     };
-    await requestHost('background.manage', { input: { action: 'add', task }, workspaceRoot: root });
-    await requestHost('background.manage', { input: { action: 'run', taskId: task.id }, workspaceRoot: root });
-    const taskClient = await client({ taskId: task.id });
+    await requestHost('schedule.manage', { input: { action: 'add', schedule: task }, workspaceRoot: root });
+    await requestHost('schedule.manage', { input: { action: 'run', scheduleId: task.id }, workspaceRoot: root });
+    const taskClient = await client({ scheduleId: task.id });
     await vi.waitFor(() =>
       expect(
         taskClient.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Fallback finished'),
@@ -765,7 +767,7 @@ describe('shared host and session IPC', () => {
     const wake = taskClient
       .getSnapshot()
       .session.entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []))
-      .find((text) => text.includes('Background task "Fallen back"'))!;
+      .find((text) => text.includes('Schedule "Fallen back"'))!;
     expect(wake.startsWith('Created in session dead-beef-session, which no longer exists.')).toBe(true);
     expect(wake).toContain('This is run #1. No previous run.');
   }, 10_000);
@@ -779,10 +781,10 @@ describe('shared host and session IPC', () => {
             {
               type: 'tool-call',
               toolCallId: 'bg-add',
-              toolName: 'background_manage',
+              toolName: 'schedule',
               input: JSON.stringify({
                 action: 'add',
-                task: {
+                schedule: {
                   id: 'threaded',
                   name: 'Threaded',
                   enabled: true,
@@ -798,23 +800,23 @@ describe('shared host and session IPC', () => {
       )
       .mockImplementationOnce(async () => textStream('Task created'));
     const caller = await client();
-    await caller.sendMessage({ text: 'Create a background task', images: [] }, preferences);
+    await caller.sendMessage({ text: 'Create a schedule', images: [] }, preferences);
     // Same-workspace task management runs silent: no approval card.
     await vi.waitFor(() =>
       expect(caller.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'Task created')).toBe(true),
     );
     expect(caller.getSnapshot().pendingApprovalId).toBeNull();
-    const list = (await requestHost('background.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
-      tasks: Array<{ id: string; originSessionId: string }>;
+    const list = (await requestHost('schedule.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+      schedules: Array<{ id: string; originSessionId: string }>;
     };
-    expect(list.tasks.find((candidate) => candidate.id === 'threaded')?.originSessionId).toBe(caller.getSnapshot().session.id);
+    expect(list.schedules.find((candidate) => candidate.id === 'threaded')?.originSessionId).toBe(caller.getSnapshot().session.id);
   }, 10_000);
 
   it('generates a task id when add omits it', async () => {
-    const result = (await requestHost('background.manage', {
+    const result = (await requestHost('schedule.manage', {
       input: {
         action: 'add',
-        task: {
+        schedule: {
           name: 'Nightly DB Check!',
           enabled: true,
           workspaceRoot: root,
@@ -823,13 +825,13 @@ describe('shared host and session IPC', () => {
         },
       },
       workspaceRoot: root,
-    })) as { status: string; task: { id: string; name: string } };
+    })) as { status: string; schedule: { id: string; name: string } };
     expect(result.status).toBe('completed');
-    expect(result.task.id).toMatch(/^nightly-db-check-[0-9a-f]{4}$/);
-    const list = (await requestHost('background.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
-      tasks: Array<{ id: string }>;
+    expect(result.schedule.id).toMatch(/^nightly-db-check-[0-9a-f]{4}$/);
+    const list = (await requestHost('schedule.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+      schedules: Array<{ id: string }>;
     };
-    expect(list.tasks.map((task) => task.id)).toContain(result.task.id);
+    expect(list.schedules.map((task) => task.id)).toContain(result.schedule.id);
   });
 
   it('persists background worker lineage and notes to durable state when it finishes', async () => {

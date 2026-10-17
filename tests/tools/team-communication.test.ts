@@ -78,13 +78,13 @@ describe('team_history tool', () => {
 });
 
 describe('team wake decision', () => {
-  it('wakes on a new direct message only when the session is idle', () => {
-    expect(shouldWakeForTeamDms({ count: 1, highestSeq: 5, seenSeq: 0, busy: false })).toBe(true);
+  it('wakes on a new direct message, in progress or idle', () => {
+    expect(shouldWakeForTeamDms({ count: 1, highestSeq: 5, seenSeq: 0 })).toBe(true);
     // A burst after a first wake does not wake again.
-    expect(shouldWakeForTeamDms({ count: 3, highestSeq: 5, seenSeq: 5, busy: false })).toBe(false);
-    // A busy run is left alone; the same message wakes on a later idle tick.
-    expect(shouldWakeForTeamDms({ count: 1, highestSeq: 6, seenSeq: 5, busy: true })).toBe(false);
+    expect(shouldWakeForTeamDms({ count: 3, highestSeq: 5, seenSeq: 5 })).toBe(false);
+    // A message that arrives while a run is in progress still wakes: the controller steers it in.
+    expect(shouldWakeForTeamDms({ count: 1, highestSeq: 6, seenSeq: 5 })).toBe(true);
     // Nothing unread never wakes.
-    expect(shouldWakeForTeamDms({ count: 0, highestSeq: 9, seenSeq: 0, busy: false })).toBe(false);
+    expect(shouldWakeForTeamDms({ count: 0, highestSeq: 9, seenSeq: 0 })).toBe(false);
   });
 });

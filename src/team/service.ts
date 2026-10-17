@@ -103,13 +103,13 @@ export function isGroupRecipient(value: string): boolean {
 }
 
 /**
- * Whether a member-side poll should wake the session. Direct messages wake;
- * a busy run is left alone (the next idle tick delivers the same wake), and a
- * burst only wakes once because the highest seen sequence advances the cursor.
- * Group messages never reach here: they are ambient.
+ * Whether a member-side poll should hand a wake to the session. A direct message
+ * wakes even while a run is in progress: the controller queues the wake and
+ * steers it into the live run at its next tool batch, so the message is not held
+ * back until the session goes idle. A burst wakes once because the highest seen
+ * sequence advances the cursor. Group messages never reach here: they are ambient.
  */
-export function shouldWakeForTeamDms(input: { count: number; highestSeq: number; seenSeq: number; busy: boolean }): boolean {
-  if (input.busy) return false;
+export function shouldWakeForTeamDms(input: { count: number; highestSeq: number; seenSeq: number }): boolean {
   if (input.count <= 0) return false;
   return input.highestSeq > input.seenSeq;
 }

@@ -13,7 +13,7 @@ export type NoticeTone = 'info' | 'warn' | 'error';
  * one and forgotten in the other — the drift that once made every team-sourced
  * session unsavable.
  */
-export const USER_ENTRY_SOURCES = ['terminal', 'telegram', 'owner-inbox', 'background', 'team'] as const;
+export const USER_ENTRY_SOURCES = ['terminal', 'telegram', 'owner-inbox', 'schedule', 'background', 'team'] as const;
 export type UserEntrySource = (typeof USER_ENTRY_SOURCES)[number];
 
 export type SessionEntry =

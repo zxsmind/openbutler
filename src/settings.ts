@@ -8,7 +8,7 @@ import { getDataPath } from './paths.js';
  *
  * Two files, two trust levels. `settings.yaml` holds everything the operator
  * may show, share, or let the agent edit: providers (without key material),
- * models, appearance, approval policy, tasks. `config.yaml` holds only secret
+ * models, appearance, approval policy, schedules. `config.yaml` holds only secret
  * values — provider API keys — and is never shown to the agent. The runtime
  * shape (`SettingsStore`) is the union of the two, so every consumer keeps
  * working unchanged.
@@ -36,6 +36,18 @@ export interface ProviderState {
    * an Azure resource name — becomes configurable without a code change here.
    */
   options?: Record<string, unknown>;
+  /**
+   * Native provider-routing preferences for a gateway provider, passed to the
+   * gateway verbatim on every request.
+   *
+   * A gateway such as OpenRouter or Vercel AI Gateway load-balances one model
+   * across many upstream providers, so the same model can be served by a
+   * different backend each turn. These are the gateway's own routing fields
+   * (for OpenRouter `order`, `only`, `allow_fallbacks`, `sort`, …; for the
+   * Vercel gateway `order`, `only`, `sort`, …); Ranite does not interpret
+   * them, it only places them under the namespace the gateway expects.
+   */
+  routing?: Record<string, unknown>;
 }
 
 /** MCP credentials are environment-variable names, never secret values. */
@@ -43,12 +55,12 @@ export type McpServerState =
   | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string>; cwd?: string }
   | { transport: 'http' | 'sse'; url: string; headers: Record<string, string> };
 
-export interface BackgroundTaskState {
+export interface ScheduleState {
   id: string;
   name: string;
   enabled: boolean;
   workspaceRoot: string;
-  /** Session that created the task; '' means no affinity (task-owned session). */
+  /** Session that created the schedule; '' means no affinity (schedule-owned session). */
   originSessionId: string;
   instruction: string;
   trigger: { adapter: string; options: Record<string, unknown> };
@@ -123,8 +135,8 @@ export interface SettingsStore {
    * run keeps going: an expired approval is a timeout, never an approval.
    */
   approvalTimeoutSeconds?: number;
-  /** Explicit user tasks. An empty list starts no observers or scheduled model calls. */
-  backgroundTasks: BackgroundTaskState[];
+  /** Explicit schedules. An empty list starts no observers or scheduled model calls. */
+  schedules: ScheduleState[];
   /** Workspace used by bare Ranite launches; it does not define the machine custodian identity. */
   defaultWorkspaceRoot?: string;
   telegram?: TelegramSettings;
@@ -149,12 +161,13 @@ const KNOWN_KEYS = new Set([
   'autoReviewProvider',
   'autoReviewModel',
   'approvalTimeoutSeconds',
+  'schedules',
   'backgroundTasks',
   'defaultWorkspaceRoot',
   'telegram',
   'team',
 ]);
-const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options']);
+const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options', 'routing']);
 
 /**
  * The secret half of the persisted configuration: provider API keys plus the
@@ -319,6 +332,10 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
     const options = providerOptions(raw.options, `providers.${id}.options`);
     if (Object.keys(options).length > 0) state.options = options;
   }
+  if (raw.routing !== undefined) {
+    const routing = providerOptions(raw.routing, `providers.${id}.routing`);
+    if (Object.keys(routing).length > 0) state.routing = routing;
+  }
   return state;
 }
 
@@ -353,7 +370,7 @@ export function defaultSettings(): SettingsStore {
     defaultProvider: '',
     defaultModel: '',
     approvalMode: 'workspace',
-    backgroundTasks: [],
+    schedules: [],
   };
 }
 
@@ -459,12 +476,14 @@ export function loadSettings(): SettingsStore {
     }
     settings.approvalTimeoutSeconds = parsed.approvalTimeoutSeconds;
   }
-  if (parsed.backgroundTasks !== undefined) {
-    if (!Array.isArray(parsed.backgroundTasks) || parsed.backgroundTasks.length > 256)
-      throw new Error('backgroundTasks must be a list of up to 256 tasks.');
-    settings.backgroundTasks = parsed.backgroundTasks.map(parseBackgroundTaskState);
-    if (new Set(settings.backgroundTasks.map((task) => task.id)).size !== settings.backgroundTasks.length)
-      throw new Error('backgroundTasks contains duplicate task ids.');
+  // `backgroundTasks` is the pre-rename key; read it once so an older settings.yaml still loads.
+  const parsedSchedules = parsed.schedules ?? parsed.backgroundTasks;
+  if (parsedSchedules !== undefined) {
+    if (!Array.isArray(parsedSchedules) || parsedSchedules.length > 256)
+      throw new Error('schedules must be a list of up to 256 schedules.');
+    settings.schedules = parsedSchedules.map(parseScheduleState);
+    if (new Set(settings.schedules.map((schedule) => schedule.id)).size !== settings.schedules.length)
+      throw new Error('schedules contains duplicate schedule ids.');
   }
   if (parsed.defaultWorkspaceRoot !== undefined) {
     if (
@@ -628,7 +647,7 @@ export function saveSettings(settings: SettingsStore): void {
     ...(settings.autoReviewProvider === undefined ? {} : { autoReviewProvider: settings.autoReviewProvider }),
     ...(settings.autoReviewModel === undefined ? {} : { autoReviewModel: settings.autoReviewModel }),
     ...(settings.approvalTimeoutSeconds === undefined ? {} : { approvalTimeoutSeconds: settings.approvalTimeoutSeconds }),
-    backgroundTasks: settings.backgroundTasks,
+    schedules: settings.schedules,
     ...(settings.defaultWorkspaceRoot ? { defaultWorkspaceRoot: settings.defaultWorkspaceRoot } : {}),
     ...(settings.telegram ? { telegram: settings.telegram } : {}),
     ...(settings.team ? { team: settings.team } : {}),
@@ -645,27 +664,27 @@ export function saveSettings(settings: SettingsStore): void {
   atomicWriteYaml(CONFIG_FILE, { providers: secretProviders, ...(teamTicket ? { teamTicket } : {}) });
 }
 
-export function parseBackgroundTaskState(raw: unknown): BackgroundTaskState {
-  if (!isRecord(raw)) throw new Error('A background task must be a mapping.');
+export function parseScheduleState(raw: unknown): ScheduleState {
+  if (!isRecord(raw)) throw new Error('A Schedule must be a mapping.');
   const allowed = new Set(['id', 'name', 'enabled', 'workspaceRoot', 'originSessionId', 'instruction', 'trigger']);
-  for (const key of Object.keys(raw)) if (!allowed.has(key)) throw new Error(`background task ${key} is not a supported setting.`);
+  for (const key of Object.keys(raw)) if (!allowed.has(key)) throw new Error(`Schedule ${key} is not a supported setting.`);
   if (typeof raw.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(raw.id))
-    throw new Error('Background task id must use 1-64 letters, digits, underscores, or dashes.');
+    throw new Error('Schedule id must use 1-64 letters, digits, underscores, or dashes.');
   if (typeof raw.name !== 'string' || !raw.name.trim() || raw.name.length > 128)
-    throw new Error('Background task name must use 1-128 characters.');
-  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('Background task enabled must be a boolean.');
+    throw new Error('Schedule name must use 1-128 characters.');
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('Schedule enabled must be a boolean.');
   if (typeof raw.workspaceRoot !== 'string' || raw.workspaceRoot.length > 32_768 || !isAbsolute(raw.workspaceRoot))
-    throw new Error('Background task workspaceRoot must be an absolute path.');
+    throw new Error('Schedule workspaceRoot must be an absolute path.');
   if (raw.originSessionId !== undefined && (typeof raw.originSessionId !== 'string' || raw.originSessionId.length > 256))
-    throw new Error('Background task originSessionId must be a session id under 256 characters.');
+    throw new Error('Schedule originSessionId must be a session id under 256 characters.');
   if (typeof raw.instruction !== 'string' || !raw.instruction.trim() || raw.instruction.length > 16_000)
-    throw new Error('Background task instruction must use 1-16000 characters.');
+    throw new Error('Schedule instruction must use 1-16000 characters.');
   if (!isRecord(raw.trigger) || Object.keys(raw.trigger).some((key) => key !== 'adapter' && key !== 'options'))
-    throw new Error('Background task trigger must contain adapter and options.');
+    throw new Error('Schedule trigger must contain adapter and options.');
   if (typeof raw.trigger.adapter !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(raw.trigger.adapter))
-    throw new Error('Background task trigger adapter is invalid.');
+    throw new Error('Schedule trigger adapter is invalid.');
   if (!isRecord(raw.trigger.options) || JSON.stringify(raw.trigger.options).length > 16_000)
-    throw new Error('Background task trigger options must be a mapping under 16000 characters.');
+    throw new Error('Schedule trigger options must be a mapping under 16000 characters.');
   return {
     id: raw.id,
     name: raw.name,

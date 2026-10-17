@@ -1,15 +1,15 @@
-﻿import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLedger, TOOL_ACTION_STATES, type ToolActionUpdate } from '../../src/activity-ledger.js';
-import { BackgroundTaskRunner, validateBackgroundTrigger } from '../../src/tools/background.js';
+import { ScheduleRunner, validateScheduleTrigger } from '../../src/tools/schedule.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
-import type { BackgroundTaskState } from '../../src/settings.js';
+import type { ScheduleState } from '../../src/settings.js';
 
 let root: string;
 let ledger: ActivityLedger;
-let runner: BackgroundTaskRunner | undefined;
+let runner: ScheduleRunner | undefined;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'ranite-background-check-'));
   vi.stubEnv('RANITE_DATA_DIR', root);
@@ -26,7 +26,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const task = (trigger: BackgroundTaskState['trigger']): BackgroundTaskState => ({
+const task = (trigger: ScheduleState['trigger']): ScheduleState => ({
   id: 'requested-task',
   name: 'Explicit user task',
   enabled: true,
@@ -99,7 +99,12 @@ describe('durable events and actions', () => {
     ledger.close();
     const path = join(root, 'state.db');
     ledger = new ActivityLedger(path);
-    const event = ledger.insertEvent({ source: 'task:manual', kind: 'requested', dedupeKey: 'task:one', payload: { taskId: 'one' } });
+    const event = ledger.insertEvent({
+      source: 'schedule:manual',
+      kind: 'requested',
+      dedupeKey: 'schedule:one',
+      payload: { scheduleId: 'one' },
+    });
     ledger.setState('cursor', '42');
     ledger.recordToolAction(action);
     ledger.recordToolAction({ ...action, state: 'started' });
@@ -127,34 +132,34 @@ describe('explicit background subscriptions', () => {
     vi.useFakeTimers();
     vi.resetModules();
     const settings = await import('../../src/settings.js');
-    expect(settings.defaultSettings().backgroundTasks).toEqual([]);
+    expect(settings.defaultSettings().schedules).toEqual([]);
     const publish = vi.fn<(event: unknown) => Promise<void>>(async () => {});
-    runner = new BackgroundTaskRunner(ledger, publish, () => {});
-    await runner.reload(settings.defaultSettings().backgroundTasks);
+    runner = new ScheduleRunner(ledger, publish, () => {});
+    await runner.reload(settings.defaultSettings().schedules);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(86_400_000);
     expect(publish).not.toHaveBeenCalled();
-    expect(() => validateBackgroundTrigger({ adapter: 'interval', options: { everySeconds: 10, typo: true } })).toThrow(
+    expect(() => validateScheduleTrigger({ adapter: 'interval', options: { everySeconds: 10, typo: true } })).toThrow(
       'not a trigger option',
     );
     /* Server-local wall time needs no offset; an offset is converted at creation, not rejected here. */
-    expect(() => validateBackgroundTrigger({ adapter: 'at', options: { at: 'not-a-time' } })).toThrow('server-local ISO');
-    expect(validateBackgroundTrigger({ adapter: 'at', options: { at: '2030-01-01T12:00:00' } })).toBeUndefined();
+    expect(() => validateScheduleTrigger({ adapter: 'at', options: { at: 'not-a-time' } })).toThrow('server-local ISO');
+    expect(validateScheduleTrigger({ adapter: 'at', options: { at: '2030-01-01T12:00:00' } })).toBeUndefined();
     expect(() =>
-      validateBackgroundTrigger({ adapter: 'window', options: { from: '2030-01-01T12:00:00', to: '2030-01-01T11:00:00' } }),
+      validateScheduleTrigger({ adapter: 'window', options: { from: '2030-01-01T12:00:00', to: '2030-01-01T11:00:00' } }),
     ).toThrow('later than window.from');
-    expect(() => validateBackgroundTrigger({ adapter: 'daily', options: { at: '2am' } })).toThrow('"HH:MM"');
-    expect(() => validateBackgroundTrigger({ adapter: 'daily', options: { at: '02:00', days: ['funday'] } })).toThrow(
+    expect(() => validateScheduleTrigger({ adapter: 'daily', options: { at: '2am' } })).toThrow('"HH:MM"');
+    expect(() => validateScheduleTrigger({ adapter: 'daily', options: { at: '02:00', days: ['funday'] } })).toThrow(
       'mon,tue,wed,thu,fri,sat,sun',
     );
-    expect(validateBackgroundTrigger({ adapter: 'daily', options: { at: '02:00', days: ['mon', 'wed'] } })).toBeUndefined();
+    expect(validateScheduleTrigger({ adapter: 'daily', options: { at: '02:00', days: ['mon', 'wed'] } })).toBeUndefined();
   });
 
   it('recovers one overdue interval, then resumes the requested cadence without replaying missed intervals', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
     const publish = vi.fn<(event: unknown) => Promise<void>>(async () => {});
-    runner = new BackgroundTaskRunner(ledger, publish, () => {});
+    runner = new ScheduleRunner(ledger, publish, () => {});
     const requested = task({ adapter: 'interval', options: { everySeconds: 10 } });
     await runner.reload([requested]);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -172,7 +177,7 @@ describe('explicit background subscriptions', () => {
 
   it('collects only metadata from an explicitly selected filesystem root', async () => {
     const publish = vi.fn<(event: unknown) => Promise<void>>(async () => {});
-    runner = new BackgroundTaskRunner(ledger, publish, () => {});
+    runner = new ScheduleRunner(ledger, publish, () => {});
     await runner.reload([task({ adapter: 'filesystem', options: { path: root, debounceSeconds: 1 } })]);
     writeFileSync(join(root, 'selected-note.txt'), 'PRIVATE FILE CONTENT MUST NOT BE COLLECTED');
     await vi.waitFor(() => expect(publish).toHaveBeenCalled(), { timeout: 4000, interval: 25 });

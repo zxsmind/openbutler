@@ -44,7 +44,7 @@ const MAX_OWNER_IMAGE_BYTES = 5 * 1024 * 1024;
 const OWNER_COMMANDS = [
   { command: 'start', description: 'Show help and pairing info' },
   { command: 'approvals', description: 'Re-send pending approval buttons' },
-  { command: 'stop', description: 'Stop the current run (or a task: /stop <task-id>)' },
+  { command: 'stop', description: 'Stop the current run (or a schedule: /stop <schedule-id>)' },
   { command: 'clear', description: 'Start a new chat' },
   { command: 'sessions', description: 'Show the last 10 chats' },
 ];
@@ -317,7 +317,7 @@ export class TelegramAdapter {
     const input = JSON.stringify(redactSensitive(request.input), null, 2);
     const budget = Math.max(64, 4000 - header.length - 64);
     const parts = splitTelegramText(input, budget);
-    const preview = `<pre>${escapeTelegramHtml(parts[0]!)}</pre>${parts.length > 1 ? '\n… (open this task in Ranite for full details)' : ''}`;
+    const preview = `<pre>${escapeTelegramHtml(parts[0]!)}</pre>${parts.length > 1 ? '\n… (open this schedule in Ranite for full details)' : ''}`;
     try {
       const result = await this.sendHtml(`${header}\n\n${preview}`, {
         inline_keyboard: [
@@ -415,7 +415,7 @@ export class TelegramAdapter {
       if (text === '/start' || text === '/help') {
         await this.sendOwnerNotification(
           '',
-          'Send a request to Ranite. /approvals refreshes pending action buttons. /stop cancels this chat run; /stop <task-id> stops a task run. /clear starts a new chat; /sessions lists the last 10 chats.',
+          'Send a request to Ranite. /approvals refreshes pending action buttons. /stop cancels this chat run; /stop <schedule-id> stops a schedule run. /clear starts a new chat; /sessions lists the last 10 chats.',
           OWNER_KEYBOARD,
         );
       } else {

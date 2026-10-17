@@ -1,5 +1,5 @@
 import type { MemoryIndex } from '../memory-index.js';
-import { createBackgroundManagementTool } from './background.js';
+import { createScheduleTool } from './schedule.js';
 import { createExecuteCommandTool } from './execute-command.js';
 import { createEditTool } from './file-edit.js';
 import { createReadTool } from './file-read.js';
@@ -113,7 +113,7 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     createParentMessageTool(options.parentMessage ?? (async () => ({ status: 'unavailable' as const }))),
     createSubagentPollTool(options.subagentPoll ?? (async () => ({ status: 'unavailable' as const }))),
     createSubagentStopTool(options.subagentStop ?? (async () => ({ status: 'unavailable' as const }))),
-    createBackgroundManagementTool(
+    createScheduleTool(
       options.workspaceRoot,
       options.backgroundManage ??
         (async () => ({ status: 'unavailable' as const, error: 'No background host is attached to this session.' })),

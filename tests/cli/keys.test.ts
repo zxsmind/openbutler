@@ -28,7 +28,7 @@ function emptyStore(): import('../../src/settings.js').SettingsStore {
     defaultProvider: '',
     defaultModel: '',
     approvalMode: 'workspace',
-    backgroundTasks: [],
+    schedules: [],
   };
 }
 

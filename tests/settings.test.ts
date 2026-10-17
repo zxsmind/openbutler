@@ -99,6 +99,39 @@ describe('settings round trip', () => {
   });
 });
 
+describe('provider routing', () => {
+  it('round-trips native gateway routing fields through settings.yaml', async () => {
+    writeSettings(
+      [
+        'providers:',
+        '  openrouter:',
+        '    keys: [sk-or]',
+        '    routing:',
+        '      order: [novita, xiaomi]',
+        '      allow_fallbacks: false',
+        '',
+      ].join('\n'),
+    );
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    expect(loaded.providers.openrouter?.routing).toEqual({ order: ['novita', 'xiaomi'], allow_fallbacks: false });
+    settings.saveSettings(loaded);
+    expect(settings.loadSettings().providers.openrouter?.routing).toEqual({ order: ['novita', 'xiaomi'], allow_fallbacks: false });
+  });
+
+  it('leaves routing unset when the provider has none', async () => {
+    writeSettings(['providers:', '  openai:', '    keys: [sk-a]', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().providers.openai?.routing).toBeUndefined();
+  });
+
+  it('rejects a routing block that is not a mapping', async () => {
+    writeSettings(['providers:', '  openrouter:', '    keys: [k]', '    routing: [novita]', ''].join('\n'));
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/providers\.openrouter\.routing must be a mapping/);
+  });
+});
+
 describe('team settings', () => {
   const teamYaml = [
     'team:',
@@ -392,10 +425,10 @@ describe('settings/config split', () => {
   });
 });
 
-describe('background task parsing', () => {
+describe('schedule parsing', () => {
   const taskYaml = (extra: string): string =>
     [
-      'backgroundTasks:',
+      'schedules:',
       '  - id: nightly',
       '    name: Nightly check',
       `    workspaceRoot: ${join(dataDir, 'work')}`,
@@ -403,10 +436,28 @@ describe('background task parsing', () => {
       '',
     ].join('\n');
 
+  it('reads the pre-rename backgroundTasks key', async () => {
+    writeSettings(
+      [
+        'backgroundTasks:',
+        '  - id: nightly',
+        '    name: Nightly check',
+        `    workspaceRoot: ${join(dataDir, 'work')}`,
+        '    instruction: Check and report.',
+        '    trigger: {adapter: manual, options: {}}',
+        '',
+      ].join('\n'),
+    );
+    const settings = await loadSettingsModule();
+    const loaded = settings.loadSettings();
+    expect(loaded.schedules).toHaveLength(1);
+    expect(loaded.schedules[0]?.id).toBe('nightly');
+  });
+
   it('defaults a missing originSessionId to empty (no affinity)', async () => {
     writeSettings(taskYaml('    instruction: Check and report.\n    trigger: {adapter: manual, options: {}}'));
     const settings = await loadSettingsModule();
-    expect(settings.loadSettings().backgroundTasks).toEqual([
+    expect(settings.loadSettings().schedules).toEqual([
       {
         id: 'nightly',
         name: 'Nightly check',
@@ -425,14 +476,14 @@ describe('background task parsing', () => {
     );
     const settings = await loadSettingsModule();
     const loaded = settings.loadSettings();
-    expect(loaded.backgroundTasks[0]?.originSessionId).toBe('session-abc');
+    expect(loaded.schedules[0]?.originSessionId).toBe('session-abc');
     settings.saveSettings(loaded);
-    expect(settings.loadSettings().backgroundTasks[0]?.originSessionId).toBe('session-abc');
+    expect(settings.loadSettings().schedules[0]?.originSessionId).toBe('session-abc');
   });
 
-  it('rejects an unknown task key', async () => {
+  it('rejects an unknown schedule key', async () => {
     writeSettings(taskYaml('    instruction: Check.\n    trigger: {adapter: manual, options: {}}\n    schedule: daily'));
     const settings = await loadSettingsModule();
-    expect(() => settings.loadSettings()).toThrow(/background task schedule is not a supported setting/);
+    expect(() => settings.loadSettings()).toThrow(/Schedule schedule is not a supported setting/);
   });
 });

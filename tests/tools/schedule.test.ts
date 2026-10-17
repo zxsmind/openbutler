@@ -4,21 +4,21 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLedger, type ObservedEventInput } from '../../src/activity-ledger.js';
 import {
-  BackgroundTaskRunner,
+  ScheduleRunner,
   assembleWakeText,
-  describeTaskSchedule,
-  generateTaskId,
+  describeSchedule,
+  generateScheduleId,
   nextDailyOccurrence,
-  normalizeBackgroundTrigger,
-  readTaskRuntime,
-  writeTaskError,
-  writeTaskRunFinished,
-  writeTaskRunStarted,
-} from '../../src/tools/background.js';
-import type { BackgroundTaskState } from '../../src/settings.js';
+  normalizeScheduleTrigger,
+  readScheduleRuntime,
+  writeScheduleError,
+  writeScheduleRunFinished,
+  writeScheduleRunStarted,
+} from '../../src/tools/schedule.js';
+import type { ScheduleState } from '../../src/settings.js';
 
 let ledger: ActivityLedger;
-let runner: BackgroundTaskRunner | undefined;
+let runner: ScheduleRunner | undefined;
 
 beforeEach(() => {
   ledger = new ActivityLedger(':memory:');
@@ -31,13 +31,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const task = (trigger: BackgroundTaskState['trigger'], extra?: Partial<BackgroundTaskState>): BackgroundTaskState => ({
+const makeSchedule = (trigger: ScheduleState['trigger'], extra?: Partial<ScheduleState>): ScheduleState => ({
   id: 'task-1',
   name: 'Nightly check',
   enabled: true,
   workspaceRoot: '/tmp/workspace',
   originSessionId: 'session-1',
-  instruction: 'Check thecosa and report. This is a 3-run job: on the 3rd run, finish and disable this task.',
+  instruction: 'Check thecosa and report. This is a 3-run job: on the 3rd run, finish and disable this schedule.',
   trigger,
   ...extra,
 });
@@ -77,21 +77,21 @@ describe('nextDailyOccurrence', () => {
   });
 });
 
-describe('generateTaskId', () => {
+describe('generateScheduleId', () => {
   it('slugs the name and guarantees uniqueness', () => {
-    const first = generateTaskId('Nightly DB Check!', new Set());
+    const first = generateScheduleId('Nightly DB Check!', new Set());
     expect(first).toMatch(/^nightly-db-check-[0-9a-f]{4}$/);
-    const second = generateTaskId('Nightly DB Check!', new Set([first]));
+    const second = generateScheduleId('Nightly DB Check!', new Set([first]));
     expect(second).toMatch(/^nightly-db-check-[0-9a-f]{4}$/);
     expect(second).not.toBe(first);
   });
 
-  it('falls back to task for an empty name', () => {
-    expect(generateTaskId('!!!', new Set())).toMatch(/^task-[0-9a-f]{4}$/);
+  it('falls back to schedule for an empty name', () => {
+    expect(generateScheduleId('!!!', new Set())).toMatch(/^schedule-[0-9a-f]{4}$/);
   });
 });
 
-describe('taskWorkspaceScope', () => {
+describe('scheduleWorkspaceScope', () => {
   let dataDir: string;
   let home: string;
   let away: string;
@@ -105,11 +105,11 @@ describe('taskWorkspaceScope', () => {
     // Settings paths resolve at module load, so the scope check needs a
     // module instance loaded after the data dir moves.
     vi.resetModules();
-    scopeOf = (await import('../../src/tools/background.js')).taskWorkspaceScope;
+    scopeOf = (await import('../../src/tools/schedule.js')).scheduleWorkspaceScope;
     writeFileSync(
       join(dataDir, 'settings.yaml'),
       [
-        'backgroundTasks:',
+        'schedules:',
         '  - id: home-task',
         '    name: Home',
         `    workspaceRoot: ${JSON.stringify(home)}`,
@@ -135,60 +135,59 @@ describe('taskWorkspaceScope', () => {
 
   it('scopes mutations to the task workspace like files', () => {
     expect(scopeOf({ action: 'list' }, home)).toBe('workspace');
-    expect(scopeOf({ action: 'add', task: { workspaceRoot: home } }, home)).toBe('workspace');
-    expect(scopeOf({ action: 'add', task: {} }, home)).toBe('workspace');
-    expect(scopeOf({ action: 'add', task: { workspaceRoot: away } }, home)).toBe('outside');
-    expect(scopeOf({ action: 'run', taskId: 'home-task' }, home)).toBe('workspace');
-    expect(scopeOf({ action: 'disable', taskId: 'away-task' }, home)).toBe('outside');
-    expect(scopeOf({ action: 'run', taskId: 'ghost' }, home)).toBe('unknown');
+    expect(scopeOf({ action: 'add', schedule: { workspaceRoot: home } }, home)).toBe('workspace');
+    expect(scopeOf({ action: 'add', schedule: {} }, home)).toBe('workspace');
+    expect(scopeOf({ action: 'add', schedule: { workspaceRoot: away } }, home)).toBe('outside');
+    expect(scopeOf({ action: 'run', scheduleId: 'home-task' }, home)).toBe('workspace');
+    expect(scopeOf({ action: 'disable', scheduleId: 'away-task' }, home)).toBe('outside');
+    expect(scopeOf({ action: 'run', scheduleId: 'ghost' }, home)).toBe('unknown');
     expect(scopeOf({ action: 'run' }, home)).toBe('unknown');
   });
 
   it('auto-approves same-workspace mutations through the registry gate', async () => {
     const { ToolRegistry } = await import('../../src/tools/registry.js');
-    const { createBackgroundManagementTool } = await import('../../src/tools/background.js');
+    const { createScheduleTool } = await import('../../src/tools/schedule.js');
     const registry = new ToolRegistry();
-    registry.register(createBackgroundManagementTool(home, async () => ({ status: 'completed' })));
+    registry.register(createScheduleTool(home, async () => ({ status: 'completed' })));
     const approve = vi.fn(async () => true);
     const built = await registry.createModelTools({ approve, approvalMode: 'workspace', onResult: () => {} });
-    const run = (input: Record<string, unknown>, id: string) =>
-      built.tools.background_manage!.execute!(input, { toolCallId: id, messages: [] });
-    await run({ action: 'add', task: { name: 'X', instruction: 'Do.', trigger: { adapter: 'manual', options: {} } } }, 'c1');
+    const run = (input: Record<string, unknown>, id: string) => built.tools.schedule!.execute!(input, { toolCallId: id, messages: [] });
+    await run({ action: 'add', schedule: { name: 'X', instruction: 'Do.', trigger: { adapter: 'manual', options: {} } } }, 'c1');
     expect(approve).not.toHaveBeenCalled();
-    await run({ action: 'disable', taskId: 'home-task' }, 'c2');
+    await run({ action: 'disable', scheduleId: 'home-task' }, 'c2');
     expect(approve).not.toHaveBeenCalled();
-    await run({ action: 'disable', taskId: 'away-task' }, 'c3');
+    await run({ action: 'disable', scheduleId: 'away-task' }, 'c3');
     expect(approve).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('normalizeBackgroundTrigger', () => {
+describe('normalizeScheduleTrigger', () => {
   it('converts an explicit offset to server-local wall time', () => {
-    const normalized = normalizeBackgroundTrigger({ adapter: 'at', options: { at: '2030-01-01T12:00:00+02:00' } });
+    const normalized = normalizeScheduleTrigger({ adapter: 'at', options: { at: '2030-01-01T12:00:00+02:00' } });
     // Same instant, no offset suffix left.
     expect(Date.parse(normalized.options.at as string)).toBe(Date.parse('2030-01-01T12:00:00+02:00'));
     expect(normalized.options.at).not.toMatch(/(?:Z|[+-]\d{2}:?\d{2})$/);
   });
 
   it('leaves server-local input untouched', () => {
-    const normalized = normalizeBackgroundTrigger({ adapter: 'window', options: { from: '2030-01-01T08:00', to: '2030-01-01T11:00' } });
+    const normalized = normalizeScheduleTrigger({ adapter: 'window', options: { from: '2030-01-01T08:00', to: '2030-01-01T11:00' } });
     expect(normalized.options).toEqual({ from: '2030-01-01T08:00', to: '2030-01-01T11:00' });
   });
 });
 
-describe('describeTaskSchedule', () => {
+describe('describeSchedule', () => {
   it('summarizes every adapter in server-local terms', () => {
     const now = Date.parse('2030-06-01T10:00:00Z');
-    expect(describeTaskSchedule(task({ adapter: 'manual', options: {} }), now)).toEqual({ human: 'on demand', nextDueAt: null });
-    expect(describeTaskSchedule(task({ adapter: 'interval', options: { everySeconds: 1800 } }), now, now + 900_000)).toEqual({
+    expect(describeSchedule(makeSchedule({ adapter: 'manual', options: {} }), now)).toEqual({ human: 'on demand', nextDueAt: null });
+    expect(describeSchedule(makeSchedule({ adapter: 'interval', options: { everySeconds: 1800 } }), now, now + 900_000)).toEqual({
       human: 'every 30m',
       nextDueAt: now + 900_000,
     });
-    expect(describeTaskSchedule(task({ adapter: 'filesystem', options: { path: '/data' } }), now)).toEqual({
+    expect(describeSchedule(makeSchedule({ adapter: 'filesystem', options: { path: '/data' } }), now)).toEqual({
       human: 'on changes under /data',
       nextDueAt: null,
     });
-    expect(describeTaskSchedule(task({ adapter: 'memory_pressure', options: { usedPercent: 90 } }), now)).toEqual({
+    expect(describeSchedule(makeSchedule({ adapter: 'memory_pressure', options: { usedPercent: 90 } }), now)).toEqual({
       human: 'when memory used ≥ 90%',
       nextDueAt: null,
     });
@@ -197,7 +196,7 @@ describe('describeTaskSchedule', () => {
 
 describe('assembleWakeText', () => {
   const base = {
-    task: task({ adapter: 'interval', options: { everySeconds: 3600 } }),
+    schedule: makeSchedule({ adapter: 'interval', options: { everySeconds: 3600 } }),
     scheduleHuman: 'every 1h',
     runNumber: 3,
     facts: { scheduledAt: '2030-06-01T08:00:00' },
@@ -210,13 +209,13 @@ describe('assembleWakeText', () => {
       nowMs: Date.parse('2030-06-01T10:30:00Z'),
     });
     const lines = text.split('\n');
-    expect(lines[0]).toBe('Background task "Nightly check" (task-1).');
+    expect(lines[0]).toBe('Schedule "Nightly check" (task-1).');
     expect(lines[1]).toBe('Schedule: every 1h.');
     expect(lines[2]).toBe('This is run #3. No previous run.');
     expect(lines[3]).toMatch(/^LATE: scheduled for .* starting .* \(2h 30m late\)\. Adjust for staleness and say so in the report\.$/);
     expect(lines[4]).toMatch(/^Trigger facts \(untrusted observations/);
     expect(lines[5]).toBe('Instruction:');
-    expect(lines[6]).toBe(base.task.instruction);
+    expect(lines[6]).toBe(base.schedule.instruction);
     expect(lines[lines.length - 1]).toMatch(/^Close this run with a report message/);
   });
 
@@ -238,13 +237,13 @@ describe('assembleWakeText', () => {
   });
 });
 
-describe('durable task runtime', () => {
+describe('durable schedule runtime', () => {
   it('starts idle, tracks a run, and clears the error on success', () => {
-    expect(readTaskRuntime(ledger, 'task-1')).toEqual({ status: 'idle', runCount: 0 });
-    writeTaskRunStarted(ledger, 'task-1', 1_000);
-    expect(readTaskRuntime(ledger, 'task-1').status).toBe('running');
-    writeTaskRunFinished(ledger, 'task-1', { result: 'completed', report: 'All quiet.' });
-    expect(readTaskRuntime(ledger, 'task-1')).toEqual({
+    expect(readScheduleRuntime(ledger, 'task-1')).toEqual({ status: 'idle', runCount: 0 });
+    writeScheduleRunStarted(ledger, 'task-1', 1_000);
+    expect(readScheduleRuntime(ledger, 'task-1').status).toBe('running');
+    writeScheduleRunFinished(ledger, 'task-1', { result: 'completed', report: 'All quiet.' });
+    expect(readScheduleRuntime(ledger, 'task-1')).toEqual({
       status: 'idle',
       lastRunAt: 1_000,
       lastResult: 'completed',
@@ -254,29 +253,29 @@ describe('durable task runtime', () => {
   });
 
   it('keeps the error and bumps the counter on failure', () => {
-    writeTaskRunStarted(ledger, 'task-1', 1_000);
-    writeTaskRunFinished(ledger, 'task-1', { result: 'failed', error: 'boom' });
-    const runtime = readTaskRuntime(ledger, 'task-1');
+    writeScheduleRunStarted(ledger, 'task-1', 1_000);
+    writeScheduleRunFinished(ledger, 'task-1', { result: 'failed', error: 'boom' });
+    const runtime = readScheduleRuntime(ledger, 'task-1');
     expect(runtime).toMatchObject({ status: 'idle', lastResult: 'failed', lastError: 'boom', runCount: 1 });
-    writeTaskRunStarted(ledger, 'task-1', 2_000);
-    writeTaskRunFinished(ledger, 'task-1', { result: 'completed', report: 'ok' });
-    const recovered = readTaskRuntime(ledger, 'task-1');
+    writeScheduleRunStarted(ledger, 'task-1', 2_000);
+    writeScheduleRunFinished(ledger, 'task-1', { result: 'completed', report: 'ok' });
+    const recovered = readScheduleRuntime(ledger, 'task-1');
     expect(recovered.runCount).toBe(2);
     expect(recovered.lastError).toBeUndefined();
     expect('lastError' in recovered).toBe(false);
   });
 
   it('caps a long report at 8000 characters, head-kept', () => {
-    writeTaskRunStarted(ledger, 'task-1', 1_000);
-    writeTaskRunFinished(ledger, 'task-1', { result: 'completed', report: `${'x'.repeat(9_000)}tail` });
-    const report = readTaskRuntime(ledger, 'task-1').lastReport ?? '';
+    writeScheduleRunStarted(ledger, 'task-1', 1_000);
+    writeScheduleRunFinished(ledger, 'task-1', { result: 'completed', report: `${'x'.repeat(9_000)}tail` });
+    const report = readScheduleRuntime(ledger, 'task-1').lastReport ?? '';
     expect([...report].length).toBe(8_000);
     expect(report.endsWith('tail')).toBe(false);
   });
 
   it('marks a missing workspace with no retry loop behind it', () => {
-    writeTaskError(ledger, 'task-1', 'Workspace is missing: /gone');
-    expect(readTaskRuntime(ledger, 'task-1')).toMatchObject({ status: 'error', statusError: 'Workspace is missing: /gone' });
+    writeScheduleError(ledger, 'task-1', 'Workspace is missing: /gone');
+    expect(readScheduleRuntime(ledger, 'task-1')).toMatchObject({ status: 'error', statusError: 'Workspace is missing: /gone' });
   });
 });
 
@@ -285,7 +284,7 @@ describe('one-shot completion from event history', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2030-06-01T12:00:00Z'));
     const published: unknown[] = [];
-    runner = new BackgroundTaskRunner(
+    runner = new ScheduleRunner(
       ledger,
       async (event: ObservedEventInput) => {
         published.push(event);
@@ -293,7 +292,7 @@ describe('one-shot completion from event history', () => {
       },
       () => {},
     );
-    const requested = task({ adapter: 'window', options: { from: '2030-06-01T08:00:00', to: '2030-06-01T11:00:00' } });
+    const requested = makeSchedule({ adapter: 'window', options: { from: '2030-06-01T08:00:00', to: '2030-06-01T11:00:00' } });
     await runner.reload([requested]);
     await vi.advanceTimersByTimeAsync(0);
     expect(published).toHaveLength(1);
@@ -312,13 +311,13 @@ describe('one-shot completion from event history', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2030-06-01T12:00:00Z'));
     const publish = vi.fn(async () => {});
-    runner = new BackgroundTaskRunner(ledger, publish, () => {});
-    const requested = task({ adapter: 'at', options: { at: '2030-06-01T08:00:00' } });
+    runner = new ScheduleRunner(ledger, publish, () => {});
+    const requested = makeSchedule({ adapter: 'at', options: { at: '2030-06-01T08:00:00' } });
     const inserted = ledger.insertEvent({
-      source: 'task:at',
+      source: 'schedule:at',
       kind: 'schedule.at',
-      dedupeKey: `task:${requested.id}:at:${Date.parse('2030-06-01T08:00:00')}`,
-      payload: { taskId: requested.id, facts: {} },
+      dedupeKey: `schedule:${requested.id}:at:${Date.parse('2030-06-01T08:00:00')}`,
+      payload: { scheduleId: requested.id, facts: {} },
     });
     ledger.claimEvent(inserted.id);
     ledger.setEventState(inserted.id, 'interrupted', 'Host stopped.');
@@ -330,13 +329,13 @@ describe('one-shot completion from event history', () => {
   it('reports completed for a delivered one-shot and arms nothing', async () => {
     vi.useFakeTimers();
     const publish = vi.fn(async () => {});
-    runner = new BackgroundTaskRunner(ledger, publish, () => {});
-    const requested = task({ adapter: 'at', options: { at: '2030-06-01T08:00:00' } });
+    runner = new ScheduleRunner(ledger, publish, () => {});
+    const requested = makeSchedule({ adapter: 'at', options: { at: '2030-06-01T08:00:00' } });
     const inserted = ledger.insertEvent({
-      source: 'task:at',
+      source: 'schedule:at',
       kind: 'schedule.at',
-      dedupeKey: `task:${requested.id}:at:${Date.parse('2030-06-01T08:00:00')}`,
-      payload: { taskId: requested.id, facts: {} },
+      dedupeKey: `schedule:${requested.id}:at:${Date.parse('2030-06-01T08:00:00')}`,
+      payload: { scheduleId: requested.id, facts: {} },
     });
     ledger.claimEvent(inserted.id);
     ledger.setEventState(inserted.id, 'delivered');

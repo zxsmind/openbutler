@@ -44,7 +44,7 @@ import {
   waitForPairing,
   waitForSettledState,
 } from './telegram-setup.js';
-import type { BackgroundTaskState, McpServerState } from './settings.js';
+import type { ScheduleState, McpServerState } from './settings.js';
 import { defaultModelIsUsable, readiness, summarizeProviders } from './cli/config-edit.js';
 import { runUninstall } from './uninstall.js';
 import * as ui from './cli/ui.js';
@@ -77,7 +77,7 @@ function usage(): void {
     ['ranite stop', 'Stop the background host.'],
     ['ranite restart', 'Restart the background host and reconnect open sessions.'],
     ['ranite mcp', 'Manage global MCP servers.'],
-    ['ranite tasks', 'List, add, run, and open explicitly configured background tasks.'],
+    ['ranite schedule', 'List, add, run, and open scheduled wakeups.'],
     ['ranite telegram', 'Configure and pair the owner Telegram channel.'],
     ['ranite team <subcommand>', 'Form a closed team of ranites over the tailnet (init, invite, join, …).'],
     ['ranite events', 'Inspect the durable event ledger.'],
@@ -907,7 +907,7 @@ function runAbout(): void {
   ui.line();
 }
 
-interface TaskListRow extends BackgroundTaskState {
+interface ScheduleRow extends ScheduleState {
   adapterState?: string;
   adapterError?: string;
   runtime: {
@@ -921,7 +921,7 @@ interface TaskListRow extends BackgroundTaskState {
   schedule: { human: string; nextDueAt: number | null };
 }
 
-function renderTaskRows(rows: TaskListRow[], age: (ms: number) => string): void {
+function renderScheduleRows(rows: ScheduleRow[], age: (ms: number) => string): void {
   ui.table(
     ['ID', 'NAME', 'STATE', 'TRIGGER', 'SCHEDULE', 'LAST', 'RUNS'],
     rows.map((row) => {
@@ -945,57 +945,57 @@ function renderTaskRows(rows: TaskListRow[], age: (ms: number) => string): void 
   }
 }
 
-async function runTasks(parsed: Parsed): Promise<void> {
+async function runSchedule(parsed: Parsed): Promise<void> {
   const action = parsed.words[0] ?? 'list';
 
   if (action === 'capabilities') {
-    const { backgroundCapabilities } = await import('./tools/background.js');
-    ui.line(JSON.stringify(backgroundCapabilities, null, 2));
+    const { scheduleCapabilities } = await import('./tools/schedule.js');
+    ui.line(JSON.stringify(scheduleCapabilities, null, 2));
     return;
   }
-  const tasks = loadSettings().backgroundTasks;
+  const schedules = loadSettings().schedules;
   if (action === 'list') {
-    if (tasks.length === 0) {
-      ui.info('No background tasks are configured. Ask Ranite to create a task, or use `ranite tasks add <task.json>`.');
+    if (schedules.length === 0) {
+      ui.info('No schedules are configured. Ask Ranite to create one, or use `ranite schedule add <schedule.json>`.');
       return;
     }
-    let rows: TaskListRow[];
-    const { formatTaskAge } = await import('./tools/background.js');
+    let rows: ScheduleRow[];
+    const { formatScheduleAge } = await import('./tools/schedule.js');
     if (await getDaemonStatus()) {
-      const result = (await requestHost('background.manage', {
+      const result = (await requestHost('schedule.manage', {
         input: { action: 'list' },
-      })) as { tasks: TaskListRow[] };
-      rows = result.tasks;
+      })) as { schedules: ScheduleRow[] };
+      rows = result.schedules;
     } else {
       // The host is down: say so once, then print the durable columns anyway.
       ui.warn('Background host is not running; showing durable state. Timers arm when it starts.');
       const { ActivityLedger } = await import('./activity-ledger.js');
-      const { describeTaskSchedule, readTaskRuntime } = await import('./tools/background.js');
+      const { describeSchedule, readScheduleRuntime } = await import('./tools/schedule.js');
       const ledger = new ActivityLedger(getDataPath('state.db'), { readOnly: true });
       try {
-        rows = tasks.map((task) => ({
-          ...task,
-          runtime: readTaskRuntime(ledger, task.id),
-          schedule: describeTaskSchedule(task, Date.now()),
+        rows = schedules.map((schedule) => ({
+          ...schedule,
+          runtime: readScheduleRuntime(ledger, schedule.id),
+          schedule: describeSchedule(schedule, Date.now()),
         }));
       } finally {
         ledger.close();
       }
     }
-    renderTaskRows(rows, formatTaskAge);
+    renderScheduleRows(rows, formatScheduleAge);
     return;
   }
   if (action === 'log') {
-    const taskId = parsed.words[1];
-    if (!taskId) throw new Error('Usage: ranite tasks log <id>');
+    const scheduleId = parsed.words[1];
+    if (!scheduleId) throw new Error('Usage: ranite schedule log <id>');
     await startDaemon();
-    const result = (await requestHost('background.manage', {
-      input: { action: 'log', taskId },
+    const result = (await requestHost('schedule.manage', {
+      input: { action: 'log', scheduleId },
     })) as {
       runs: Array<{ eventId: string; kind: string; status: string; occurredAt: string; scheduledAt?: string; error?: string }>;
     };
     if (result.runs.length === 0) {
-      ui.info(`No runs recorded for ${taskId}.`);
+      ui.info(`No runs recorded for ${scheduleId}.`);
       return;
     }
     ui.table(
@@ -1010,12 +1010,12 @@ async function runTasks(parsed: Parsed): Promise<void> {
     return;
   }
   if (action === 'open') {
-    if (!process.stdin.isTTY) throw new Error('Opening a task session requires an interactive terminal.');
+    if (!process.stdin.isTTY) throw new Error('Opening a schedule session requires an interactive terminal.');
     const id = parsed.words[1];
-    const task = tasks.find((candidate) => candidate.id === id);
-    if (!task) throw new Error('Background task does not exist.');
+    const schedule = schedules.find((candidate) => candidate.id === id);
+    if (!schedule) throw new Error('Schedule does not exist.');
     await startDaemon();
-    const client = await connectDaemonSession(task.workspaceRoot, { taskId: task.id });
+    const client = await connectDaemonSession(schedule.workspaceRoot, { scheduleId: schedule.id });
     try {
       const { runTerminalSession } = await import('./cli/terminal-session.js');
       await runTerminalSession(client);
@@ -1029,51 +1029,53 @@ async function runTasks(parsed: Parsed): Promise<void> {
   if (action === 'add' || action === 'update') {
     const source = parsed.words[1];
     const inline = parsed.flags.get('json');
-    if (!source && !inline) throw new Error('Provide a task JSON file or --json=<task object>.');
-    if (source && statSync(resolve(source)).size > 64 * 1024) throw new Error('Task JSON file exceeded the 64 KB limit.');
-    const task: unknown = JSON.parse(inline ?? readFileSync(resolve(source!), 'utf8'));
-    input = { action, task };
+    if (!source && !inline) throw new Error('Provide a schedule JSON file or --json=<schedule object>.');
+    if (source && statSync(resolve(source)).size > 64 * 1024) throw new Error('Schedule JSON file exceeded the 64 KB limit.');
+    const schedule: unknown = JSON.parse(inline ?? readFileSync(resolve(source!), 'utf8'));
+    input = { action, schedule };
   } else {
     if (!['remove', 'enable', 'disable', 'run'].includes(action))
-      throw new Error('Usage: ranite tasks [list|log|capabilities|add|update|remove|enable|disable|run|open]');
-    const taskId = parsed.words[1];
-    if (!taskId) throw new Error('Provide a background task id.');
-    input = { action, taskId };
+      throw new Error('Usage: ranite schedule [list|log|capabilities|add|update|remove|enable|disable|run|open]');
+    const scheduleId = parsed.words[1];
+    if (!scheduleId) throw new Error('Provide a schedule id.');
+    input = { action, scheduleId };
   }
   let commandWorkspaceRoot: string | undefined;
   if (action === 'add' || action === 'update') {
-    const taskInput = input.task;
-    if (taskInput === null || typeof taskInput !== 'object' || Array.isArray(taskInput)) throw new Error('Task input must be an object.');
-    const taskRecord = taskInput as Record<string, unknown>;
-    const existingRoot = typeof taskRecord.id === 'string' ? tasks.find((task) => task.id === taskRecord.id)?.workspaceRoot : undefined;
+    const scheduleInput = input.schedule;
+    if (scheduleInput === null || typeof scheduleInput !== 'object' || Array.isArray(scheduleInput))
+      throw new Error('Schedule input must be an object.');
+    const scheduleRecord = scheduleInput as Record<string, unknown>;
+    const existingRoot =
+      typeof scheduleRecord.id === 'string' ? schedules.find((candidate) => candidate.id === scheduleRecord.id)?.workspaceRoot : undefined;
     const chosenRoot =
-      typeof taskRecord.workspaceRoot === 'string'
-        ? taskRecord.workspaceRoot
+      typeof scheduleRecord.workspaceRoot === 'string'
+        ? scheduleRecord.workspaceRoot
         : (existingRoot ?? (await resolveSessionWorkspace(parsed.flags.get('workspace'))));
     commandWorkspaceRoot = resolveWorkspace(chosenRoot);
-    input.task = { ...taskRecord, workspaceRoot: commandWorkspaceRoot };
+    input.schedule = { ...scheduleRecord, workspaceRoot: commandWorkspaceRoot };
   }
   await startDaemon();
-  const result = (await requestHost('background.manage', {
+  const result = (await requestHost('schedule.manage', {
     input,
     ...(commandWorkspaceRoot ? { workspaceRoot: commandWorkspaceRoot } : {}),
-  })) as { status?: string; task?: TaskListRow; taskId?: string; runtime?: { state?: string } };
+  })) as { status?: string; schedule?: ScheduleRow; scheduleId?: string; runtime?: { state?: string } };
   if (action === 'run') {
-    ui.success(`Task ${result.taskId} queued. Watch it with: ranite tasks log ${result.taskId}`);
+    ui.success(`Schedule ${result.scheduleId} queued. Watch it with: ranite schedule log ${result.scheduleId}`);
     return;
   }
   if (action === 'remove') {
-    ui.success(`Task ${parsed.words[1]} removed. Run history stays in the ledger.`);
+    ui.success(`Schedule ${parsed.words[1]} removed. Run history stays in the ledger.`);
     return;
   }
   if (action === 'enable' || action === 'disable') {
-    ui.success(`Task ${parsed.words[1]} ${action === 'enable' ? 'enabled' : 'disabled'}.`);
+    ui.success(`Schedule ${parsed.words[1]} ${action === 'enable' ? 'enabled' : 'disabled'}.`);
     return;
   }
-  const { describeTaskSchedule: describe } = await import('./tools/background.js');
-  const saved = result.task ?? tasks.find((candidate) => candidate.id === (input.task as Record<string, unknown>)?.id);
+  const { describeSchedule: describe } = await import('./tools/schedule.js');
+  const saved = result.schedule ?? schedules.find((candidate) => candidate.id === (input.schedule as Record<string, unknown>)?.id);
   const schedule = saved ? describe(saved, Date.now()).human : '';
-  ui.success(`Task ${saved?.id ?? ''} saved (${schedule}). Timers are live.`);
+  ui.success(`Schedule ${saved?.id ?? ''} saved (${schedule}). Timers are live.`);
 }
 
 /**
@@ -1564,7 +1566,7 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     ui.kv('Started', status.startedAt);
     ui.kv('Workspaces', String(status.workspaceCount));
     ui.kv('Connected clients', String(status.connectedClients));
-    ui.kv('Background tasks', String(status.backgroundTasks ?? 0));
+    ui.kv('Schedules', String(status.schedules ?? 0));
     if (status.telegram) ui.kv('Telegram', `${status.telegram.state}${status.telegram.paired ? ' / paired' : ''}`);
     if (status.legacy) ui.warn('This host uses an older protocol. Stop it before attaching with this Ranite version.');
     ui.kv('Automatic startup', isAutostartInstalled() ? 'installed' : 'not installed');
@@ -1670,8 +1672,8 @@ async function main(): Promise<void> {
       ui.info('Open sessions reconnect automatically.');
       return;
     }
-    case 'tasks': {
-      await runTasks(parsed);
+    case 'schedule': {
+      await runSchedule(parsed);
       return;
     }
     case 'telegram': {

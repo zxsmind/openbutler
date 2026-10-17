@@ -11,7 +11,7 @@ export type DaemonStatus = {
   startedAt: string;
   workspaceCount: number;
   connectedClients: number;
-  backgroundTasks?: number;
+  schedules?: number;
   telegram?: TelegramStatus;
   /** Present only when a newer CLI discovered an older still-running host. */
   legacy?: true;

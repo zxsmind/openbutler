@@ -1,7 +1,7 @@
 /** Host-owned communication facts; channel adapters never choose agent identity. */
 export type OwnerReplyRoute = { channel: 'terminal' } | { channel: 'telegram'; chatId: string };
 export type TurnCommunication = {
-  source: 'terminal' | 'telegram' | 'owner-inbox' | 'background' | 'team';
+  source: 'terminal' | 'telegram' | 'owner-inbox' | 'schedule' | 'background' | 'team';
   replyTo?: OwnerReplyRoute;
 };
 export type OwnerInboxMessage = {

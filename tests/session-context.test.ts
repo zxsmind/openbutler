@@ -1,100 +1,31 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SavedSession, SessionEntry } from '../src/session-store.js';
 
 /**
- * The "Recent sessions" block is assembled into the system prompt by getAgentContext. These tests
- * pin the integration half: which callers see the block, where it sits relative to the memory and
- * channel sections, and that it can never push the prompt past its byte budget.
+ * The system prompt is the first thing in every request, so the provider's
+ * prefix cache depends on it. These tests pin the two properties that keep it
+ * cacheable: it carries no live session list, and a caller can supply a frozen
+ * prompt that is used verbatim.
  */
 
 let root: string;
-let store: typeof import('../src/session-store.js');
-let registry: typeof import('../src/session-registry.js');
 
-beforeEach(async () => {
+beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'ranite-session-context-'));
   vi.stubEnv('RANITE_DATA_DIR', root);
   vi.resetModules();
-  store = await import('../src/session-store.js');
-  registry = await import('../src/session-registry.js');
-  registry.resetSessionActivityForTests();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-context-')) {
-    throw new Error('Refusing to remove a directory outside this test fixture.');
-  }
   rmSync(root, { recursive: true, force: true });
 });
 
-function saveSession(options: { entries: SessionEntry[]; title?: string; workspace?: string }): SavedSession {
-  const base = store.createSession('fixture-provider', 'fixture-model', 262_144, options.workspace ?? root);
-  return store.saveSession({
-    ...base,
-    ...(options.title === undefined ? {} : { title: options.title }),
-    entries: options.entries,
-  });
-}
-
-describe('recent sessions in the assembled agent context', () => {
-  it('includes the other sessions only when the current session id is known', async () => {
+describe('the assembled agent context', () => {
+  it('states the session-history contract in the core prompt', async () => {
     const { getAgentContext } = await import('../src/agent.js');
-    saveSession({ title: 'Server maintenance', entries: [{ kind: 'user', text: 'check the containers' }] });
-    const current = saveSession({ title: 'Current session', entries: [{ kind: 'user', text: 'hello' }] });
-
-    const withId = getAgentContext([], false, root, undefined, current.id).system;
-    expect(withId).toContain('## Recent sessions');
-    expect(withId).toContain('Server maintenance');
-    expect(withId).toContain('check the containers');
-    expect(withId).not.toContain(current.id.slice(0, 8));
-
-    const withoutId = getAgentContext([], false, root).system;
-    expect(withoutId).not.toContain('## Recent sessions');
-  });
-
-  it('omits the section when there are no other sessions', async () => {
-    const { getAgentContext } = await import('../src/agent.js');
-    const current = saveSession({ title: 'Only session', entries: [{ kind: 'user', text: 'hello' }] });
-    expect(getAgentContext([], false, root, undefined, current.id).system).not.toContain('## Recent sessions');
-  });
-
-  it('shows work from other folders, labelled, when the conversation moves', async () => {
-    const { getAgentContext } = await import('../src/agent.js');
-    saveSession({
-      title: 'Other project work',
-      entries: [{ kind: 'user', text: 'checked the other server' }],
-      workspace: join(root, 'other-project'),
-    });
-    const current = saveSession({ title: 'Current session', entries: [{ kind: 'user', text: 'hello' }] });
-
-    const system = getAgentContext([], false, root, undefined, current.id).system;
-    expect(system).toContain('Other project work');
-    expect(system).toContain('checked the other server');
-    expect(system).toContain(`workspace: ${resolve(join(root, 'other-project'))}`);
-  });
-
-  it('sits after the memory policy and before the active channel', async () => {
-    const { getAgentContext } = await import('../src/agent.js');
-    saveSession({ title: 'Earlier work', entries: [{ kind: 'user', text: 'something else' }] });
-    const current = saveSession({ title: 'Current session', entries: [{ kind: 'user', text: 'hello' }] });
-
-    const system = getAgentContext([], false, root, 'Channel facts go here.', current.id).system;
-    const memory = system.indexOf('## Persistent memory');
-    const block = system.indexOf('## Recent sessions');
-    const channel = system.indexOf('## Active channel');
-    expect(memory).toBeGreaterThan(-1);
-    expect(block).toBeGreaterThan(memory);
-    expect(channel).toBeGreaterThan(block);
-    expect(system).toContain('Channel facts go here.');
-  });
-
-  it('states the session contract in the core prompt', async () => {
-    const { getAgentContext } = await import('../src/agent.js');
-    // No session id and no other sessions: the contract is core policy, so it is always present.
     const system = getAgentContext([], false).system;
     expect(system).toContain('## Session history');
     expect(system).toContain('find it with session_search and open the cited entries with session_read');
@@ -103,48 +34,14 @@ describe('recent sessions in the assembled agent context', () => {
     expect(system).toContain('not authorization to run it again');
   });
 
-  it('keeps the section inside its byte budget with heavy sibling sessions', async () => {
+  it('never embeds the live session list, which would change every few turns', async () => {
     const { getAgentContext } = await import('../src/agent.js');
-    saveSession({
-      title: 'Heavy maintenance on the Lyon server',
-      entries: [
-        { kind: 'user', text: 'é'.repeat(240) },
-        { kind: 'assistant', text: 'è'.repeat(240) },
-      ],
-    });
-    saveSession({
-      title: 'Lyon server',
-      entries: [
-        { kind: 'user', text: 'ê'.repeat(240) },
-        { kind: 'assistant', text: 'à'.repeat(240) },
-      ],
-    });
-    saveSession({
-      title: 'Nice server',
-      entries: [
-        { kind: 'user', text: 'ù'.repeat(240) },
-        { kind: 'assistant', text: 'â'.repeat(240) },
-      ],
-    });
-    saveSession({
-      title: 'Marseille server',
-      entries: [
-        { kind: 'user', text: 'é'.repeat(240) },
-        { kind: 'assistant', text: 'ê'.repeat(240) },
-      ],
-    });
-    saveSession({
-      title: 'Bordeaux server',
-      entries: [
-        { kind: 'user', text: 'à'.repeat(240) },
-        { kind: 'assistant', text: 'ù'.repeat(240) },
-      ],
-    });
-    const current = saveSession({ title: 'Current session', entries: [{ kind: 'user', text: 'hello' }] });
+    expect(getAgentContext([], false, root).system).not.toContain('## Recent sessions');
+  });
 
-    const system = getAgentContext([], false, root, undefined, current.id).system;
-    const section = system.slice(system.indexOf('## Recent sessions'));
-    expect(Buffer.byteLength(section, 'utf8')).toBeLessThanOrEqual(registry.RECENT_SESSIONS_MAX_BYTES);
-    expect(section).toContain('## Recent sessions');
+  it('uses a caller-supplied system prompt verbatim, so a session can freeze it', async () => {
+    const { getAgentContext } = await import('../src/agent.js');
+    const context = getAgentContext([], false, root, undefined, true, 'FROZEN SYSTEM PROMPT');
+    expect(context.system).toBe('FROZEN SYSTEM PROMPT');
   });
 });

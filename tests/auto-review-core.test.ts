@@ -126,7 +126,7 @@ async function review(options: {
   messages?: ModelMessage[];
   timeoutMs?: number;
   signal?: AbortSignal;
-  authorizedBackgroundTask?: { kind: 'background-task'; name: string; instruction: string; triggerFacts: unknown };
+  authorizedSchedule?: { kind: 'schedule'; name: string; instruction: string; triggerFacts: unknown };
 }): Promise<AutoReviewResult> {
   return reviewToolRequest({
     model: options.model,
@@ -135,7 +135,7 @@ async function review(options: {
     workspaceRoot: process.cwd(),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.authorizedBackgroundTask === undefined ? {} : { authorizedBackgroundTask: options.authorizedBackgroundTask }),
+    ...(options.authorizedSchedule === undefined ? {} : { authorizedSchedule: options.authorizedSchedule }),
   });
 }
 
@@ -282,12 +282,12 @@ describe('reviewToolRequest preparation and failure handling', () => {
   });
 });
 
-describe('reviewToolRequest background task authority', () => {
+describe('reviewToolRequest schedule authority', () => {
   it('reviews against a configured task instruction when it is clean', async () => {
     const result = await review({
       model: decisionModel(validDecision()),
-      authorizedBackgroundTask: {
-        kind: 'background-task',
+      authorizedSchedule: {
+        kind: 'schedule',
         name: 'Nightly cleanup',
         instruction: 'Remove stale build output.',
         triggerFacts: {},
@@ -299,21 +299,21 @@ describe('reviewToolRequest background task authority', () => {
   it('refuses a configured task instruction that carries a credential', async () => {
     const result = await review({
       model: decisionModel(validDecision()),
-      authorizedBackgroundTask: {
-        kind: 'background-task',
+      authorizedSchedule: {
+        kind: 'schedule',
         name: 'Leaky task',
         instruction: `token=ghp_${'a'.repeat(36)}`,
         triggerFacts: {},
       },
     });
-    expect(result).toMatchObject({ status: 'unavailable', code: 'sensitive-task-instruction' });
+    expect(result).toMatchObject({ status: 'unavailable', code: 'sensitive-schedule-instruction' });
   });
 
   it('refuses trigger facts too large to review completely', async () => {
     const result = await review({
       model: decisionModel(validDecision()),
-      authorizedBackgroundTask: {
-        kind: 'background-task',
+      authorizedSchedule: {
+        kind: 'schedule',
         name: 'Nightly cleanup',
         instruction: 'Remove stale build output.',
         triggerFacts: { payload: 'x'.repeat(9_000) },

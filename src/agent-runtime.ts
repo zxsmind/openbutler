@@ -6,6 +6,7 @@ import {
   defaultModelIsUsable,
   findReasoningCatalogMatch,
   listReasoningVariants,
+  mergeProviderOptions,
   minimalReasoningOptions,
   modelInputModalities,
   modelIsUsable,
@@ -14,6 +15,7 @@ import {
   providerIsConfigured,
   reasoningSupportStatus,
   resolveReasoningVariant,
+  routingProviderOptions,
   supportsImageToolResult,
   withReasoningVisibility,
 } from './provider/registry.js';
@@ -85,6 +87,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   let reviewResolved: typeof resolved.resolved | null = null;
   let reviewCatalogModel: typeof reasoningCatalog.model = null;
   let reviewModel: LanguageModel | null = null;
+  let reviewRouting: ReturnType<typeof routingProviderOptions> = {};
   if (settings.autoReviewProvider && settings.autoReviewModel) {
     if (!modelIsUsable(settings, settings.autoReviewProvider, settings.autoReviewModel)) {
       throw new Error(
@@ -101,6 +104,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     reviewResolved = built.resolved;
     reviewCatalogModel = findReasoningCatalogMatch(settings.autoReviewProvider, settings.autoReviewModel, built.resolved).model;
     reviewModel = built.model;
+    reviewRouting = routingProviderOptions(built.resolved, settings.providers[settings.autoReviewProvider]?.routing);
   }
   let workspaceRoot = canonicalWorkspaceRoot(options.workspaceRoot ?? process.cwd());
   const { ToolRegistry } = await import('./tools/registry.js');
@@ -153,6 +157,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     let activeResolved = resolved.resolved;
     let activeCatalog = reasoningCatalog;
     let activeVariants = reasoningVariants;
+    let activeRouting = routingProviderOptions(resolved.resolved, provider.routing);
     const runtime: AgentEnvironment = {
       model: resolved.model,
       ...(reviewModel ? { reviewModel } : {}),
@@ -200,12 +205,15 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       },
       getReasoningProviderOptions: (variantId, visible) => {
         const effective = resolveReasoningVariant(activeVariants, variantId);
-        return withReasoningVisibility(activeResolved, effective.providerOptions, visible);
+        return mergeProviderOptions(withReasoningVisibility(activeResolved, effective.providerOptions, visible), activeRouting);
       },
       getReviewProviderOptions: () =>
-        reviewResolved
-          ? (minimalReasoningOptions(reviewResolved, reviewCatalogModel) ?? {})
-          : (minimalReasoningOptions(activeResolved, activeCatalog.model) ?? {}),
+        mergeProviderOptions(
+          reviewResolved
+            ? (minimalReasoningOptions(reviewResolved, reviewCatalogModel) ?? {})
+            : (minimalReasoningOptions(activeResolved, activeCatalog.model) ?? {}),
+          reviewResolved ? reviewRouting : activeRouting,
+        ),
       registry: createRegistry(activeInputModalities),
       getPeerCapabilities: () => ({
         platform: process.platform,
@@ -260,6 +268,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         activeResolved = next.resolved;
         activeCatalog = nextCatalog;
         activeVariants = nextVariants;
+        activeRouting = routingProviderOptions(next.resolved, nextProvider.routing);
         activeInputModalities = nextInputModalities;
         runtime.model = next.model;
         runtime.modelName = next.resolved.displayName;

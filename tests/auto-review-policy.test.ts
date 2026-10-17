@@ -105,8 +105,8 @@ async function review(options: {
     ...(options.userOverride ? { userOverride: true } : {}),
     ...(options.task
       ? {
-          authorizedBackgroundTask: {
-            kind: 'background-task' as const,
+          authorizedSchedule: {
+            kind: 'schedule' as const,
             name: 'Nightly',
             instruction: 'Read notes.',
             triggerFacts: { a: 1 },
@@ -263,8 +263,8 @@ describe('the host overrules a verdict its authority cannot support', () => {
   });
 
   it('rejects a claimed saved task that the host never supplied, and accepts a real one', async () => {
-    expect(verdictOf(await review({ modelJson: decision({ authority: 'saved-task' }) }))).toBe('escalate');
-    expect(verdictOf(await review({ modelJson: decision({ authority: 'saved-task' }), task: true }))).toBe('allow');
+    expect(verdictOf(await review({ modelJson: decision({ authority: 'saved-schedule' }) }))).toBe('escalate');
+    expect(verdictOf(await review({ modelJson: decision({ authority: 'saved-schedule' }), task: true }))).toBe('allow');
   });
 
   it('rejects a claimed user retry that the host never marked, and accepts a real one', async () => {
@@ -408,6 +408,8 @@ describe('incomplete context limits what can be allowed, without blocking routin
     expect(verdictOf(await review({ messages: [user(long)], modelJson: decision({ authority: 'user-retry' }), userOverride: true }))).toBe(
       'allow',
     );
-    expect(verdictOf(await review({ messages: [user(long)], modelJson: decision({ authority: 'saved-task' }), task: true }))).toBe('allow');
+    expect(verdictOf(await review({ messages: [user(long)], modelJson: decision({ authority: 'saved-schedule' }), task: true }))).toBe(
+      'allow',
+    );
   });
 });

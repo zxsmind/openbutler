@@ -33,7 +33,7 @@ export type AutoReviewUnavailableCode =
   | 'oversized-input'
   | 'unserializable-input'
   | 'no-instruction'
-  | 'sensitive-task-instruction'
+  | 'sensitive-schedule-instruction'
   | 'oversized-trigger-facts'
   | 'oversized-context'
   | 'timeout'
@@ -64,7 +64,7 @@ export interface AutoReviewOptions {
   request: ToolCallRequest;
   messages: readonly ModelMessage[];
   workspaceRoot: string;
-  authorizedBackgroundTask?: { kind: 'background-task'; name: string; instruction: string; triggerFacts: unknown };
+  authorizedSchedule?: { kind: 'schedule'; name: string; instruction: string; triggerFacts: unknown };
   providerOptions?: ReasoningVariant['providerOptions'];
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -124,42 +124,42 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
     return { status: 'unavailable', code: 'oversized-input', reason: 'The tool input is too large for a complete review.' };
   }
 
-  const transcript = prepareTranscript(options.messages, options.authorizedBackgroundTask !== undefined);
+  const transcript = prepareTranscript(options.messages, options.authorizedSchedule !== undefined);
   if (!transcript.messages.some((message) => message.role === 'user')) {
     return {
       status: 'unavailable',
       code: 'no-instruction',
-      reason: 'No explicit user or task instruction is available to compare with this action.',
+      reason: 'No explicit user or schedule instruction is available to compare with this action.',
     };
   }
 
-  let configuredBackgroundTask: { name: string; instruction: string } | undefined;
+  let configuredSchedule: { name: string; instruction: string } | undefined;
   let untrustedTriggerFacts: unknown;
-  if (options.authorizedBackgroundTask) {
-    const taskName = String(redactSensitive(options.authorizedBackgroundTask.name));
-    const taskInstruction = String(redactSensitive(options.authorizedBackgroundTask.instruction));
-    if (taskInstruction !== options.authorizedBackgroundTask.instruction || taskInstruction.length > 16_000) {
+  if (options.authorizedSchedule) {
+    const scheduleName = String(redactSensitive(options.authorizedSchedule.name));
+    const scheduleInstruction = String(redactSensitive(options.authorizedSchedule.instruction));
+    if (scheduleInstruction !== options.authorizedSchedule.instruction || scheduleInstruction.length > 16_000) {
       return {
         status: 'unavailable',
-        code: 'sensitive-task-instruction',
-        reason: 'The configured task instruction contains sensitive or omitted content.',
+        code: 'sensitive-schedule-instruction',
+        reason: 'The configured schedule instruction contains sensitive or omitted content.',
       };
     }
-    const safeFacts = prepareReviewValue(options.authorizedBackgroundTask.triggerFacts);
+    const safeFacts = prepareReviewValue(options.authorizedSchedule.triggerFacts);
     if (safeFacts.truncated)
       return {
         status: 'unavailable',
         code: 'oversized-trigger-facts',
         reason: 'The observed trigger facts are too large for a complete review.',
       };
-    configuredBackgroundTask = { name: taskName, instruction: taskInstruction };
+    configuredSchedule = { name: scheduleName, instruction: scheduleInstruction };
     untrustedTriggerFacts = safeFacts.value;
   }
   const payload = {
     workspaceRoot: options.workspaceRoot,
     ...(options.gateReason ? { gateReason: options.gateReason } : {}),
     ...(options.userOverride ? { userApprovedRetry: true } : {}),
-    ...(configuredBackgroundTask ? { configuredBackgroundTask, untrustedTriggerFacts } : {}),
+    ...(configuredSchedule ? { configuredSchedule, untrustedTriggerFacts } : {}),
     currentAction: {
       requestId: options.request.requestId,
       providerId: options.request.providerId,
@@ -222,6 +222,9 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
         },
       },
       toolChoice: 'required',
+      // Retry and key rotation are owned by the rotating model; the SDK must not
+      // retry underneath it or the two backoffs compound.
+      maxRetries: 0,
       ...(Object.keys(options.providerOptions ?? {}).length > 0 ? { providerOptions: options.providerOptions } : {}),
       abortSignal,
     });
@@ -253,7 +256,7 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
   if (options.signal?.aborted) return { status: 'cancelled' };
   const decision = validateDecision(output, {
     userOverride: options.userOverride === true,
-    hasConfiguredTask: configuredBackgroundTask !== undefined,
+    hasConfiguredSchedule: configuredSchedule !== undefined,
     completeness: transcript.completeness,
   });
   return decision
@@ -264,8 +267,8 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
 interface DecisionContext {
   /** The host marked this as a one-time user-approved retry. */
   userOverride: boolean;
-  /** The host supplied a saved background task instruction. */
-  hasConfiguredTask: boolean;
+  /** The host supplied a saved schedule instruction. */
+  hasConfiguredSchedule: boolean;
   completeness: TranscriptCompleteness;
 }
 
@@ -301,7 +304,7 @@ function validateDecision(value: unknown, context: DecisionContext): AutoReviewD
   const authorityNote = checkAuthority(verdict, authority, context);
   if (authorityNote) escalateFor(authorityNote);
   if (verdict === 'allow' && TRANSCRIPT_AUTHORITIES.includes(authority)) {
-    // Only transcript-derived authority is weakened by transcript gaps; saved-task and user-retry come from the host.
+    // Only transcript-derived authority is weakened by transcript gaps; saved-schedule and user-retry come from the host.
     if (!context.completeness.latestUserInstructionIntact) {
       escalateFor('The latest user instruction could not be shown completely.');
     } else if (hasUserContextGap(context.completeness) && risk !== 'low') {
@@ -323,7 +326,7 @@ function checkAuthority(verdict: AutoReviewVerdict, authority: AutoReviewAuthori
   if (verdict === 'allow') {
     if (!GRANTING_AUTHORITIES.includes(authority)) return `An allow needs user authority, but the reviewer reported it as ${authority}.`;
     // The model cannot create these two; the host knows whether it supplied them.
-    if (authority === 'saved-task' && !context.hasConfiguredTask) return 'No saved background task authorizes this request.';
+    if (authority === 'saved-schedule' && !context.hasConfiguredSchedule) return 'No saved schedule authorizes this request.';
     if (authority === 'user-retry' && !context.userOverride) return 'The user did not approve a retry of this request.';
   }
   if (verdict === 'deny' && authority === 'unestablished') {
@@ -356,11 +359,11 @@ interface RenderedMessage extends PreparedMessage {
  */
 function prepareTranscript(
   messages: readonly ModelMessage[],
-  hasConfiguredBackgroundTask = false,
+  hasConfiguredSchedule = false,
 ): { messages: PreparedMessage[]; completeness: TranscriptCompleteness } {
   const bucket = (role: string): 'user' | 'other' => (role === 'user' ? 'user' : 'other');
   const lastUser = messages.map((message) => message.role).lastIndexOf('user');
-  const wrapperIndex = hasConfiguredBackgroundTask ? lastUser : -1;
+  const wrapperIndex = hasConfiguredSchedule ? lastUser : -1;
 
   const cache = new Map<number, RenderedMessage>();
   const render = (index: number): RenderedMessage => {
@@ -370,7 +373,7 @@ function prepareTranscript(
     const role = message.role;
     const isWrapper = index === wrapperIndex;
     const trust = isWrapper
-      ? TRUST_LABELS.taskWrapper
+      ? TRUST_LABELS.scheduleWrapper
       : role === 'user'
         ? TRUST_LABELS.user
         : role === 'tool'
@@ -379,7 +382,7 @@ function prepareTranscript(
     const pieces = isWrapper ? [] : visibleTextParts(message, role);
     const media = pieces.some((piece) => piece.includes(MEDIA_MARKER));
     let content = isWrapper
-      ? '[Configured task message omitted; see configuredBackgroundTask and untrustedTriggerFacts.]'
+      ? '[Configured schedule message omitted; see configuredSchedule and untrustedTriggerFacts.]'
       : pieces.join('\n').trim();
     let shortened = false;
     if (role === 'user' && !isWrapper) {
@@ -399,7 +402,7 @@ function prepareTranscript(
     return rendered;
   };
 
-  // The latest user message that has anything visible; a configured task wrapper always counts.
+  // The latest user message that has anything visible; a configured schedule wrapper always counts.
   let pinned = -1;
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index]!.role === 'user' && render(index).content) {

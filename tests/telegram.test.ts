@@ -238,7 +238,7 @@ describe('Telegram native channel UI', () => {
     expect(body.commands).toEqual([
       { command: 'start', description: 'Show help and pairing info' },
       { command: 'approvals', description: 'Re-send pending approval buttons' },
-      { command: 'stop', description: 'Stop the current run (or a task: /stop <task-id>)' },
+      { command: 'stop', description: 'Stop the current run (or a schedule: /stop <schedule-id>)' },
       { command: 'clear', description: 'Start a new chat' },
       { command: 'sessions', description: 'Show the last 10 chats' },
     ]);

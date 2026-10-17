@@ -194,6 +194,28 @@ describe('resolving a provider', () => {
     if (!result.ok) return;
     expect(result.provider.baseURL).toBe('https://proxy.internal/v1');
   });
+
+  it('exposes every settings key in order for rotation', async () => {
+    const { registry } = await load();
+    const result = registry.resolveProvider('openai', { keys: ['sk-one', '', 'sk-two'] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    /* Blank entries are dropped; the primary key is the first of the rest. */
+    expect(result.provider.apiKey).toEqual({ key: 'sk-one', source: 'settings' });
+    expect(result.provider.apiKeys).toEqual([
+      { key: 'sk-one', source: 'settings' },
+      { key: 'sk-two', source: 'settings' },
+    ]);
+  });
+
+  it('leaves apiKeys empty when the credential comes from the environment', async () => {
+    const { registry } = await load();
+    process.env.OPENAI_API_KEY = 'sk-from-env';
+    const result = registry.resolveProvider('openai');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.provider.apiKeys).toEqual([]);
+  });
 });
 
 describe('listing models ranite will offer', () => {

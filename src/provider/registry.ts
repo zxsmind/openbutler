@@ -1,6 +1,7 @@
 import type { JSONValue, LanguageModel } from 'ai';
 import { getModel, getProvider, isCatalogLoaded, listProviderIdsForModel, type CatalogModel } from './catalog.js';
 import { importProviderFactory, packageReadsOwnEnv } from './install.js';
+import { createRotatingModel, type V3LanguageModel } from './retry.js';
 import { hasCredential, type ProviderState, type SettingsStore } from '../settings.js';
 
 /**
@@ -67,6 +68,12 @@ export interface ResolvedProvider {
    * variables itself. See `resolveProvider`.
    */
   apiKey: ApiKeySource | null;
+  /**
+   * Every key from settings, in preference order, when there is more than one
+   * to rotate through. Empty for a provider configured by the environment or by
+   * options, where only a single credential exists.
+   */
+  apiKeys: ApiKeySource[];
   baseURL: string | undefined;
   /** Raw options for the runtime package, applied after everything else. */
   options: Record<string, unknown>;
@@ -113,15 +120,15 @@ export function resolveProvider(providerId: string, override?: ProviderOverride)
       },
     };
   }
-  const configuredKey = (override?.keys ?? []).find((key) => key.length > 0);
+  const settingsKeys = (override?.keys ?? []).filter((key) => key.length > 0);
   /* The catalog's `env` list is the candidate key, in its own preference order.
      Whether the value is actually handed to the package is decided later, by
      `packageReadsOwnEnv`: a package that finds its own credential must not
      receive one, because a catalog list mixes secrets with names and regions
      (`AWS_ACCESS_KEY_ID` beside `AWS_BEARER_TOKEN_BEDROCK`), and passing the
      wrong one as `apiKey` would authenticate with it. */
-  const apiKey = configuredKey
-    ? { key: configuredKey, source: 'settings' as const }
+  const apiKey = settingsKeys[0]
+    ? { key: settingsKeys[0], source: 'settings' as const }
     : (firstNonEmptyEnv(catalog?.env) ??
       firstNonEmptyEnv(['RANITE_API_KEY']) ??
       firstNonEmptyEnv(override?.npm ? ['OPENAI_API_KEY'] : undefined));
@@ -149,6 +156,7 @@ export function resolveProvider(providerId: string, override?: ProviderOverride)
       displayName: override?.name ?? catalog?.name ?? providerId,
       npm,
       apiKey: apiKey ?? null,
+      apiKeys: settingsKeys.map((key) => ({ key, source: 'settings' as const })),
       options,
       baseURL: override?.url ?? catalog?.api ?? undefined,
       custom: !catalog,
@@ -407,6 +415,11 @@ function dynamicFactory(npm: string): PackageFactory {
  *
  * Returns a reason instead of throwing when the provider cannot run, so the
  * caller can list the alternatives rather than crash.
+ *
+ * When settings hold several keys, one model is built per key and they are
+ * wrapped in a rotating model: a request retries on the first key, then moves
+ * to the next on a rate limit or a rejected key. A single key still gets the
+ * retry, so the backoff policy is uniform.
  */
 export async function createLanguageModel(
   providerId: string,
@@ -419,7 +432,13 @@ export async function createLanguageModel(
   const { provider } = resolution;
   try {
     const factory = SUPPORTED_PACKAGES[provider.npm] ?? dynamicFactory(provider.npm);
-    return { ok: true, model: await factory.createModel(provider, modelId, fetch), resolved: provider };
+    const keySources: (ApiKeySource | null)[] = provider.apiKeys.length > 0 ? [...provider.apiKeys] : [provider.apiKey];
+    const models: V3LanguageModel[] = [];
+    for (const source of keySources) {
+      const perKey = source ? { ...provider, apiKey: source } : provider;
+      models.push((await factory.createModel(perKey, modelId, fetch)) as V3LanguageModel);
+    }
+    return { ok: true, model: createRotatingModel(models), resolved: provider };
   } catch (error) {
     return {
       ok: false,
@@ -555,6 +574,76 @@ export function withReasoningVisibility(
   const current = base[key] ?? {};
   const display = adapter.display(current);
   return display ? { ...base, [key]: { ...current, ...display } as Record<string, Record<string, JSONValue>> } : base;
+}
+
+/**
+ * The routing wire format of one gateway runtime package.
+ *
+ * A gateway load-balances one model across upstream providers, so the same
+ * model can be served by a different backend each turn. The operator writes the
+ * gateway's own native routing fields under `providers.<id>.routing`; this table
+ * only decides the providerOptions namespace and the wrapper key each gateway
+ * needs, so the values pass through verbatim.
+ */
+interface RoutingAdapter {
+  /** providerOptions namespace the routing options belong under. */
+  optionsKey: (provider: ResolvedProvider) => string | null;
+  /** Wraps the native routing object into that namespace's value. */
+  wrap: (routing: Record<string, unknown>) => Record<string, unknown>;
+}
+
+const ROUTING_ADAPTERS: Record<string, RoutingAdapter> = {
+  // OpenRouter reads its routing fields from the `provider` object of the body.
+  '@openrouter/ai-sdk-provider': {
+    optionsKey: () => 'openrouter',
+    wrap: (routing) => ({ provider: routing }),
+  },
+  // The Vercel gateway reads them flat under providerOptions.gateway.
+  '@ai-sdk/gateway': {
+    optionsKey: () => 'gateway',
+    wrap: (routing) => routing,
+  },
+  // OpenAI-compatible gateways in the OpenRouter mould take the same `provider`
+  // object; the namespace is the provider's own name, as the SDK expects.
+  '@ai-sdk/openai-compatible': {
+    optionsKey: (provider) => provider.id.split('.')[0] ?? provider.id,
+    wrap: (routing) => ({ provider: routing }),
+  },
+};
+
+function routingAdapter(npm: string): RoutingAdapter | null {
+  return ROUTING_ADAPTERS[npm] ?? null;
+}
+
+/**
+ * The providerOptions fragment carrying a gateway's routing preferences.
+ *
+ * Empty for a provider that is not a gateway, or has none configured, so the
+ * caller can merge it unconditionally. Only the namespace and wrapper key come
+ * from the table above; the field values are the gateway's own.
+ */
+export function routingProviderOptions(
+  provider: ResolvedProvider,
+  routing: Record<string, unknown> | undefined,
+): ReasoningVariant['providerOptions'] {
+  if (!routing || Object.keys(routing).length === 0) return {};
+  const adapter = routingAdapter(provider.npm);
+  const key = adapter?.optionsKey(provider) ?? null;
+  if (!adapter || !key) return {};
+  return { [key]: adapter.wrap(routing) } as ReasoningVariant['providerOptions'];
+}
+
+/** Merges two providerOptions fragments, combining any namespace both share. */
+export function mergeProviderOptions(
+  base: ReasoningVariant['providerOptions'],
+  extra: ReasoningVariant['providerOptions'],
+): ReasoningVariant['providerOptions'] {
+  if (Object.keys(extra).length === 0) return base;
+  const merged: Record<string, Record<string, JSONValue>> = { ...base };
+  for (const [key, value] of Object.entries(extra)) {
+    merged[key] = { ...(merged[key] ?? {}), ...value };
+  }
+  return merged;
 }
 
 export interface ReasoningCatalogMatch {

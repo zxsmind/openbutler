@@ -104,7 +104,7 @@ const runningSessions = new Set<string>();
 
 /**
  * Marks a session as running in this process. The daemon hosts every agent turn — the TUI, the
- * one-shot command, Telegram, and background tasks all attach to it — so the process-local set is
+ * one-shot command, Telegram, and schedules all attach to it — so the process-local set is
  * accurate for the sessions whose "running" status anyone can observe.
  */
 export function reportSessionActivity(sessionId: string, running: boolean): void {

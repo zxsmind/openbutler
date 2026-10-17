@@ -39,7 +39,7 @@ interface PendingRequest {
 type AttachOptions = {
   custodian?: boolean;
   isolatedSession?: boolean;
-  taskId?: string;
+  scheduleId?: string;
   /** Attach view-only to one live subagent worker session. */
   workerSessionId?: string;
   /** Attach view-only to the worker a parent session is currently blocked on. */
@@ -140,7 +140,7 @@ class DaemonSessionClient implements AgentSessionClient {
       workspaceRoot: this.workspaceRoot,
       ...(options.custodian ? { custodian: true } : {}),
       ...(options.isolatedSession ? { isolatedSession: true } : {}),
-      ...(options.taskId ? { taskId: options.taskId } : {}),
+      ...(options.scheduleId ? { scheduleId: options.scheduleId } : {}),
       ...(options.workerSessionId ? { workerSessionId: options.workerSessionId } : {}),
       ...(options.runningWorkerOf ? { runningWorkerOf: options.runningWorkerOf } : {}),
     });
@@ -425,7 +425,7 @@ class DaemonSessionClient implements AgentSessionClient {
         if (
           previousSessionId &&
           previousSessionHadUserMessage &&
-          this.attachOptions.taskId === undefined &&
+          this.attachOptions.scheduleId === undefined &&
           this.snapshot?.session.id !== previousSessionId &&
           !activeSessionHasMessages &&
           this.savedSessions.some((session) => session.id === previousSessionId)

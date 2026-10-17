@@ -425,12 +425,14 @@ export class ActivityLedger {
     return rows.map(eventFromRow);
   }
 
-  /** Newest-first events of one task, for run history. Reads the payload, never the transcript. */
-  taskEvents(taskId: string, limit = 50): ObservedEventRow[] {
+  /** Newest-first events of one schedule, for run history. Reads the payload, never the transcript. */
+  scheduleEvents(scheduleId: string, limit = 50): ObservedEventRow[] {
     this.assertOpen();
     const rows = this.database
-      .prepare("SELECT * FROM ranite_events WHERE json_extract(payload_json, '$.taskId') = ? ORDER BY received_at DESC, rowid DESC LIMIT ?")
-      .all(taskId, Math.max(1, Math.min(200, Math.trunc(limit)))) as unknown as EventDbRow[];
+      .prepare(
+        "SELECT * FROM ranite_events WHERE COALESCE(json_extract(payload_json, '$.scheduleId'), json_extract(payload_json, '$.taskId')) = ? ORDER BY received_at DESC, rowid DESC LIMIT ?",
+      )
+      .all(scheduleId, Math.max(1, Math.min(200, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);
   }
 

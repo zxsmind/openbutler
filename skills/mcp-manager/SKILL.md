@@ -1,6 +1,6 @@
 ---
 name: mcp-manager
-description: Configure, connect, inspect, disconnect, or remove global MCP servers for Ranite; use when the user asks to add or manage an MCP server or expose its tools to the agent.
+description: Configure, connect, inspect, disconnect, or remove global MCP servers for Ranite; use when an MCP server needs configuring or managing, or its tools should be exposed to the agent.
 ---
 
 # Manage MCP servers

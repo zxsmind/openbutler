@@ -1214,11 +1214,10 @@ describe('session activity reporting', () => {
     await run;
     expect(isSessionActive(id)).toBe(false);
 
-    // The running session is excluded from the context block; the sibling session is in it.
+    // The system prompt carries no live session list, so it stays cacheable.
     const prompt = JSON.stringify(captured);
-    expect(prompt).toContain('## Recent sessions');
-    expect(prompt).toContain('sibling work');
-    expect(prompt).not.toContain(id.slice(0, 8));
+    expect(prompt).not.toContain('## Recent sessions');
+    expect(prompt).not.toContain('sibling work');
   });
 
   it('keeps queued messages on a keepQueue stop and drops them on a plain stop', async () => {

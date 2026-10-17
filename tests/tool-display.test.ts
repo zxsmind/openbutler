@@ -34,7 +34,7 @@ describe('tool display commands', () => {
     expect(toolDisplayCommand(host('subagent', { mode: 'explorer', task: 'find the bug' }))).toBe('subagent explorer · find the bug');
     expect(toolDisplayCommand(host('subagent_poll', { session: 'abcdef12-3456' }))).toBe('Poll abcdef12');
     expect(toolDisplayCommand(host('subagent_stop', { session: 'abcdef12-3456' }))).toBe('Stop abcdef12');
-    expect(toolDisplayCommand(host('background_manage', { action: 'list' }))).toBe('Tasks list');
+    expect(toolDisplayCommand(host('schedule', { action: 'list' }))).toBe('Schedule list');
   });
 
   it('falls back to a bounded input summary for unknown tools', () => {

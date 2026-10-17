@@ -12,7 +12,7 @@ import {
 import type { CatalogModel } from '../src/provider/catalog.js';
 
 function provider(npm: string, id = 'test'): ResolvedProvider {
-  return { id, displayName: id, npm, apiKey: null, baseURL: undefined, options: {}, custom: false };
+  return { id, displayName: id, npm, apiKey: null, apiKeys: [], baseURL: undefined, options: {}, custom: false };
 }
 
 function model(overrides: Partial<CatalogModel> = {}): CatalogModel {

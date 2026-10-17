@@ -1,11 +1,11 @@
 ---
 name: skill-creator
-description: Create or revise reusable Agent Skills in the Agent Skills SKILL.md format; use when the user wants Ranite to learn a repeatable workflow across sessions or workspaces.
+description: Create or revise reusable Agent Skills in the Agent Skills SKILL.md format; use when a repeatable workflow should be saved for reuse across sessions or workspaces.
 ---
 
 # Create or update an Agent Skill
 
-Use this skill when the user wants a reusable workflow, not just a one-time task instruction.
+Use this skill when a workflow is worth keeping, not just a one-time task instruction.
 
 1. Choose scope from the user's request. Use the Ranite global skill directory from the active context for skills intended across projects. Use the active workspace `.agents/skills/` directory for repository-specific workflows. Ask only if scope materially changes who will use the skill.
 2. Choose a short lowercase hyphenated folder name. Write a `SKILL.md` whose YAML frontmatter has a matching `name` and a clear `description` that says when it should and should not activate.

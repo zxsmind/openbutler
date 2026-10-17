@@ -45,8 +45,8 @@ export type QueuedMessage = {
   onProgress?: (progress: AgentTurnProgress) => void;
   /** Host-bound filesystem and memory scope for this queued turn; never trusted from IPC input. */
   workspaceRoot?: string;
-  /** Host-only trust labels for explicitly configured observer tasks; never accepted over TUI IPC. */
-  reviewAuthorization?: { kind: 'background-task'; name: string; instruction: string; triggerFacts: unknown };
+  /** Host-only trust labels for explicitly configured observer schedules; never accepted over TUI IPC. */
+  reviewAuthorization?: { kind: 'schedule'; name: string; instruction: string; triggerFacts: unknown };
 };
 
 export interface AgentSessionRuntimeView {
@@ -166,6 +166,13 @@ export class AgentSessionController implements AgentSessionClient {
   private session: SavedSession;
   private conversation: ModelMessage[] = [];
   private conversationArchive: ModelMessage[] = [];
+  /**
+   * The system prompt, built once and reused byte-for-byte for the life of a
+   * session so the provider's prefix cache always hits. It is rebuilt only when
+   * the workspace, model, or session changes, or after a compaction (which
+   * rewrites the conversation anyway).
+   */
+  private frozenSystem: { key: string; text: string } | null = null;
   private readonly listeners = new Set<() => void>();
   private readonly queuedMessages: QueuedTurn[] = [];
   /**
@@ -388,6 +395,7 @@ export class AgentSessionController implements AgentSessionClient {
     };
     this.conversation = [...session.conversation];
     this.conversationArchive = [...(session.conversationArchive ?? [])];
+    this.frozenSystem = null;
     this.lastContextUsage = session.contextTokens;
     this.lastContextEstimate = session.contextEstimateTokens;
     this.contextUsageBaseline = session.contextTokens;
@@ -414,6 +422,7 @@ export class AgentSessionController implements AgentSessionClient {
     );
     this.conversation = [];
     this.conversationArchive = [];
+    this.frozenSystem = null;
     this.lastContextUsage = undefined;
     this.lastContextEstimate = undefined;
     this.contextUsageBaseline = undefined;
@@ -595,6 +604,19 @@ export class AgentSessionController implements AgentSessionClient {
       reasoningVariantId: this.runtime.reasoningDefault,
       showReasoning: this.runtime.showReasoningDefault,
     };
+  }
+
+  /**
+   * The session's frozen system prompt, built on first use and reused verbatim
+   * afterwards. The cache key covers the three things a rebuild is mandatory
+   * for; a compaction clears the cache so the next turn picks up fresh context.
+   */
+  private frozenSystemPrompt(build: (workspaceRoot: string, systemInstruction?: string) => string): string {
+    const key = `${this.runtime.workspaceRoot}\u0000${this.runtime.providerId}\u0000${this.runtime.modelId}\u0000${this.session.id}`;
+    if (this.frozenSystem?.key !== key) {
+      this.frozenSystem = { key, text: build(this.runtime.workspaceRoot, this.options.systemInstruction) };
+    }
+    return this.frozenSystem.text;
   }
 
   private flushStreamedDeltas(): void {
@@ -805,7 +827,7 @@ export class AgentSessionController implements AgentSessionClient {
           ...(request.gateReason ? { gateReason: request.gateReason } : {}),
           ...(override ? { userOverride: true } : {}),
           ...(reviewTimeoutSeconds === undefined ? {} : { timeoutMs: reviewTimeoutSeconds * 1000 }),
-          ...(this.currentReviewAuthorization ? { authorizedBackgroundTask: this.currentReviewAuthorization } : {}),
+          ...(this.currentReviewAuthorization ? { authorizedSchedule: this.currentReviewAuthorization } : {}),
           ...(signal ? { signal } : {}),
         });
       } catch (error) {
@@ -1057,7 +1079,10 @@ export class AgentSessionController implements AgentSessionClient {
     };
 
     try {
-      const [{ runAgent }, { compactConversation }] = await Promise.all([import('./agent.js'), import('./compaction.js')]);
+      const [{ runAgent, buildAgentSystem }, { compactConversation }] = await Promise.all([
+        import('./agent.js'),
+        import('./compaction.js'),
+      ]);
       let nextTurn: QueuedTurn | null = initialTurn;
       while (nextTurn) {
         const currentTurn = nextTurn;
@@ -1147,8 +1172,7 @@ export class AgentSessionController implements AgentSessionClient {
               supportsImageToolResult: this.runtime.supportsImageToolResult,
               abortSignal: abortController.signal,
               messages: this.conversation,
-              sessionId: this.session.id,
-              ...(this.options.systemInstruction ? { systemInstruction: this.options.systemInstruction } : {}),
+              system: this.frozenSystemPrompt(buildAgentSystem),
               compactBeforeStep: async (context) => {
                 this.currentReviewMessages = context.messages;
                 const recentContextGrowthTokens = this.contextGrowthThisTurn ?? growthBeforeRun;
@@ -1193,6 +1217,7 @@ export class AgentSessionController implements AgentSessionClient {
               takeQueuedMessages: () => {
                 // Steering is admitted only at SDK prepareStep, after the prior tool batch.
                 // Scope/route changes remain FIFO followups so they cannot borrow an active binding.
+                // Owner-inbox and team signals carry no owner reply binding, so they steer any live run.
                 // Drain every compatible queued message so a burst of user input all lands in the same gap.
                 const admitted: ReturnType<typeof queuedUserMessageToModelMessage>[] = [];
                 for (;;) {
@@ -1202,6 +1227,7 @@ export class AgentSessionController implements AgentSessionClient {
                     this.options.sessionWorkspaceRoot !== null ||
                     !next ||
                     (next.message.communication?.source !== 'owner-inbox' &&
+                      next.message.communication?.source !== 'team' &&
                       !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
                     (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
                     next.preferences.reasoningVariantId !== live.reasoningVariantId ||
@@ -1286,7 +1312,6 @@ export class AgentSessionController implements AgentSessionClient {
               tools: {},
               maxRetries: 0,
               abortSignal: abortController.signal,
-              sessionId: this.session.id,
               systemInstruction: `${this.options.systemInstruction ?? ''}\nThe owner's request requires a visible answer. Compose it from the settled work and tool results. Do not call tools or repeat actions.`,
               getProviderOptions: () => {
                 const live = this.liveTurnPreferences();
@@ -1428,7 +1453,6 @@ export class AgentSessionController implements AgentSessionClient {
         this.runtime.supportsImageToolResult,
         this.runtime.workspaceRoot,
         this.options.systemInstruction,
-        this.session.id,
         this.runtime.supportsVision,
       );
       const tools = await this.runtime.registry.createModelTools({ approve: async () => false, onResult: () => {} });
@@ -1483,6 +1507,9 @@ export class AgentSessionController implements AgentSessionClient {
     this.flushStreamedEntries();
     if (this.conversationArchive.length === 0) this.conversationArchive = [...this.conversation];
     this.conversation = result.messages;
+    // A compaction rewrites the conversation, so the cached prefix is already
+    // gone; the next turn rebuilds the system prompt from fresh context.
+    this.frozenSystem = null;
     this.lastContextUsage = undefined;
     this.lastContextEstimate = undefined;
     this.contextUsageBaseline = undefined;
@@ -1627,10 +1654,10 @@ export function toolDisplayCommand(request: Pick<ToolCallRequest, 'providerId' |
         if (typeof input.session !== 'string' || !input.session) break;
         return `Stop ${input.session.slice(0, 8)}`;
       }
-      case 'background_manage': {
+      case 'schedule': {
         if (typeof input.action !== 'string') break;
-        const task = typeof input.taskId === 'string' && input.taskId ? ` ${input.taskId.slice(0, 8)}` : '';
-        return `Tasks ${input.action}${task}`;
+        const id = typeof input.scheduleId === 'string' && input.scheduleId ? ` ${input.scheduleId.slice(0, 8)}` : '';
+        return `Schedule ${input.action}${id}`;
       }
       case 'mcp_manage': {
         return [request.name, input.action, input.serverId].filter((part) => typeof part === 'string').join(' ');
@@ -1722,9 +1749,9 @@ export function toolPreviewCommand(providerId: string, name: string, fields: rea
         const query = pick('query', 60);
         return query ? `Search memory "${query}"` : 'memory_search';
       }
-      case 'background_manage': {
+      case 'schedule': {
         const action = pick('action', 12);
-        return action ? `Tasks ${action}` : 'background_manage';
+        return action ? `Schedule ${action}` : 'schedule';
       }
     }
   }
@@ -2043,6 +2070,7 @@ async function generateSessionTitle(
   const { generateText, jsonSchema, Output } = await import('ai');
   const result = await generateText({
     model,
+    maxRetries: 0,
     output: Output.object({
       name: 'chat_title',
       description:
