@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   FrameSelectionTracker,
+  decorate,
   injectFrameSelection,
   normalizeSelection,
+  parseFrameLines,
   plainFrameLines,
   selectionCellText,
 } from '../../src/cli/frame-selection.js';
@@ -53,6 +55,20 @@ describe('selectionCellText', () => {
 
   it('clamps columns past the end of a line', () => {
     expect(selectionCellText(['ab'], { start: { row: 0, col: 0 }, end: { row: 0, col: 40 } })).toBe('ab');
+  });
+});
+
+describe('decoration-aware copy', () => {
+  it('keeps decorated chrome on screen but drops it from the copy', () => {
+    const frame = `${decorate('│ ')}hello`;
+    const { lines, decoration } = parseFrameLines(frame);
+    expect(lines[0]).toBe('│ hello');
+    expect(selectionCellText(lines, { start: { row: 0, col: 0 }, end: { row: 0, col: 7 } }, decoration)).toBe('hello');
+  });
+
+  it('removes the shared left margin so layout indent is not copied', () => {
+    const lines = ['  alpha', '  beta', '    gamma'];
+    expect(selectionCellText(lines, { start: { row: 0, col: 0 }, end: { row: 2, col: 9 } })).toBe('alpha\nbeta\n  gamma');
   });
 });
 

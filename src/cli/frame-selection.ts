@@ -13,14 +13,59 @@ export type SelectionCell = { row: number; col: number };
 export type FrameSelection = { anchor: SelectionCell; focus: SelectionCell };
 export type NormalizedSelection = { start: SelectionCell; end: SelectionCell };
 
+/**
+ * Zero-width markers that wrap layout chrome (borders, quote bars, prefixes) in
+ * the rendered frame. They are invisible in the terminal, so they never shift a
+ * cell, but the copy path removes the marked characters: what you copy is the
+ * content, not the decoration the renderer drew around it.
+ */
+export const DECORATION_START = '\u2060';
+export const DECORATION_END = '\u2061';
+
+export function decorate(text: string): string {
+  return `${DECORATION_START}${text}${DECORATION_END}`;
+}
+
 const ANSI_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const ANSI_AT = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-9;?]*[ -/]*[@-~]/y;
 
+/** The frame's display lines: ANSI and decoration markers removed, columns intact. */
 export function plainFrameLines(chunk: string): string[] {
-  return chunk
+  return parseFrameLines(chunk).lines;
+}
+
+/**
+ * Splits a frame into display lines and a per-cell decoration mask. The mask
+ * marks exactly the cells that were inside decoration markers, so a copy can
+ * drop them while the display keeps them.
+ */
+export function parseFrameLines(chunk: string): { lines: string[]; decoration: boolean[][] } {
+  const raw = chunk
     .replace(ANSI_SEQUENCE, '')
     .split('\n')
     .map((line) => line.replace(/\r/g, ''));
+  const lines: string[] = [];
+  const decoration: boolean[][] = [];
+  for (const line of raw) {
+    let text = '';
+    const mask: boolean[] = [];
+    let inDecor = false;
+    for (const character of line) {
+      if (character === DECORATION_START) {
+        inDecor = true;
+        continue;
+      }
+      if (character === DECORATION_END) {
+        inDecor = false;
+        continue;
+      }
+      text += character;
+      mask.push(inDecor);
+    }
+    lines.push(text);
+    decoration.push(mask);
+  }
+  return { lines, decoration };
 }
 
 export function normalizeSelection(selection: FrameSelection): NormalizedSelection {
@@ -35,7 +80,7 @@ export function isCollapsedSelection(selection: FrameSelection): boolean {
 }
 
 /** The selected text exactly as the frame shows it, with trailing spaces trimmed per line. */
-export function selectionCellText(lines: readonly string[], selection: NormalizedSelection): string {
+export function selectionCellText(lines: readonly string[], selection: NormalizedSelection, decoration?: readonly boolean[][]): string {
   const { start, end } = selection;
   const parts: string[] = [];
   for (let row = start.row; row <= end.row; row++) {
@@ -43,9 +88,30 @@ export function selectionCellText(lines: readonly string[], selection: Normalize
     const characters = Array.from(lines[row] ?? '');
     const from = row === start.row ? Math.max(0, Math.min(start.col, characters.length)) : 0;
     const to = row === end.row ? Math.max(from, Math.min(end.col, characters.length)) : characters.length;
-    parts.push(characters.slice(from, to).join('').trimEnd());
+    let segment = '';
+    for (let column = from; column < to; column++) {
+      if (decoration?.[row]?.[column]) continue;
+      segment += characters[column];
+    }
+    parts.push(segment.trimEnd());
   }
-  return parts.join('\n');
+  return stripCommonMargin(parts).join('\n');
+}
+
+/**
+ * Removes the leading whitespace every non-empty selected line shares. The
+ * transcript indents every entry by a fixed margin; dropping the common margin
+ * copies the content without that layout padding, the way an editor copies a
+ * block, while leaving any deeper, content-specific indentation intact.
+ */
+function stripCommonMargin(parts: string[]): string[] {
+  let margin = Number.POSITIVE_INFINITY;
+  for (const line of parts) {
+    if (line.trim().length === 0) continue;
+    margin = Math.min(margin, line.length - line.trimStart().length);
+  }
+  if (!Number.isFinite(margin) || margin === 0) return parts;
+  return parts.map((line) => (line.trim().length === 0 ? '' : line.slice(margin)));
 }
 
 /** Rewrites one frame so the selected cells render with inverse video. */
@@ -110,8 +176,10 @@ export class FrameSelectionTracker {
   private focus: SelectionCell | null = null;
   private dragging = false;
   private lines: string[] = [];
+  private decoration: boolean[][] = [];
   private rawFrame = '';
   private finalizedLines: string[] | null = null;
+  private finalizedDecoration: boolean[][] | null = null;
 
   get isDragging(): boolean {
     return this.dragging;
@@ -122,6 +190,7 @@ export class FrameSelectionTracker {
     this.focus = { ...cell };
     this.dragging = true;
     this.finalizedLines = null;
+    this.finalizedDecoration = null;
   }
 
   drag(cell: SelectionCell): boolean {
@@ -138,9 +207,11 @@ export class FrameSelectionTracker {
       this.anchor = null;
       this.focus = null;
       this.finalizedLines = null;
+      this.finalizedDecoration = null;
       return 'click';
     }
     this.finalizedLines = [...this.lines];
+    this.finalizedDecoration = this.decoration.map((row) => [...row]);
     return 'selection';
   }
 
@@ -149,6 +220,7 @@ export class FrameSelectionTracker {
     this.focus = null;
     this.dragging = false;
     this.finalizedLines = null;
+    this.finalizedDecoration = null;
   }
 
   selection(): NormalizedSelection | null {
@@ -159,9 +231,10 @@ export class FrameSelectionTracker {
 
   /** Called for every frame Ink writes; returns the frame with the selection highlighted. */
   frame(chunk: string): string {
-    const lines = plainFrameLines(chunk);
+    const parsed = parseFrameLines(chunk);
     this.rawFrame = chunk;
-    this.lines = lines;
+    this.lines = parsed.lines;
+    this.decoration = parsed.decoration;
     // The selection is intentionally NOT cleared when the frame changes: during
     // a streaming run the transcript repaints every frame, and clearing on each
     // one made an active selection vanish mid-copy. The selection stays until
@@ -179,8 +252,9 @@ export class FrameSelectionTracker {
 
   text(): string {
     const selection = this.selection();
+    if (!selection) return '';
     // Copy the text as it was when the selection was finalized, so a repaint
     // during a run cannot change what is copied out from under the user.
-    return selection ? selectionCellText(this.finalizedLines ?? this.lines, selection) : '';
+    return selectionCellText(this.finalizedLines ?? this.lines, selection, this.finalizedDecoration ?? this.decoration);
   }
 }

@@ -6,7 +6,7 @@ import { Marked, type Token, type Tokens } from 'marked';
 import stringWidth from 'string-width';
 import { readClipboardImageBase64 } from '../clipboard-image.js';
 import { writeClipboardText } from '../clipboard-text.js';
-import { FrameSelectionTracker } from './frame-selection.js';
+import { FrameSelectionTracker, decorate } from './frame-selection.js';
 import { mergeMarkdownTokenSegments } from './markdown-merge.js';
 import type { ApprovalDecision } from '../agent-session.js';
 import type { AgentSessionClient } from '../agent-session.js';
@@ -2854,7 +2854,7 @@ const TranscriptEntry = memo(function TranscriptEntry({
       <Box width="100%" marginBottom={1} flexShrink={0}>
         <Box width={2} flexShrink={0}>
           <Text color={tokens.accent} dimColor={dimmed}>
-            {glyphs.prompt}
+            {decorate(glyphs.prompt)}
           </Text>
         </Box>
         <Box width={Math.max(1, width - 2)} flexDirection="column">
@@ -3207,16 +3207,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
           }
         }
         return (
-          <Box
-            key={key}
-            width={width}
-            flexDirection="column"
-            borderStyle="single"
-            borderColor="gray"
-            paddingX={1}
-            marginBottom={1}
-            flexShrink={0}
-          >
+          <Box key={key} width={width} flexDirection="column" marginBottom={1} flexShrink={0}>
             {code.split('\n').map((line, lineIndex) => (
               <Text
                 key={`${key}-line-${lineIndex}`}
@@ -3224,6 +3215,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
                 wrap="wrap"
                 dimColor={dimmed}
               >
+                {decorate('│ ')}
                 {line || ' '}
               </Text>
             ))}
@@ -3235,7 +3227,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
         return (
           <Box key={key} width="100%" flexDirection="row" marginBottom={1} flexShrink={0}>
             <Text color="gray" dimColor={dimmed}>
-              │{' '}
+              {decorate('│ ')}
             </Text>
             <Box width={Math.max(1, width - 2)} flexDirection="column" flexShrink={1}>
               {renderMarkdownBlocks(quote.tokens, Math.max(1, width - 2), dimmed, key)}
