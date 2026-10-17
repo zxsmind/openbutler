@@ -1,5 +1,5 @@
 import { Transform } from 'node:stream';
-import { Box, measureElement, render, Text, useApp, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
+import { Box, measureElement, render, Text, useApp, useBoxMetrics, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { renderMermaidASCII } from 'beautiful-mermaid';
 import { Marked, type Token, type Tokens } from 'marked';
@@ -3161,7 +3161,15 @@ function findStableMarkdownBoundary(source: string): number {
   return stableBoundary;
 }
 
-function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, keyPrefix: string, startIndex = 0): ReactNode[] {
+function renderMarkdownBlocks(
+  tokens: Token[],
+  width: number,
+  dimmed: boolean,
+  keyPrefix: string,
+  startIndex = 0,
+  spaced = true,
+): ReactNode[] {
+  const gap = spaced ? 1 : 0;
   return tokens.map((token, index) => {
     const key = `${keyPrefix}-${startIndex + index}`;
     switch (token.type) {
@@ -3171,7 +3179,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
       case 'heading': {
         const heading = token as Tokens.Heading;
         return (
-          <Box key={key} width="100%" marginBottom={1} flexShrink={0}>
+          <Box key={key} width="100%" marginBottom={gap} flexShrink={0}>
             <Text bold color={heading.depth <= 2 ? 'cyan' : 'white'} dimColor={dimmed}>
               {renderInlineMarkdown(heading.tokens, dimmed, key)}
             </Text>
@@ -3180,7 +3188,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
       }
       case 'paragraph':
         return (
-          <Box key={key} width="100%" marginBottom={1} flexShrink={0}>
+          <Box key={key} width="100%" marginBottom={gap} flexShrink={0}>
             <Text wrap="wrap" dimColor={dimmed}>
               {renderInlineMarkdown(childMarkdownTokens(token), dimmed, key)}
             </Text>
@@ -3189,7 +3197,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
       case 'text': {
         const textToken = token as Tokens.Text;
         return (
-          <Box key={key} width="100%" marginBottom={1} flexShrink={0}>
+          <Box key={key} width="100%" marginBottom={gap} flexShrink={0}>
             <Text wrap="wrap" dimColor={dimmed}>
               {textToken.tokens ? renderInlineMarkdown(textToken.tokens, dimmed, key) : textToken.text}
             </Text>
@@ -3207,7 +3215,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
           }
         }
         return (
-          <Box key={key} width={width} flexDirection="column" marginBottom={1} flexShrink={0}>
+          <Box key={key} width={width} flexDirection="column" marginBottom={gap} flexShrink={0}>
             {code.split('\n').map((line, lineIndex) => (
               <Text
                 key={`${key}-line-${lineIndex}`}
@@ -3224,24 +3232,15 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
       }
       case 'blockquote': {
         const quote = token as Tokens.Blockquote;
-        return (
-          <Box key={key} width="100%" flexDirection="row" marginBottom={1} flexShrink={0}>
-            <Text color="gray" dimColor={dimmed}>
-              {decorate('│ ')}
-            </Text>
-            <Box width={Math.max(1, width - 2)} flexDirection="column" flexShrink={1}>
-              {renderMarkdownBlocks(quote.tokens, Math.max(1, width - 2), dimmed, key)}
-            </Box>
-          </Box>
-        );
+        return <MarkdownBlockquote key={key} tokens={quote.tokens} width={width} dimmed={dimmed} keyPrefix={key} spaced={spaced} />;
       }
       case 'list':
-        return renderMarkdownList(token as Tokens.List, width, dimmed, key);
+        return renderMarkdownList(token as Tokens.List, width, dimmed, key, spaced);
       case 'table':
-        return renderMarkdownTable(token as Tokens.Table, width, dimmed, key);
+        return renderMarkdownTable(token as Tokens.Table, width, dimmed, key, spaced);
       case 'hr':
         return (
-          <Box key={key} width="100%" marginBottom={1}>
+          <Box key={key} width="100%" marginBottom={gap}>
             <Text color="gray" dimColor={dimmed}>
               {'─'.repeat(Math.max(1, width))}
             </Text>
@@ -3249,7 +3248,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
         );
       case 'html':
         return (token as Tokens.HTML).text.trim() ? (
-          <Box key={key} width="100%" marginBottom={1}>
+          <Box key={key} width="100%" marginBottom={gap}>
             <Text wrap="wrap" dimColor={dimmed}>
               {(token as Tokens.HTML).text}
             </Text>
@@ -3257,7 +3256,7 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
         ) : null;
       default:
         return (
-          <Box key={key} width="100%" marginBottom={1}>
+          <Box key={key} width="100%" marginBottom={gap}>
             <Text wrap="wrap" dimColor={dimmed}>
               {renderInlineMarkdown([token], dimmed, key)}
             </Text>
@@ -3265,6 +3264,45 @@ function renderMarkdownBlocks(tokens: Token[], width: number, dimmed: boolean, k
         );
     }
   });
+}
+
+/**
+ * A blockquote draws its bar on every rendered line, including wrapped and
+ * nested content. Ink's own border cannot be marked as chrome, so the bar is
+ * text: the content height is measured and the bar is emitted as that many
+ * decorated lines, which keeps it out of a copy.
+ */
+function MarkdownBlockquote({
+  tokens,
+  width,
+  dimmed,
+  keyPrefix,
+  spaced = true,
+}: {
+  tokens: Token[];
+  width: number;
+  dimmed: boolean;
+  keyPrefix: string;
+  spaced?: boolean;
+}) {
+  const contentRef = useRef<DOMElement>(null);
+  const { height } = useBoxMetrics(contentRef);
+  const bodyWidth = Math.max(1, width - 2);
+  // One decorated marker per line: the copy path resets its decoration state at
+  // each newline, so a single marker spanning the whole column would leak.
+  const bar = height > 0 ? Array.from({ length: height }, () => decorate('│ ')).join('\n') : '';
+  return (
+    <Box width="100%" flexDirection="row" marginBottom={spaced ? 1 : 0} flexShrink={0}>
+      <Box width={2} flexShrink={0}>
+        <Text color="gray" dimColor={dimmed}>
+          {bar}
+        </Text>
+      </Box>
+      <Box ref={contentRef} width={bodyWidth} flexDirection="column" flexShrink={1}>
+        {renderMarkdownBlocks(tokens, bodyWidth, dimmed, keyPrefix, 0, false)}
+      </Box>
+    </Box>
+  );
 }
 
 function renderInlineMarkdown(tokens: Token[], dimmed: boolean, keyPrefix: string): ReactNode[] {
@@ -3328,10 +3366,10 @@ function renderInlineMarkdown(tokens: Token[], dimmed: boolean, keyPrefix: strin
   });
 }
 
-function renderMarkdownList(list: Tokens.List, width: number, dimmed: boolean, key: string): ReactNode {
+function renderMarkdownList(list: Tokens.List, width: number, dimmed: boolean, key: string, spaced = true): ReactNode {
   const startingNumber = typeof list.start === 'number' ? list.start : 1;
   return (
-    <Box key={key} width="100%" flexDirection="column" marginBottom={1} flexShrink={0}>
+    <Box key={key} width="100%" flexDirection="column" marginBottom={spaced ? 1 : 0} flexShrink={0}>
       {list.items.map((item, index) => {
         const marker = item.task ? (item.checked ? '☑' : '☐') : list.ordered ? `${startingNumber + index}.` : '•';
         const content = item.tokens.filter((part) => part.type !== 'space');
@@ -3355,7 +3393,7 @@ function renderMarkdownList(list: Tokens.List, width: number, dimmed: boolean, k
                 </Text>
               ) : null}
               {nested.length > 0
-                ? renderMarkdownBlocks(nested, Math.max(1, width - marker.length - 1), dimmed, `${key}-item-${index}-nested`)
+                ? renderMarkdownBlocks(nested, Math.max(1, width - marker.length - 1), dimmed, `${key}-item-${index}-nested`, 0, false)
                 : null}
             </Box>
           </Box>
@@ -3365,7 +3403,7 @@ function renderMarkdownList(list: Tokens.List, width: number, dimmed: boolean, k
   );
 }
 
-function renderMarkdownTable(table: Tokens.Table, width: number, dimmed: boolean, key: string): ReactNode {
+function renderMarkdownTable(table: Tokens.Table, width: number, dimmed: boolean, key: string, spaced = true): ReactNode {
   const rows = [table.header, ...table.rows];
   const columns = table.header.length;
   if (columns === 0) return null;
@@ -3384,7 +3422,7 @@ function renderMarkdownTable(table: Tokens.Table, width: number, dimmed: boolean
   }
   const divider = columnWidths.map((columnWidth) => '─'.repeat(columnWidth)).join('─┼─');
   return (
-    <Box key={key} width="100%" flexDirection="column" marginBottom={1} flexShrink={0}>
+    <Box key={key} width="100%" flexDirection="column" marginBottom={spaced ? 1 : 0} flexShrink={0}>
       {rows.map((row, rowIndex) => (
         <Fragment key={`${key}-row-${rowIndex}`}>
           <Box width="100%" flexDirection="row" flexShrink={0}>

@@ -70,6 +70,13 @@ describe('decoration-aware copy', () => {
     const lines = ['  alpha', '  beta', '    gamma'];
     expect(selectionCellText(lines, { start: { row: 0, col: 0 }, end: { row: 2, col: 9 } })).toBe('alpha\nbeta\n  gamma');
   });
+
+  it('drops a per-line quote bar from the copy while it stays on screen', () => {
+    const frame = `${decorate('│ ')}first line\n${decorate('│ ')}second line`;
+    const { lines, decoration } = parseFrameLines(frame);
+    expect(lines).toEqual(['│ first line', '│ second line']);
+    expect(selectionCellText(lines, { start: { row: 0, col: 0 }, end: { row: 1, col: 20 } }, decoration)).toBe('first line\nsecond line');
+  });
 });
 
 describe('normalizeSelection', () => {
