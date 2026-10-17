@@ -101,27 +101,6 @@ ranite --version          Print the installed version
 
 `ranite restart` stops active runs, saves sessions, and waits for the previous host to exit before starting the replacement. Open sessions reconnect and restore their history. Closing the TUI only detaches it; use this command after updating Ranite to reload the background host. `ranite` narrates the lifecycle on launch (workspace, host pid, automatic-startup state) and on exit (whether the host keeps running).
 
-## Building release archives
-
-Maintainers produce one archive per supported platform. On each target
-machine (Windows x64, Linux x64, Linux arm64), from a clean checkout:
-
-```sh
-node scripts/package-release.mjs --out release
-```
-
-The script compiles the app, prunes development dependencies, downloads the
-matching official Node.js runtime (checksum-verified), and writes
-`release/ranite-<version>-<os>-<arch>.zip` (Windows) or `.tar.gz` (Linux).
-Upload every archive to the same release tag before announcing it:
-
-```sh
-gh release upload v0.4.0 release/ranite-0.4.0-*
-```
-
-The installers resolve per-platform files from the GitHub release, so all
-archives must be attached before the install commands work everywhere.
-
 ## Telegram channel
 
 One guided command connects a private Telegram chat to the same machine-wide custodian conversation as the terminal:

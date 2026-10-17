@@ -27,6 +27,10 @@ state2048.json
 .playwright-mcp/
 __pycache__/
 scripts/release.mjs
+scripts/package-release.mjs
+scripts/eval-agent-behavior.ts
+scripts/memory.ts
+scripts/smoke.ts
 
 # Development documents stay off the public tree; only documentation that ships
 # with the product is tracked. New working notes are excluded by default.
