@@ -182,6 +182,8 @@ export class AgentSessionController implements AgentSessionClient {
   private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string }> = [];
   private busy = false;
   private closed = false;
+  /** A compaction requested while a run was in flight; runs at the run's end. */
+  private pendingCompaction: { preferences: AgentTurnPreferences; recovery: boolean; scopeRoot?: string } | null = null;
   private pendingApproval: ToolCallRequest | null = null;
   private pendingApprovalId: string | null = null;
   private approvalResolver: ((decision: ApprovalDecision) => void) | null = null;
@@ -1387,16 +1389,29 @@ export class AgentSessionController implements AgentSessionClient {
       reportSessionActivity(this.session.id, false);
       if (this.activeRunAbort === abortController) this.activeRunAbort = null;
       this.publish();
-      if (!this.closed && !this.queueHold && this.queuedMessages.length > 0) void this.runQueuedMessages();
+      // A compaction requested mid-run runs now, at the settled boundary, before
+      // any newly queued turn.
+      const pendingCompaction = this.pendingCompaction;
+      this.pendingCompaction = null;
+      if (!this.closed && pendingCompaction) {
+        void this.compact(pendingCompaction.preferences, pendingCompaction.recovery, pendingCompaction.scopeRoot);
+      } else if (!this.closed && !this.queueHold && this.queuedMessages.length > 0) {
+        void this.runQueuedMessages();
+      }
     }
   }
 
-  async compact(preferences: AgentTurnPreferences, recovery = false): Promise<void> {
+  async compact(preferences: AgentTurnPreferences, recovery = false, scopeRoot?: string): Promise<void> {
     if (this.closed) return;
+    // Compaction rewrites the conversation, so it must not run while a turn is
+    // in flight. Instead of refusing, queue it: it runs at the end of the
+    // current run, after every tool result is in and the turn has settled.
     if (this.busy) {
-      this.addNotice('Wait for the current run to finish before compacting.', 'warn');
+      this.pendingCompaction = { preferences, recovery, ...(scopeRoot === undefined ? {} : { scopeRoot }) };
+      this.addNotice('Compaction is queued and will run when the current run finishes.');
       return;
     }
+    if (scopeRoot !== undefined && this.runtime.selectWorkspaceRoot) await this.runtime.selectWorkspaceRoot(scopeRoot);
     if (this.conversation.length === 0) {
       this.addNotice('There is no conversation to compact.');
       return;

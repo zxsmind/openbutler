@@ -70,7 +70,7 @@ describe('normalizeSelection', () => {
 });
 
 describe('FrameSelectionTracker', () => {
-  it('tracks a drag, copies the selected text and drops the selection when the frame changes', () => {
+  it('keeps the selection and copies the finalized text when the frame changes', () => {
     const tracker = new FrameSelectionTracker();
     const frame = 'l1\nl2\nl3';
     expect(tracker.frame(frame)).toBe(frame);
@@ -82,8 +82,13 @@ describe('FrameSelectionTracker', () => {
     expect(tracker.release()).toBe('selection');
     expect(tracker.text()).toBe('l1\nl2');
 
+    // A repaint (e.g. a streaming run) must not drop the selection nor change
+    // what is copied: the frame stays highlighted and the copy is the text as
+    // it was when the selection was finalized.
     const changed = tracker.frame('x1\nx2\nx3');
-    expect(changed).toBe('x1\nx2\nx3');
+    expect(changed).not.toBe('x1\nx2\nx3');
+    expect(tracker.text()).toBe('l1\nl2');
+    tracker.clear();
     expect(tracker.text()).toBe('');
   });
 

@@ -77,7 +77,7 @@ import { HubUnreachableError } from './team/client.js';
 import { todayLocalDate, resolveFilePath } from './file-write-core.js';
 import type { ToolCallRequest } from './tools/registry.js';
 import { getDataPath } from './paths.js';
-import { imageTypeFromBytes } from './image.js';
+import { imageTypeFromBytes, decodeBase64Image } from './image.js';
 
 const MAX_MESSAGE_TEXT_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -2789,13 +2789,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         case 'session.compact': {
           const preferences = parsePreferences(request.preferences);
           if (request.recovery !== undefined && typeof request.recovery !== 'boolean') throw new Error('recovery must be a boolean.');
-          if (attachment.custodian) {
-            if (controller.isBusy) throw new Error('Wait for the current run before compacting.');
-            if (workspace.runtime.selectWorkspaceRoot) await workspace.runtime.selectWorkspaceRoot(attachment.scopeRoot);
-            else if (attachment.scopeRoot !== workspace.runtime.workspaceRoot)
-              throw new Error('The custodian runtime cannot change workspace scope.');
-          }
-          void controller.compact(preferences, request.recovery === true).catch((error: unknown) => {
+          // The controller owns deferral: a compact requested mid-run is queued
+          // and runs at the run's end, after every tool result. The scope is
+          // selected when it actually runs, so it is safe to request at any time.
+          if (attachment.custodian && !workspace.runtime.selectWorkspaceRoot && attachment.scopeRoot !== workspace.runtime.workspaceRoot)
+            throw new Error('The custodian runtime cannot change workspace scope.');
+          const scopeRoot = attachment.custodian ? attachment.scopeRoot : undefined;
+          void controller.compact(preferences, request.recovery === true, scopeRoot).catch((error: unknown) => {
             controller.addNotice(`Could not compact the session: ${error instanceof Error ? error.message : String(error)}`);
           });
           writeResponse(socket, request.id, true, { accepted: true });
@@ -3139,9 +3139,10 @@ function parseQueuedMessage(value: unknown): QueuedMessage {
   const images = value.images.map((image) => {
     if (!isRecord(image) || image.mediaType !== 'image/png' || typeof image.base64 !== 'string')
       throw new Error('Only base64 PNG images are supported over this IPC version.');
-    if (image.base64.length > Math.ceil((MAX_IMAGE_BYTES * 4) / 3) + 8) throw new Error('An attached image exceeded the 5 MB limit.');
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(image.base64))
-      throw new Error('An attached image has invalid base64 data.');
+    // Validate the decoded bytes (a real PNG within the size cap), not the
+    // string's character class, so incidental whitespace is accepted and a
+    // non-image is rejected by its magic bytes.
+    decodeBase64Image(image.base64, 'image/png', MAX_IMAGE_BYTES);
     return { base64: image.base64, mediaType: 'image/png' as const };
   });
   return { text: value.text, images };

@@ -269,6 +269,8 @@ function SessionScreen({
   const [escapeWarning, setEscapeWarning] = useState<string | null>(null);
   const [composerKey, setComposerKey] = useState(0);
   const [composerText, setComposerText] = useState('');
+  /** Submitted inputs, oldest first, for shell-style up/down recall in the composer. */
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [largePasteContent, setLargePasteContent] = useState('');
   const [imageAttachments, setImageAttachments] = useState<ClipboardImage[]>([]);
   const [composerNotice, setComposerNotice] = useState<string | null>(null);
@@ -655,6 +657,7 @@ function SessionScreen({
       setLargePasteContent('');
       setImageAttachments([]);
       setComposerNotice(null);
+      if (text) setInputHistory((history) => (history[history.length - 1] === text ? history : [...history, text]));
       if (!text && attachedImages.length === 0) return;
 
       if (commandOnly && text === '/settings') {
@@ -1212,6 +1215,15 @@ function SessionScreen({
         setComposerNotice(`Copied ${copied.length} characters to the clipboard.`);
         return;
       }
+      // Shell habit: Ctrl+C clears what you were typing before it stops or exits.
+      if (composerText.length > 0 || largePasteContent.length > 0 || imageAttachments.length > 0) {
+        setComposerKey((key) => key + 1);
+        setComposerText('');
+        setLargePasteContent('');
+        setImageAttachments([]);
+        setComposerNotice(null);
+        return;
+      }
       if (parentController.isBusy) parentController.stop();
       exit();
     },
@@ -1302,9 +1314,10 @@ function SessionScreen({
         return;
       }
       // Plain Home/End belong to the composer caret (SessionComposer); the
-      // transcript only jumps on Ctrl+Home/End.
+      // transcript only jumps on Ctrl+Home/End. Arrow keys belong to the
+      // composer's history, so the transcript scrolls with PageUp/PageDown.
       const page = Math.max(1, Math.floor((layoutMetrics.viewportHeight || rows) / 2));
-      const delta = key.pageUp ? page : key.pageDown ? -page : key.upArrow ? 1 : key.downArrow ? -1 : 0;
+      const delta = key.pageUp ? page : key.pageDown ? -page : 0;
       if (delta !== 0) clearSelection();
       scrollBy(delta);
     },
@@ -1543,6 +1556,7 @@ function SessionScreen({
               disabled={popupOpen}
               placeholder="Type a message…"
               attachmentCount={imageAttachments.length}
+              history={inputHistory}
               onChange={handleComposerChange}
               onLargePaste={handleLargePaste}
               onPasteImage={(allowSystemFallback) => {
@@ -2455,6 +2469,7 @@ function SessionComposer({
   disabled,
   placeholder,
   attachmentCount,
+  history = [],
   onChange,
   onLargePaste,
   onPasteImage,
@@ -2465,6 +2480,8 @@ function SessionComposer({
   disabled: boolean;
   placeholder: string;
   attachmentCount: number;
+  /** Submitted inputs, oldest first, for up/down recall. */
+  history?: string[];
   onChange: (value: string) => void;
   onLargePaste: (value: string) => void;
   onPasteImage: (allowSystemFallback: boolean) => void;
@@ -2472,6 +2489,8 @@ function SessionComposer({
   onSubmit: (value: string) => void;
 }) {
   const [cursorOffset, setCursorOffset] = useState(value.length);
+  /** Position in `history` while recalling; -1 means "editing the live draft". */
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const insertText = useCallback(
     (text: string) => {
       const nextValue = value.slice(0, cursorOffset) + text + value.slice(cursorOffset);
@@ -2479,6 +2498,7 @@ function SessionComposer({
         onLargePaste(nextValue);
         return;
       }
+      setHistoryIndex(-1);
       setCursorOffset(cursorOffset + text.length);
       onChange(nextValue);
     },
@@ -2495,9 +2515,28 @@ function SessionComposer({
 
   useInput(
     (input, key) => {
-      if (disabled || key.upArrow || key.downArrow || key.tab || (key.shift && key.tab) || key.meta || key.super || key.hyper) return;
+      if (disabled || key.tab || (key.shift && key.tab) || key.meta || key.super || key.hyper) return;
+      // Up/down recall previously submitted inputs (shell history), before any
+      // other handling, so a bare arrow never reaches the transcript scroller.
+      if (key.upArrow || key.downArrow) {
+        if (history.length === 0) return;
+        const previous = key.upArrow;
+        const next = previous ? (historyIndex < 0 ? history.length - 1 : Math.max(0, historyIndex - 1)) : historyIndex + 1;
+        if (next < 0 || next >= history.length) {
+          setHistoryIndex(-1);
+          setCursorOffset(0);
+          onChange('');
+          return;
+        }
+        const recalled = history[next]!;
+        setHistoryIndex(next);
+        setCursorOffset(recalled.length);
+        onChange(recalled);
+        return;
+      }
       // Readline basics live here so they never reach the transcript scroller.
       if (key.ctrl && input.toLowerCase() === 'u') {
+        setHistoryIndex(-1);
         onChange('');
         setCursorOffset(0);
         return;
@@ -2533,6 +2572,7 @@ function SessionComposer({
         return;
       }
       if (key.backspace) {
+        setHistoryIndex(-1);
         const start = previousCharacterStart(value, cursorOffset);
         if (start !== cursorOffset) {
           onChange(value.slice(0, start) + value.slice(cursorOffset));
@@ -2543,6 +2583,7 @@ function SessionComposer({
         return;
       }
       if (key.delete) {
+        setHistoryIndex(-1);
         const codePoint = value.codePointAt(cursorOffset);
         const end = codePoint === undefined ? cursorOffset : cursorOffset + (codePoint > 0xffff ? 2 : 1);
         if (end !== cursorOffset) onChange(value.slice(0, cursorOffset) + value.slice(end));

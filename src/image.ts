@@ -99,6 +99,22 @@ export function imageTypeFromBytes(bytes: Buffer): ImageMediaType | null {
   return null;
 }
 
+/**
+ * The single authority for decoding an image that arrived as base64. It
+ * validates the decoded bytes, not the string: a payload is accepted only if it
+ * decodes to a real image of the requested type within the size cap. Incidental
+ * whitespace (line breaks from a base64 encoder) is harmless here, and a
+ * non-image is rejected by its magic bytes rather than by a character-class
+ * regex that could both reject valid input and accept garbage.
+ */
+export function decodeBase64Image(base64: string, mediaType: ImageMediaType, maxBytes: number): Buffer {
+  const bytes = Buffer.from(base64.replace(/\s+/g, ''), 'base64');
+  if (bytes.length === 0) throw new Error('An attached image is empty.');
+  if (bytes.length > maxBytes) throw new Error(`An attached image exceeded the ${Math.floor(maxBytes / (1024 * 1024))} MB limit.`);
+  if (imageTypeFromBytes(bytes) !== mediaType) throw new Error(`An attached image is not a valid ${mediaType}.`);
+  return bytes;
+}
+
 export function summarizeImageToolResult(value: unknown, imageInputSupported = true): string | null {
   const content = parseImageToolResult(value);
   if (!content) return null;

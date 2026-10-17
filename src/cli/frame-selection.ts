@@ -162,7 +162,10 @@ export class FrameSelectionTracker {
     const lines = plainFrameLines(chunk);
     this.rawFrame = chunk;
     this.lines = lines;
-    if (this.anchor && !this.dragging && this.finalizedLines && !sameLines(this.finalizedLines, lines)) this.clear();
+    // The selection is intentionally NOT cleared when the frame changes: during
+    // a streaming run the transcript repaints every frame, and clearing on each
+    // one made an active selection vanish mid-copy. The selection stays until
+    // the user clears it or starts a new drag.
     const selection = this.selection();
     return selection ? injectFrameSelection(chunk, selection) : chunk;
   }
@@ -176,12 +179,8 @@ export class FrameSelectionTracker {
 
   text(): string {
     const selection = this.selection();
-    return selection ? selectionCellText(this.lines, selection) : '';
+    // Copy the text as it was when the selection was finalized, so a repaint
+    // during a run cannot change what is copied out from under the user.
+    return selection ? selectionCellText(this.finalizedLines ?? this.lines, selection) : '';
   }
-}
-
-function sameLines(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index++) if (left[index] !== right[index]) return false;
-  return true;
 }
