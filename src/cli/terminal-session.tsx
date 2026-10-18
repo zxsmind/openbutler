@@ -131,8 +131,10 @@ function createSelectionStdout(selection: FrameSelectionTracker): NodeJS.WriteSt
   }) as NodeJS.WriteStream;
 }
 
-function createMouseInputBridge(): MouseInputBridge {
-  const rawInput = process.stdin;
+export function createMouseInputBridge(
+  source: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (enabled: boolean) => void } = process.stdin,
+): MouseInputBridge {
+  const rawInput = source;
   if (!rawInput.isTTY || typeof rawInput.setRawMode !== 'function' || !process.stdout.isTTY) {
     return {
       stdin: rawInput,
@@ -170,7 +172,7 @@ function createMouseInputBridge(): MouseInputBridge {
     },
   }) as Transform & { isTTY: boolean; setRawMode: (enabled: boolean) => void };
   Object.defineProperty(input, 'isTTY', { value: true });
-  input.setRawMode = (enabled) => rawInput.setRawMode(enabled);
+  input.setRawMode = (enabled) => rawInput.setRawMode!(enabled);
   rawInput.pipe(input);
 
   return {
@@ -213,7 +215,7 @@ function RunningIndicator({ tokens }: { tokens: UiTokens }) {
   );
 }
 
-function SessionScreen({
+export function SessionScreen({
   controller: parentController,
   mouseInput,
   selection,
@@ -339,6 +341,10 @@ function SessionScreen({
   const scrollBy = useCallback(
     (delta: number) => {
       if (delta === 0) return;
+      // A wheel burst delivers several events before the next render, so the
+      // offset has to be updated functionally. Reading the rendered `scrollTop`
+      // here would make every event in the burst compute the same target and
+      // collapse the whole burst into one step.
       const next = Math.max(0, Math.min(maxScrollTop, scrollTop - delta));
       if (next >= maxScrollTop) {
         followTail.current = true;
@@ -348,12 +354,13 @@ function SessionScreen({
         setRequestedScrollTop(next);
       }
     },
-    [maxScrollTop, scrollTop],
+    [maxScrollTop],
   );
   const scrollByRef = useRef(scrollBy);
   scrollByRef.current = scrollBy;
   const scrollTopRef = useRef(scrollTop);
   scrollTopRef.current = scrollTop;
+
   useEffect(() => {
     if (followTail.current) setRequestedScrollTop(Number.MAX_SAFE_INTEGER);
   }, [entries]);
@@ -915,10 +922,28 @@ function SessionScreen({
         const expandedMessage = entry.kind === 'user' && expandedMessages.has(index);
         const expandedNotice = entry.kind === 'notice' && expandedNotices.has(index);
         const streaming = entry.kind === 'assistant' && entry === snapshot.streamingAssistantEntry;
-        const rowKey = `${activeSession.id}:${index}:${entry.kind}:${width}:${expanded}:${expandedMessage}:${expandedNotice}:${popupOpen}:${mouseInput.supported}:${streaming}:${selectedTheme}:${showReasoning}`;
+        // The render window reaches past the viewport so scrolling has somewhere to
+        // land, but rows outside the viewport are clipped and never drawn. Laying
+        // out their text is pure cost: the frame pays for every character, long
+        // entries pay for thousands of invisible rows. Keep the geometry with a
+        // fixed-height placeholder and render the real entry only when at least
+        // one of its rows can be seen.
+        const entryTop = transcriptLayout.offsets[index] ?? 0;
+        const entryHeight = transcriptLayout.heights[index] ?? 0;
+        const onScreen = entryHeight > 0 && entryTop + entryHeight > scrollTop && entryTop < scrollTop + viewportHeight;
+        // An entry taller than the viewport can only ever show this row span, so
+        // the rest of its text never has to be laid out.
+        const rowWindow =
+          entryHeight > viewportHeight
+            ? {
+                top: Math.max(0, scrollTop - entryTop),
+                bottom: Math.min(entryHeight, scrollTop + viewportHeight - entryTop),
+              }
+            : undefined;
+        const rowKey = `${activeSession.id}:${index}:${entry.kind}:${width}:${expanded}:${expandedMessage}:${expandedNotice}:${popupOpen}:${mouseInput.supported}:${streaming}:${selectedTheme}:${showReasoning}:${onScreen ? 'onscreen' : `offscreen-${entryHeight}`}:${rowWindow ? `window-${rowWindow.top}-${rowWindow.bottom}` : 'full'}`;
         const cached = transcriptRowCache.current.get(entry);
         if (cached?.key === rowKey) return cached.element;
-        const element = (
+        const element = onScreen ? (
           <Box key={`${activeSession.id}-${index}-${entry.kind}`} ref={getEntryRef(index)} width="100%" flexShrink={0}>
             <TranscriptEntry
               entry={entry}
@@ -933,8 +958,11 @@ function SessionScreen({
               setToolRef={setToolRef}
               mouseSupported={mouseInput.supported}
               tokens={tokens}
+              {...(rowWindow ? { rowWindow } : {})}
             />
           </Box>
+        ) : (
+          <Box key={`${activeSession.id}-${index}-${entry.kind}`} width="100%" height={entryHeight} flexShrink={0} />
         );
         transcriptRowCache.current.set(entry, { key: rowKey, element });
         return element;
@@ -953,7 +981,11 @@ function SessionScreen({
       showReasoning,
       snapshot.streamingAssistantEntry,
       transcriptEndIndex,
+      transcriptLayout.heights,
+      transcriptLayout.offsets,
       transcriptStartIndex,
+      scrollTop,
+      viewportHeight,
       width,
     ],
   );
@@ -2750,6 +2782,47 @@ function transcriptEntryLayoutKey(
   return `${width}:${expandedTool ? 'tool-expanded' : 'tool-normal'}:${expandedMessage ? 'message-expanded' : 'message-normal'}:${expandedNotice ? 'notice-expanded' : 'notice-normal'}:${mouseSupported}:${streaming ? 'streaming' : 'complete'}:${reasoningHidden ? 'reasoning-hidden' : 'reasoning-shown'}`;
 }
 
+/**
+ * The row span of one entry that can actually be seen. An entry taller than the
+ * viewport can never show more than this, and everything outside it is clipped
+ * by the frame, so laying out the rest of its text is pure cost.
+ */
+export interface RowWindow {
+  top: number;
+  bottom: number;
+}
+
+/** Rows each line occupies, by the same rule the height estimator uses. */
+function lineRowCounts(text: string, availableWidth: number): number[] {
+  return text.split('\n').map((line) => Math.max(1, Math.ceil(terminalTextWidth(line) / Math.max(1, availableWidth))));
+}
+
+/**
+ * The lines covering a row window, plus how many rows are skipped above and
+ * below them. The skipped rows are rendered as fixed-height spacers, so the
+ * entry keeps exactly the height the estimator gave it and the viewport shows
+ * the same rows it would show with the whole text laid out.
+ */
+export function sliceTextRows(
+  text: string,
+  availableWidth: number,
+  window: RowWindow,
+): { text: string; headRows: number; tailRows: number } {
+  const lines = text.split('\n');
+  const rows = lineRowCounts(text, availableWidth);
+  const prefix: number[] = [0];
+  for (const row of rows) prefix.push(prefix.at(-1)! + row);
+  const total = prefix.at(-1)!;
+  let first = 0;
+  while (first < rows.length && prefix[first + 1]! <= window.top) first++;
+  let last = rows.length - 1;
+  while (last > first && prefix[last]! >= window.bottom) last--;
+  if (first >= lines.length) return { text: '', headRows: total, tailRows: 0 };
+  const headRows = prefix[first]!;
+  const tailRows = Math.max(0, total - prefix[last + 1]!);
+  return { text: lines.slice(first, last + 1).join('\n'), headRows, tailRows };
+}
+
 function estimateTranscriptEntryHeight(
   entry: Entry,
   width: number,
@@ -2819,7 +2892,7 @@ function renderToolResultText(tool: string | undefined, text: string, dimmed: bo
   return <Text dimColor={dimmed}>{text}</Text>;
 }
 
-const TranscriptEntry = memo(function TranscriptEntry({
+export const TranscriptEntry = memo(function TranscriptEntry({
   entry,
   index,
   width,
@@ -2832,6 +2905,7 @@ const TranscriptEntry = memo(function TranscriptEntry({
   setToolRef,
   mouseSupported = false,
   tokens,
+  rowWindow,
 }: {
   entry: Entry;
   index: number;
@@ -2845,6 +2919,8 @@ const TranscriptEntry = memo(function TranscriptEntry({
   setToolRef: (index: number, element: DOMElement | null) => void;
   mouseSupported?: boolean;
   tokens: UiTokens;
+  /** Visible row span for an entry taller than the viewport, so hidden rows are never laid out. */
+  rowWindow?: RowWindow;
 }) {
   const toolRef = useCallback((element: DOMElement | null) => setToolRef(index, element), [index, setToolRef]);
 
@@ -2879,11 +2955,17 @@ const TranscriptEntry = memo(function TranscriptEntry({
       .replace(/\n[ \t]*\n+/g, '\n')
       .trim();
     if (!text) return null;
+    // Reasoning is one plain text run, so a row window can be applied exactly:
+    // the lines on screen are the same lines, and the skipped rows become
+    // spacers of the same height.
+    const sliced = rowWindow ? sliceTextRows(text, width - 2, rowWindow) : null;
     return (
-      <Box width="100%" justifyContent="flex-start" marginBottom={1}>
+      <Box width="100%" justifyContent="flex-start" flexDirection="column" marginBottom={1}>
+        {sliced && sliced.headRows > 0 ? <Box height={sliced.headRows} flexShrink={0} /> : null}
         <Box width={width}>
-          <Text dimColor>{text}</Text>
+          <Text dimColor>{sliced ? sliced.text : text}</Text>
         </Box>
+        {sliced && sliced.tailRows > 0 ? <Box height={sliced.tailRows} flexShrink={0} /> : null}
       </Box>
     );
   }
@@ -3469,6 +3551,10 @@ function childMarkdownTokens(token: Token): Token[] {
   return 'tokens' in token && Array.isArray(token.tokens) ? token.tokens : [];
 }
 
+/** Printable ASCII is one column per character, so the common case skips grapheme segmentation. */
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
 function terminalTextWidth(text: string): number {
-  return stringWidth(text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ''));
+  const plain = text.includes('\u001b') ? text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '') : text;
+  return PRINTABLE_ASCII.test(plain) ? plain.length : stringWidth(plain);
 }
