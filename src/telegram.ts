@@ -642,10 +642,21 @@ function splitEscapedText(escaped: string, maxLength = 4096): string[] {
   // Reserve the longest escaped entity so moving a partial prefix cannot overflow the next chunk.
   const chunks = splitTelegramText(escaped, Math.max(2, maxLength - 5));
   for (let index = 0; index + 1 < chunks.length; index += 1) {
-    const partial = /&[a-zA-Z]+$/.exec(chunks[index]!);
+    // A bare `&` is partial too: escaped text only ever continues with an entity
+    // name, so leaving it behind would render the next chunk's `amp;` literally.
+    const partial = /&[a-zA-Z]*$/.exec(chunks[index]!);
     if (!partial) continue;
-    chunks[index] = chunks[index]!.slice(0, -partial[0].length);
-    chunks[index + 1] = `${partial[0]}${chunks[index + 1]!}`;
+    const remainder = chunks[index]!.slice(0, -partial[0].length);
+    if (remainder) {
+      chunks[index] = remainder;
+      chunks[index + 1] = `${partial[0]}${chunks[index + 1]!}`;
+      continue;
+    }
+    // The chunk holds nothing but the entity prefix, so it joins its continuation
+    // instead of being sent as an empty message.
+    chunks[index] = `${partial[0]}${chunks[index + 1]!}`;
+    chunks.splice(index + 1, 1);
+    index -= 1;
   }
   return chunks;
 }

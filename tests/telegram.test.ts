@@ -364,6 +364,24 @@ describe('Telegram native channel UI', () => {
     expect(String(api.sent[0]!.text).startsWith('<b>News</b>')).toBe(true);
   });
 
+  it('keeps an entity whole when the chunk boundary falls right after its ampersand', async () => {
+    const api = transport();
+    const hooks = callbacks();
+    adapter = new TelegramAdapter(config(true), ledger, hooks, api.fetcher);
+    await adapter.start();
+    // splitEscapedText cuts at 4091 characters for an empty heading, so index
+    // 4090 is the last character of the first chunk: put the `&` of `&amp;`
+    // exactly there and the chunk ends on a bare ampersand.
+    const body = `${'x'.repeat(4090)}&${'y'.repeat(100)}`;
+    await adapter.sendOwnerNotification('', body);
+    expect(api.sent.length).toBeGreaterThan(1);
+    const rendered = api.sent
+      .map((chunk) => String(chunk.text))
+      .map((text) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))
+      .join('');
+    expect(rendered).toBe(body);
+  });
+
   it('removes the reply keyboard on request', async () => {
     const api = transport();
     const hooks = callbacks();
