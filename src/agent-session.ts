@@ -199,7 +199,11 @@ export class AgentSessionController implements AgentSessionClient {
   private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string }> = [];
   private busy = false;
   private closed = false;
-  /** A compaction requested while a run was in flight; runs at the run's end. */
+  /**
+   * A compaction requested while a run was in flight. The run serves it at its
+   * next step boundary; the run's end is only the fallback for a request that
+   * arrives after the last step.
+   */
   private pendingCompaction: { preferences: AgentTurnPreferences; recovery: boolean; scopeRoot?: string } | null = null;
   private pendingApproval: ToolCallRequest | null = null;
   private pendingApprovalId: string | null = null;
@@ -1248,6 +1252,11 @@ export class AgentSessionController implements AgentSessionClient {
               compactBeforeStep: async (context) => {
                 this.currentReviewMessages = context.messages;
                 const recentContextGrowthTokens = this.contextGrowthThisTurn ?? growthBeforeRun;
+                // A compaction requested while this run was in flight is served
+                // here: the previous tool batch has settled and the next model
+                // request has not been sent yet, which is the safe boundary the
+                // request was waiting for.
+                const pendingCompaction = this.takePendingCompactionForStep();
                 try {
                   const compacted = await compactConversation({
                     ...context,
@@ -1258,6 +1267,16 @@ export class AgentSessionController implements AgentSessionClient {
                     ...(this.lastContextUsage !== undefined ? { previousContextTokens: this.lastContextUsage } : {}),
                     ...(this.lastContextEstimate !== undefined ? { previousContextEstimateTokens: this.lastContextEstimate } : {}),
                     ...(recentContextGrowthTokens !== undefined ? { recentContextGrowthTokens } : {}),
+                    ...(pendingCompaction
+                      ? {
+                          force: true,
+                          ...(pendingCompaction.recovery ? { recovery: true } : {}),
+                          providerOptions: this.runtime.getReasoningProviderOptions(
+                            pendingCompaction.preferences.reasoningVariantId,
+                            pendingCompaction.preferences.showReasoning,
+                          ),
+                        }
+                      : {}),
                     onStart: () => {
                       this.flushStreamedEntries();
                       this.addNotice('Compacting the complete model context…');
@@ -1495,26 +1514,51 @@ export class AgentSessionController implements AgentSessionClient {
       reportSessionActivity(this.session.id, false);
       if (this.activeRunAbort === abortController) this.activeRunAbort = null;
       this.publish();
-      // A compaction requested mid-run runs now, at the settled boundary, before
-      // any newly queued turn.
-      const pendingCompaction = this.pendingCompaction;
-      this.pendingCompaction = null;
-      if (!this.closed && pendingCompaction) {
-        void this.compact(pendingCompaction.preferences, pendingCompaction.recovery, pendingCompaction.scopeRoot);
-      } else if (!this.closed && !this.queueHold && this.queuedMessages.length > 0) {
-        void this.runQueuedMessages();
-      }
+      // A compaction that no step could serve runs now, before any newly
+      // queued turn. The deferred re-check covers a request that read
+      // `busy === true` just before this boundary cleared the flag: without it
+      // the queued request would sit until the end of the next run.
+      this.servePendingCompactionOrQueue();
+      queueMicrotask(() => this.servePendingCompactionOrQueue());
     }
+  }
+
+  /** Run the queued compaction, otherwise start the next queued turn. */
+  private servePendingCompactionOrQueue(): void {
+    if (this.closed || this.busy) return;
+    const pendingCompaction = this.pendingCompaction;
+    if (pendingCompaction) {
+      this.pendingCompaction = null;
+      void this.compact(pendingCompaction.preferences, pendingCompaction.recovery, pendingCompaction.scopeRoot);
+    } else if (!this.queueHold && this.queuedMessages.length > 0) {
+      void this.runQueuedMessages();
+    }
+  }
+
+  /**
+   * Take the queued compaction request when it can run inside the live run.
+   *
+   * A request carrying another workspace scope cannot be served here: changing
+   * the scope mid-run would move the active turn, so it stays queued for the
+   * run's end, where the scope is selected before compacting.
+   */
+  private takePendingCompactionForStep(): { preferences: AgentTurnPreferences; recovery: boolean } | null {
+    const pending = this.pendingCompaction;
+    if (!pending) return null;
+    if (pending.scopeRoot !== undefined && pending.scopeRoot !== this.runtime.workspaceRoot) return null;
+    this.pendingCompaction = null;
+    return { preferences: pending.preferences, recovery: pending.recovery };
   }
 
   async compact(preferences: AgentTurnPreferences, recovery = false, scopeRoot?: string): Promise<void> {
     if (this.closed) return;
     // Compaction rewrites the conversation, so it must not run while a turn is
-    // in flight. Instead of refusing, queue it: it runs at the end of the
-    // current run, after every tool result is in and the turn has settled.
+    // in flight. Instead of refusing, queue it: the run serves it at the next
+    // step boundary (after the pending tool batch, before the next model
+    // request) and falls back to the run's end when no step follows.
     if (this.busy) {
       this.pendingCompaction = { preferences, recovery, ...(scopeRoot === undefined ? {} : { scopeRoot }) };
-      this.addNotice('Compaction is queued and will run when the current run finishes.');
+      this.addNotice('Compaction is queued; it runs at the next step boundary or when the run finishes.');
       return;
     }
     if (scopeRoot !== undefined && this.runtime.selectWorkspaceRoot) await this.runtime.selectWorkspaceRoot(scopeRoot);

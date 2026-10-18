@@ -3131,8 +3131,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           const preferences = parsePreferences(request.preferences);
           if (request.recovery !== undefined && typeof request.recovery !== 'boolean') throw new Error('recovery must be a boolean.');
           // The controller owns deferral: a compact requested mid-run is queued
-          // and runs at the run's end, after every tool result. The scope is
-          // selected when it actually runs, so it is safe to request at any time.
+          // and served at the run's next step boundary, so the scope is
+          // selected when it actually runs; requesting at any time is safe.
           if (attachment.custodian && !workspace.runtime.selectWorkspaceRoot && attachment.scopeRoot !== workspace.runtime.workspaceRoot)
             throw new Error('The custodian runtime cannot change workspace scope.');
           const scopeRoot = attachment.custodian ? attachment.scopeRoot : undefined;

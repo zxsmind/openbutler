@@ -782,6 +782,113 @@ describe('session compaction persistence and continuation', () => {
     expect(session.getLastRunError()).toBeNull();
   });
 
+  it('serves a compaction requested mid-run at the next step boundary instead of after the whole run', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const { COMPACTION_PROMPT } = await import('../src/compaction.js');
+    const order: string[] = [];
+    let normalCalls = 0;
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async (request) => {
+        const last = request.prompt.at(-1);
+        if (last?.role === 'user' && last.content.some((part) => part.type === 'text' && part.text === COMPACTION_PROMPT)) {
+          order.push('compaction');
+          return fixtureText('Checkpoint: the fixture task continues.');
+        }
+        normalCalls++;
+        order.push(`step-${normalCalls}`);
+        if (normalCalls === 1)
+          return delayedStream(
+            [
+              { type: 'text-start', id: 'step-one' },
+              { type: 'text-delta', id: 'step-one', delta: 'Inspecting the workspace.' },
+              { type: 'text-end', id: 'step-one' },
+              { type: 'tool-input-start', id: 'inspect-1', toolName: 'inspect' },
+              { type: 'tool-input-end', id: 'inspect-1' },
+              { type: 'tool-call', toolCallId: 'inspect-1', toolName: 'inspect', input: '{}' },
+            ],
+            'tool-calls',
+          );
+        return fixtureText('Fixture task complete.');
+      },
+    });
+    const registry = new ToolRegistry();
+    let requested = false;
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'A local fixture tool',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => {
+        if (!requested) {
+          requested = true;
+          await session!.compact(preferences);
+        }
+        return { status: 'completed', detail: 'Fixture result' };
+      },
+    });
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
+    await session.sendMessage({ text: 'inspect the workspace', images: [] }, preferences);
+    // The compaction is requested while the run is in flight; wait for it so the
+    // assertion reports the real position instead of racing the run's teardown.
+    await vi.waitFor(() => expect(order).toContain('compaction'), { timeout: 2_000, interval: 20 });
+    expect(order).toEqual(['step-1', 'compaction', 'step-2']);
+  });
+
+  it('keeps a compaction for another workspace scope queued until the run finishes', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const { COMPACTION_PROMPT } = await import('../src/compaction.js');
+    const order: string[] = [];
+    let normalCalls = 0;
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async (request) => {
+        const last = request.prompt.at(-1);
+        if (last?.role === 'user' && last.content.some((part) => part.type === 'text' && part.text === COMPACTION_PROMPT)) {
+          order.push('compaction');
+          return fixtureText('Checkpoint: the fixture task continues.');
+        }
+        normalCalls++;
+        order.push(`step-${normalCalls}`);
+        if (normalCalls === 1)
+          return delayedStream(
+            [
+              { type: 'tool-input-start', id: 'inspect-1', toolName: 'inspect' },
+              { type: 'tool-input-end', id: 'inspect-1' },
+              { type: 'tool-call', toolCallId: 'inspect-1', toolName: 'inspect', input: '{}' },
+            ],
+            'tool-calls',
+          );
+        return fixtureText('Fixture task complete.');
+      },
+    });
+    const registry = new ToolRegistry();
+    let requested = false;
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'A local fixture tool',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => {
+        if (!requested) {
+          requested = true;
+          // Changing the scope mid-run would move the active turn, so this
+          // request may only run once the run has finished.
+          await session!.compact(preferences, false, join(tmpdir(), 'ranite-other-scope'));
+        }
+        return { status: 'completed', detail: 'Fixture result' };
+      },
+    });
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
+    await session.sendMessage({ text: 'inspect the workspace', images: [] }, preferences);
+    await vi.waitFor(() => expect(order).toContain('compaction'), { timeout: 2_000, interval: 20 });
+    expect(order).toEqual(['step-1', 'step-2', 'compaction']);
+  });
+
   it('shows compaction text and reasoning while streaming and commits the checkpoint only after completion', async () => {
     const { AgentSessionController } = await import('../src/agent-session.js');
     const { createSession, loadSavedSession } = await import('../src/session-store.js');
