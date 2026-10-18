@@ -2151,8 +2151,14 @@ function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
           ? '[Host context: inbox notification]'
           : '';
   const workspaceLabel = message.workspaceRoot ? `[Host context: active workspace ${message.workspaceRoot.replace(/[\r\n]/g, ' ')}]` : '';
+  // A Telegram turn has to be answered in Telegram: text kept in this session is
+  // invisible to the owner, which is an easy and completely silent mistake.
+  const deliveryHint =
+    source === 'telegram'
+      ? '[Host context: reply through send_message_to_owner; text written only in this session never reaches the owner]'
+      : '';
   if (message.text || sourceLabel || workspaceLabel)
-    content.push({ type: 'text', text: [sourceLabel, workspaceLabel, message.text].filter(Boolean).join('\n') });
+    content.push({ type: 'text', text: [sourceLabel, workspaceLabel, deliveryHint, message.text].filter(Boolean).join('\n') });
   if (message.attachments?.length) content.push({ type: 'text', text: attachmentReferences(message.attachments) });
   return { role: 'user', content, ...(message.eventId ? { providerOptions: { ranite: { queuedMessageId: message.eventId } } } : {}) };
 }

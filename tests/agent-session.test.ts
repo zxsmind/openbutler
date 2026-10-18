@@ -168,6 +168,7 @@ describe('owner replies and safe steering', () => {
       prompt.filter((message) => message.role === 'user' && JSON.stringify(message.content).includes('Do not delete, only read.')),
     ).toHaveLength(1);
     expect(JSON.stringify(prompt)).toContain('[Host context: owner message via Telegram]');
+    expect(JSON.stringify(prompt)).toContain('reply through send_message_to_owner');
     expect(JSON.stringify(prompt)).not.toContain('telegramAvailable');
     expect(session.takeEventRunResult('first')).toEqual({
       error: null,
