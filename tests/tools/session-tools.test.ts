@@ -193,6 +193,7 @@ describe('session_read', () => {
     expect(result.offset).toBe(2);
     expect(result.endOffset).toBe(3);
     expect(result.nextOffset).toBe(4);
+    expect(result.hasMore).toBe(true);
     expect(result.truncated).toBe(true);
     expect(result.entries).toEqual([
       { index: 2, kind: 'assistant', text: 'a1' },
