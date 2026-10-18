@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -80,7 +80,7 @@ function saveSession(options: { entries?: SessionEntry[]; workspace?: string; ti
 }
 
 function sessionPath(id: string): string {
-  return join(sessionsDir, `${id}.json`);
+  return join(sessionsDir, id, `${id}.json`);
 }
 
 function rewriteRaw(id: string, mutate: (session: Record<string, unknown>) => void): void {
@@ -229,6 +229,7 @@ describe('registry over saved session files', () => {
     const good = saveSession({});
     writeFileSync(join(sessionsDir, `${randomUUID()}.json`), '{ not json', 'utf8');
     const noUser = randomUUID();
+    mkdirSync(join(sessionsDir, noUser), { recursive: true });
     writeFileSync(
       sessionPath(noUser),
       `${JSON.stringify(

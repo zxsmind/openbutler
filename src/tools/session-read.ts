@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { getDataPath } from '../paths.js';
+import { savedSessionFilePath } from '../session-paths.js';
 import { resolveSessionReference } from '../session-registry.js';
 import { redactSensitiveText } from '../sensitive-data.js';
 import { loadSavedSession, type SessionEntry } from '../session-store.js';
@@ -98,7 +98,7 @@ export function createSessionReadTool(): ToolDefinition {
         session = loadSavedSession(resolution.session.id);
         if (session === null) return { status: 'error', error: 'The session file could not be loaded.' };
         sha256 = createHash('sha256')
-          .update(readFileSync(getDataPath(`sessions/${session.id}.json`)))
+          .update(readFileSync(savedSessionFilePath(session.id)))
           .digest('hex');
       } catch (error) {
         return {

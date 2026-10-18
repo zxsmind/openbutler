@@ -1,7 +1,10 @@
 /** Host-owned communication facts; channel adapters never choose agent identity. */
+import type { FileAttachment } from './attachments.js';
+// Legacy source tags remain readable in saved sessions. All new notifications use inbox.
+export const TURN_SOURCES = ['terminal', 'telegram', 'inbox', 'owner-inbox', 'schedule', 'background', 'team', 'worker'] as const;
 export type OwnerReplyRoute = { channel: 'terminal' } | { channel: 'telegram'; chatId: string };
 export type TurnCommunication = {
-  source: 'terminal' | 'telegram' | 'owner-inbox' | 'schedule' | 'background' | 'team';
+  source: (typeof TURN_SOURCES)[number];
   replyTo?: OwnerReplyRoute;
 };
 export type OwnerInboxMessage = {
@@ -9,6 +12,8 @@ export type OwnerInboxMessage = {
   source: 'telegram';
   receivedAt: string;
   text: string;
+  attachments?: FileAttachment[];
+  /** Legacy saved tool results only. New messages carry file references. */
   image?: { data: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; filename: string };
 };
 

@@ -68,7 +68,7 @@ function bigSession(title: string, filler: number): SavedSession {
 }
 
 function readRaw(id: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(join(sessionsDir, `${id}.json`), 'utf8')) as Record<string, unknown>;
+  return JSON.parse(readFileSync(join(sessionsDir, id, `${id}.json`), 'utf8')) as Record<string, unknown>;
 }
 
 describe('session listing reads a header instead of the whole file', () => {
@@ -107,7 +107,7 @@ describe('session listing reads a header instead of the whole file', () => {
 
   it('takes the header path for a file far larger than the header window', () => {
     const saved = store.saveSession(bigSession('Huge', 4_000_000));
-    expect(readFileSync(join(sessionsDir, `${saved.id}.json`)).length).toBeGreaterThan(8 * 1024);
+    expect(readFileSync(join(sessionsDir, saved.id, `${saved.id}.json`)).length).toBeGreaterThan(8 * 1024);
 
     const listed = store.listSavedSessions().find((entry) => entry.id === saved.id);
     expect(listed?.title).toBe('Huge');
@@ -116,7 +116,7 @@ describe('session listing reads a header instead of the whole file', () => {
 
   it('falls back to a full parse for a compact session written before the header fields existed', () => {
     const saved = store.saveSession(bigSession('Compact legacy', 2_000));
-    const path = join(sessionsDir, `${saved.id}.json`);
+    const path = join(sessionsDir, saved.id, `${saved.id}.json`);
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     delete parsed.hasUserMessage;
     delete parsed.preview;
@@ -144,7 +144,7 @@ describe('session listing reads a header instead of the whole file', () => {
 
   it('does not read the transcript of the sessions it lists', () => {
     const saved = store.saveSession(bigSession('No body read', 4_000_000));
-    const path = join(sessionsDir, `${saved.id}.json`);
+    const path = join(sessionsDir, saved.id, `${saved.id}.json`);
 
     readFileSyncSpy.mockClear();
     const listed = store.listSavedSessions();
@@ -155,7 +155,7 @@ describe('session listing reads a header instead of the whole file', () => {
 
   it('reads the whole file only for a session that needs the legacy fallback', () => {
     const saved = store.saveSession(bigSession('Needs fallback', 4_000_000));
-    const path = join(sessionsDir, `${saved.id}.json`);
+    const path = join(sessionsDir, saved.id, `${saved.id}.json`);
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     delete parsed.hasUserMessage;
     writeFileSync(path, JSON.stringify(parsed), 'utf8');

@@ -1,8 +1,31 @@
-﻿import { randomUUID } from 'node:crypto';
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { TURN_SOURCES } from './communication.js';
+import type { FileAttachment } from './attachments.js';
+import { randomUUID } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { resolve } from 'node:path';
 import type { ModelMessage } from 'ai';
-import { getDataPath } from './paths.js';
+import {
+  SESSION_ID,
+  sessionsDirectory,
+  sessionDirectory,
+  ensureSessionDirectory,
+  sessionFilePath,
+  savedSessionFilePath,
+  legacySessionFilePath,
+} from './session-paths.js';
+import { isWithinPhysicalDirectory } from './workspace-scope.js';
 import { appendTranscriptArchiveReference, repairQueuedMessageOrder, retireCoveredToolPreviews } from './conversation.js';
 
 export type NoticeTone = 'info' | 'warn' | 'error';
@@ -13,7 +36,7 @@ export type NoticeTone = 'info' | 'warn' | 'error';
  * one and forgotten in the other — the drift that once made every team-sourced
  * session unsavable.
  */
-export const USER_ENTRY_SOURCES = ['terminal', 'telegram', 'owner-inbox', 'schedule', 'background', 'team'] as const;
+export const USER_ENTRY_SOURCES = TURN_SOURCES;
 export type UserEntrySource = (typeof USER_ENTRY_SOURCES)[number];
 
 export type SessionEntry =
@@ -22,6 +45,7 @@ export type SessionEntry =
       text: string;
       workspaceRoot?: string;
       imageCount?: number;
+      attachments?: FileAttachment[];
       source?: UserEntrySource;
       eventId?: string;
     }
@@ -58,6 +82,8 @@ export interface SavedSession {
    * for those and they gain the fields the next time they are saved.
    */
   hasUserMessage?: boolean;
+  /** Owner stop/Esc policy survives host restarts; automatic events cannot release it. */
+  automaticWakeHeld?: boolean;
   preview?: string;
   /**
    * Denormalised cross-session context fields, written so the session registry and the
@@ -81,9 +107,6 @@ export interface SessionSummary {
   modelId: string;
   workspaceRoot?: string;
 }
-
-const SESSION_DIR = getDataPath('sessions');
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function createSession(providerId: string, modelId: string, contextWindowTokens?: number, workspaceRoot?: string): SavedSession {
   const now = new Date().toISOString();
@@ -113,44 +136,62 @@ export function sessionTitle(entries: readonly SessionEntry[]): string {
 export function listSessionFiles(): SessionFileInfo[] {
   let names: string[];
   try {
-    names = readdirSync(SESSION_DIR);
+    names = readdirSync(sessionsDirectory());
   } catch (error) {
     if (isMissingFile(error)) return [];
     throw error;
   }
-
-  const files: SessionFileInfo[] = [];
+  const candidates = new Map<string, string>();
   for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const id = name.slice(0, -5);
-    if (!SESSION_ID.test(id)) continue;
+    if (SESSION_ID.test(name)) {
+      try {
+        if (lstatSync(sessionDirectory(name)).isDirectory() && isWithinPhysicalDirectory(sessionDirectory(name), sessionsDirectory()))
+          candidates.set(name, sessionFilePath(name));
+      } catch {
+        /* A disappearing session directory is ignored. */
+      }
+    } else if (name.endsWith('.json') && SESSION_ID.test(name.slice(0, -5)) && !candidates.has(name.slice(0, -5))) {
+      const id = name.slice(0, -5);
+      candidates.set(id, savedSessionFilePath(id));
+    }
+  }
+  const files: SessionFileInfo[] = [];
+  for (const [id, candidate] of candidates) {
     try {
-      const details = statSync(join(SESSION_DIR, name));
-      if (!details.isFile()) continue;
-      files.push({ id, path: join(SESSION_DIR, name), modifiedAt: details.mtimeMs, sizeBytes: details.size });
+      let path = candidate;
+      try {
+        statSync(path);
+      } catch (error) {
+        if (!isMissingFile(error)) throw error;
+        path = legacySessionFilePath(id);
+      }
+      const details = statSync(path);
+      if (details.isFile() && !lstatSync(path).isSymbolicLink() && isWithinPhysicalDirectory(path, sessionsDirectory()))
+        files.push({ id, path, modifiedAt: details.mtimeMs, sizeBytes: details.size });
     } catch {
-      // A file that vanished or cannot be stat'ed is not a pruning candidate.
+      /* A partial or unreadable session cannot block the registry. */
     }
   }
   return files.sort((left, right) => left.modifiedAt - right.modifiedAt || left.id.localeCompare(right.id));
 }
 
-export function listSavedSessions(workspaceRoot?: string | null): SessionSummary[] {
-  let names: string[];
-  try {
-    names = readdirSync(SESSION_DIR);
-  } catch (error) {
-    if (isMissingFile(error)) return [];
-    throw error;
+/** Called only by explicit session pruning; the transcript and its files share one lifetime. */
+export function removeSavedSession(id: string): void {
+  const directory = sessionDirectory(id);
+  if (existsSync(directory)) {
+    if (lstatSync(directory).isSymbolicLink() || !isWithinPhysicalDirectory(directory, sessionsDirectory()))
+      throw new Error('Refusing to remove a session outside its storage root.');
+    rmSync(directory, { recursive: true, force: true });
   }
+  rmSync(legacySessionFilePath(id), { force: true });
+}
 
+export function listSavedSessions(workspaceRoot?: string | null): SessionSummary[] {
   const sessions: SessionSummary[] = [];
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const id = name.slice(0, -5);
-    if (!SESSION_ID.test(id)) continue;
+  for (const file of listSessionFiles()) {
+    const id = file.id;
     try {
-      const session = readSessionHeader(join(SESSION_DIR, name), id);
+      const session = readSessionHeader(file.path, id);
       if (!session || session.id !== id || !session.hasUserMessage) continue;
       if (workspaceRoot === null && session.workspaceRoot) continue;
       if (typeof workspaceRoot === 'string' && (!session.workspaceRoot || !samePath(session.workspaceRoot, workspaceRoot))) continue;
@@ -324,7 +365,10 @@ export function loadSavedSession(id: string, workspaceRoot?: string | null): Sav
   if (!SESSION_ID.test(id)) throw new Error('Invalid session id.');
   let text: string;
   try {
-    text = readFileSync(join(SESSION_DIR, `${id}.json`), 'utf8');
+    const path = savedSessionFilePath(id);
+    if (lstatSync(path).isSymbolicLink() || !isWithinPhysicalDirectory(path, sessionsDirectory()))
+      throw new Error('Invalid session storage path.');
+    text = readFileSync(path, 'utf8');
   } catch (error) {
     if (isMissingFile(error)) return null;
     throw error;
@@ -351,7 +395,7 @@ export function loadSavedSession(id: string, workspaceRoot?: string | null): Sav
     const checkpoint = restored.conversation[0];
     if (checkpoint?.role === 'assistant' && typeof checkpoint.content === 'string') {
       restored.conversation = [
-        { ...checkpoint, content: appendTranscriptArchiveReference(checkpoint.content, join(SESSION_DIR, session.id + '.json')) },
+        { ...checkpoint, content: appendTranscriptArchiveReference(checkpoint.content, savedSessionFilePath(session.id)) },
         ...restored.conversation.slice(1),
       ];
     }
@@ -362,9 +406,10 @@ export function loadSavedSession(id: string, workspaceRoot?: string | null): Sav
   return restored;
 }
 
-export function saveSession(session: SavedSession): SavedSession {
+export function saveSession(session: SavedSession, options: { allowEmpty?: boolean } = {}): SavedSession {
   if (!isSavedSession(session)) throw new Error('Cannot save an invalid session.');
-  if (!session.entries.some((entry) => entry.kind === 'user')) return session;
+  const hasUserMessage = session.entries.some((entry) => entry.kind === 'user');
+  if (!hasUserMessage && !options.allowEmpty) return session;
   // Built field by field rather than spread, because the listing reads a header from the front of
   // the file and needs `hasUserMessage` and `preview` to be serialised before `entries`. A spread
   // would append any key the incoming session does not already carry to the very end of the object,
@@ -382,7 +427,8 @@ export function saveSession(session: SavedSession): SavedSession {
     ...(session.contextEstimateTokens === undefined ? {} : { contextEstimateTokens: session.contextEstimateTokens }),
     ...(session.contextWindowTokens === undefined ? {} : { contextWindowTokens: session.contextWindowTokens }),
     ...(session.contextGrowthTokens === undefined ? {} : { contextGrowthTokens: session.contextGrowthTokens }),
-    hasUserMessage: true,
+    hasUserMessage,
+    ...(session.automaticWakeHeld === undefined ? {} : { automaticWakeHeld: session.automaticWakeHeld }),
     preview: sessionPreview(session.entries),
     firstUserMessage: firstUserMessageText(session.entries),
     lastAssistantMessage: lastAssistantMessageText(session.entries),
@@ -390,8 +436,8 @@ export function saveSession(session: SavedSession): SavedSession {
     conversation: session.conversation,
     ...(session.conversationArchive === undefined ? {} : { conversationArchive: session.conversationArchive }),
   };
-  mkdirSync(SESSION_DIR, { recursive: true });
-  const path = join(SESSION_DIR, `${session.id}.json`);
+  ensureSessionDirectory(session.id);
+  const path = sessionFilePath(session.id);
   const temporaryPath = `${path}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(saved, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   renameSync(temporaryPath, path);

@@ -6,7 +6,7 @@
  * interactive output stays animated.
  */
 import { parseArgs, questionFrom, type Parsed } from './cli/args.js';
-import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 import { getDaemonStatus, requestHost, restartDaemon, runDaemonProcess, startDaemon, stopDaemon } from './daemon.js';
@@ -1376,7 +1376,7 @@ async function runSessionsCommand(parsed: Parsed): Promise<void> {
   const olderThan = parsed.flags.get('older-than');
   if (!olderThan) throw new Error('Usage: ranite sessions prune --older-than <duration> [--yes]');
   const cutoff = Date.now() - parseRetentionDuration(olderThan);
-  const { listSessionFiles } = await import('./session-store.js');
+  const { listSessionFiles, removeSavedSession } = await import('./session-store.js');
   const files = selectFilesToPrune(listSessionFiles(), cutoff);
   if (files.length === 0) {
     ui.info(`No session files are older than ${olderThan}; nothing to prune.`);
@@ -1395,7 +1395,7 @@ async function runSessionsCommand(parsed: Parsed): Promise<void> {
   const removedIds: string[] = [];
   for (const file of files) {
     try {
-      rmSync(file.path, { force: true });
+      removeSavedSession(file.id);
       removed += 1;
       removedIds.push(file.id);
     } catch {

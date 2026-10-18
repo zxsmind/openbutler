@@ -102,7 +102,7 @@ function saveSession(options: { entries: SessionEntry[]; workspace?: string; tit
 }
 
 function sessionPath(id: string): string {
-  return join(root, 'sessions', `${id}.json`);
+  return join(root, 'sessions', id, `${id}.json`);
 }
 
 async function search(query: string, options: Partial<Omit<import('../src/session-index.js').SessionSearchOptions, 'query'>> = {}) {

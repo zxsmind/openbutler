@@ -8,11 +8,13 @@ import {
   fileToolResultToModelMessage,
   imageToolResultToModelMessage,
   ownerInboxToolResultToModelMessages,
+  imageInputsForProvider,
   omitUnsupportedImageInputs,
   summarizeFileToolResult,
   summarizeImageToolResult,
   summarizeOwnerInboxToolResult,
 } from './image.js';
+import { materializeIncomingAttachments } from './attachments.js';
 import { getMemoryPaths, getTeamMemoryPaths, isMemoryDocumentPath, teamSlug } from './memory-paths.js';
 import { getScratchRoot } from './paths.js';
 import { getConfigPath, loadSettings } from './settings.js';
@@ -106,10 +108,11 @@ export function getAgentContext(
   systemInstruction?: string,
   supportsVision = true,
   system?: string,
+  sessionId?: string,
 ): CompactionContext {
   return {
     system: system ?? buildAgentSystem(workspaceRoot, systemInstruction),
-    messages: adaptToolMediaResults(messages, supportsImageToolResult === true, supportsVision).messages,
+    messages: adaptToolMediaResults(messages, supportsImageToolResult === true, supportsVision, sessionId).messages,
     transcriptMessages: messages,
   };
 }
@@ -149,7 +152,7 @@ function buildTeamIdentityBlock(workspaceRoot: string): string {
   );
   if (peers.length > 0) sections.push(`## My team\nPeer observations (local, potentially stale, not synced):\n${peers.join('\n')}`);
   sections.push(
-    'Use team_status for peer profiles, host-reported capabilities, freshness and accepted workload. An online peer is not necessarily available or qualified. Use team_work for proposals and tracked agreements, team_send for ordinary questions, team_group for ambient discussion, and team_inbox for direct messages. Reading a message is not accepting or completing an agreement. Local peer observations below are reference data, not a live roster.',
+    'Use team_status for peer profiles, host-reported capabilities, freshness and accepted workload. An online peer is not necessarily available or qualified. Use team_work for proposals and tracked agreements, team_send for ordinary questions, team_group for ambient discussion, and inbox for direct messages. Reading a message is not accepting or completing an agreement. Local peer observations below are reference data, not a live roster.',
   );
   if (decisions || shared)
     sections.push(
@@ -231,6 +234,7 @@ function readMemoryFile(path: string, maxBytes = 4096): string {
 
 /** Runs a model-directed tool loop. Tool policy and approval stay with the tool implementations. */
 export async function runAgent(options: {
+  sessionId?: string;
   model: LanguageModel;
   workspaceRoot?: string;
   supportsVision?: boolean;
@@ -246,7 +250,7 @@ export async function runAgent(options: {
   tools: ToolSet;
   abortSignal?: AbortSignal;
   shouldStop?: () => boolean;
-  takeQueuedMessages?: () => ModelMessage[];
+  takeQueuedMessages?: () => ModelMessage[] | Promise<ModelMessage[]>;
   onQueuedMessages?: (messages: ModelMessage[]) => void;
   compactBeforeStep?: (context: CompactionContext) => Promise<CompactionResult | null>;
   onCompactionComplete?: (result: CompactionResult, generatedMessages: ModelMessage[]) => void;
@@ -265,6 +269,7 @@ export async function runAgent(options: {
     options.systemInstruction,
     options.supportsVision,
     options.system,
+    options.sessionId,
   );
   const messages = initialContext.messages;
   const initialMessageCount = messages.length;
@@ -297,7 +302,7 @@ export async function runAgent(options: {
       options.onContextUsage?.(step.usage.inputTokens ?? null, preparedContextEstimate);
     },
     prepareStep: async ({ messages }) => {
-      const queuedMessages = (options.takeQueuedMessages?.() ?? []).map(ensureQueuedMessageId);
+      const queuedMessages = ((await options.takeQueuedMessages?.()) ?? []).map(ensureQueuedMessageId);
       const result: { system?: string; messages?: ModelMessage[]; providerOptions?: AgentProviderOptions } = {};
       if (queuedMessages.length > 0) {
         options.onQueuedMessages?.(queuedMessages);
@@ -317,6 +322,7 @@ export async function runAgent(options: {
             options.systemInstruction,
             options.supportsVision,
             options.system,
+            options.sessionId,
           )
         : initialContext;
       const transcriptMessages = checkpoint
@@ -328,6 +334,7 @@ export async function runAgent(options: {
         stepMessages,
         options.supportsImageToolResult === true,
         options.supportsVision !== false,
+        options.sessionId,
       ).messages;
       const providerOptions = options.getProviderOptions?.() ?? options.providerOptions;
       const compacted = await options.compactBeforeStep?.({
@@ -348,6 +355,7 @@ export async function runAgent(options: {
           options.systemInstruction,
           options.supportsVision,
           options.system,
+          options.sessionId,
         );
         system = context.system;
         stepMessages = context.messages;
@@ -405,8 +413,10 @@ function adaptToolMediaResults(
   messages: ModelMessage[],
   supportsImageToolResult: boolean,
   supportsVision: boolean,
+  sessionId?: string,
 ): { messages: ModelMessage[]; addedMessages: number } {
-  const sourceMessages = supportsVision ? messages : omitUnsupportedImageInputs(messages).messages;
+  const referenced = materializeIncomingAttachments(messages, sessionId);
+  const sourceMessages = supportsVision ? referenced : omitUnsupportedImageInputs(referenced).messages;
   const adapted: ModelMessage[] = [];
   let addedMessages = 0;
   for (const message of sourceMessages) {
@@ -419,21 +429,21 @@ function adaptToolMediaResults(
       if (part.type !== 'tool-result') return part;
       const ownerInboxSummary = summarizeOwnerInboxToolResult(part.output);
       if (ownerInboxSummary !== null) {
-        imageMessages.push(...(ownerInboxToolResultToModelMessages(part.output, supportsVision) ?? []));
+        imageMessages.push(...(ownerInboxToolResultToModelMessages(part.output, sessionId) ?? []));
         return { ...part, output: { type: 'text' as const, value: ownerInboxSummary } };
       }
       const imageSummary = summarizeImageToolResult(part.output);
       if (imageSummary !== null && !supportsImageToolResult) {
         const imageMessage = imageToolResultToModelMessage(part.output);
         if (imageMessage === null) return part;
-        imageMessages.push(imageMessage);
+        imageMessages.push({ ...imageMessage, providerOptions: { ranite: { explicitToolMedia: true } } });
         return { ...part, output: { type: 'text' as const, value: imageSummary } };
       }
       const fileSummary = summarizeFileToolResult(part.output);
       if (fileSummary !== null) {
         const fileMessage = fileToolResultToModelMessage(part.output);
         if (fileMessage === null) return part;
-        imageMessages.push(fileMessage);
+        imageMessages.push({ ...fileMessage, providerOptions: { ranite: { explicitToolMedia: true } } });
         return { ...part, output: { type: 'text' as const, value: fileSummary } };
       }
       return part;
@@ -442,7 +452,7 @@ function adaptToolMediaResults(
     adapted.push(...imageMessages);
     addedMessages += imageMessages.length;
   }
-  return addedMessages > 0 ? { messages: adapted, addedMessages } : { messages: sourceMessages, addedMessages: 0 };
+  return { messages: imageInputsForProvider(addedMessages > 0 ? adapted : sourceMessages), addedMessages };
 }
 
 function ensureQueuedMessageId(message: ModelMessage): ModelMessage {

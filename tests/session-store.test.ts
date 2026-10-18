@@ -56,7 +56,7 @@ it('restores legacy queue ordering and checkpoint projection while keeping every
       contextTokens: 190_000,
       contextEstimateTokens: 140_000,
     });
-    const path = join(root, 'sessions', saved.id + '.json');
+    const path = join(root, 'sessions', saved.id, saved.id + '.json');
     const originalFile = readFileSync(path, 'utf8');
     const restored = loadSavedSession(saved.id)!;
     expect(restored.conversation).not.toContainEqual(preview('old'));

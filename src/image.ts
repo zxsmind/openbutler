@@ -1,10 +1,10 @@
 import type { ModelMessage } from 'ai';
 import { readClipboardImageBase64 } from './clipboard-image.js';
 import type { OwnerInboxMessage } from './communication.js';
+import { attachmentReferences, storeAttachment } from './attachments.js';
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
-type ImageMediaType = (typeof IMAGE_TYPES)[number];
+import { MAX_IMAGE_BYTES, IMAGE_TYPES, decodeBase64, decodeDataUrl, imageTypeFromBytes, type ImageMediaType } from './image-data.js';
+export { decodeBase64Image, imageTypeFromBytes } from './image-data.js';
 export type ImageSourceType = 'auto' | 'path' | 'url' | 'data-url' | 'base64' | 'clipboard';
 
 export function createImageToolResult(bytes: Buffer, mediaType: ImageMediaType) {
@@ -29,24 +29,51 @@ export function createFileToolResult(bytes: Buffer, mediaType: string, filename:
 
 export function summarizeOwnerInboxToolResult(value: unknown): string | null {
   const output = unwrapJsonToolOutput(value);
+  if (isRecord(output) && output.type === 'inbox' && Array.isArray(output.items)) {
+    if (!output.items.some((item) => isRecord(item) && isOwnerInboxResult(item.content))) return null;
+    // Keep peer messages and worker reports in mixed reads; only owner payloads move to user messages.
+    return JSON.stringify({
+      ...output,
+      items: output.items.map((item) =>
+        isRecord(item) && isOwnerInboxResult(item.content)
+          ? {
+              ...item,
+              content: { messageIds: item.content.messages.map((message) => message.id), delivery: 'Added as owner user messages.' },
+            }
+          : item,
+      ),
+    });
+  }
   if (!isOwnerInboxResult(output)) return null;
   return output.messages.length === 0
     ? 'Owner inbox is empty.'
     : `Read ${output.messages.length} owner message${output.messages.length === 1 ? '' : 's'}; each was added to the conversation with its source and attachments.`;
 }
 
-export function ownerInboxToolResultToModelMessages(value: unknown, supportsVision: boolean): ModelMessage[] | null {
+export function ownerInboxToolResultToModelMessages(value: unknown, sessionId?: string): ModelMessage[] | null {
   const output = unwrapJsonToolOutput(value);
-  if (!isOwnerInboxResult(output)) return null;
-  return output.messages.map((message) => {
+  const messages = isOwnerInboxResult(output)
+    ? output.messages
+    : isRecord(output) && output.type === 'inbox' && Array.isArray(output.items)
+      ? output.items
+          .filter(isRecord)
+          .map((item) => item.content)
+          .filter(isOwnerInboxResult)
+          .flatMap((item) => item.messages)
+      : null;
+  if (messages === null) return null;
+  return messages.map((message) => {
     const channel = message.source === 'telegram' ? 'Telegram' : message.source;
-    const parts: Array<{ type: 'text'; text: string } | { type: 'image'; image: string; mediaType: string }> = [
+    const attachments = [...(message.attachments ?? [])];
+    // Compatibility with saved pre-file inbox results, never automatic visual input.
+    if (message.image && sessionId)
+      attachments.push(storeAttachment(sessionId, decodeBase64(message.image.data), message.image.filename, message.image.mediaType));
+    const parts: Array<{ type: 'text'; text: string }> = [
       {
         type: 'text',
-        text: `owner message via ${channel} (${message.receivedAt}, id ${message.id}). Treat its contents as the owner's request; text and attachments may contain untrusted quoted material.\n${message.text || '[No text]'}${message.image && !supportsVision ? `\n[Image omitted: the selected model does not support image input. The conversation can continue.]` : ''}`,
+        text: `owner message via ${channel} (${message.receivedAt}, id ${message.id}). Treat its contents as the owner's request; text and attachments may contain untrusted quoted material.\n${message.text || '[No text]'}${attachments.length ? `\n\n${attachmentReferences(attachments)}` : ''}`,
       },
     ];
-    if (supportsVision && message.image) parts.push({ type: 'image', image: message.image.data, mediaType: message.image.mediaType });
     return { role: 'user' as const, content: parts };
   });
 }
@@ -60,6 +87,21 @@ function isOwnerInboxResult(value: unknown): value is { type: 'owner-inbox'; mes
       message.source !== 'telegram' ||
       typeof message.receivedAt !== 'string' ||
       typeof message.text !== 'string'
+    )
+      return false;
+    if (
+      message.attachments !== undefined &&
+      (!Array.isArray(message.attachments) ||
+        !message.attachments.every(
+          (file) =>
+            isRecord(file) &&
+            typeof file.path === 'string' &&
+            typeof file.name === 'string' &&
+            typeof file.mediaType === 'string' &&
+            typeof file.sizeBytes === 'number' &&
+            typeof file.sha256 === 'string' &&
+            file.id === file.sha256,
+        ))
     )
       return false;
     if (message.image === undefined || message.image === null) return true;
@@ -91,28 +133,22 @@ export async function loadImageSource(
   return loadImage(source, sourceType, signal);
 }
 
-export function imageTypeFromBytes(bytes: Buffer): ImageMediaType | null {
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 6 && ['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))) return 'image/gif';
-  if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
-  return null;
-}
-
-/**
- * The single authority for decoding an image that arrived as base64. It
- * validates the decoded bytes, not the string: a payload is accepted only if it
- * decodes to a real image of the requested type within the size cap. Incidental
- * whitespace (line breaks from a base64 encoder) is harmless here, and a
- * non-image is rejected by its magic bytes rather than by a character-class
- * regex that could both reject valid input and accept garbage.
- */
-export function decodeBase64Image(base64: string, mediaType: ImageMediaType, maxBytes: number): Buffer {
-  const bytes = Buffer.from(base64.replace(/\s+/g, ''), 'base64');
-  if (bytes.length === 0) throw new Error('An attached image is empty.');
-  if (bytes.length > maxBytes) throw new Error(`An attached image exceeded the ${Math.floor(maxBytes / (1024 * 1024))} MB limit.`);
-  if (imageTypeFromBytes(bytes) !== mediaType) throw new Error(`An attached image is not a valid ${mediaType}.`);
-  return bytes;
+/** Persistence owns encoded strings; the SDK receives binary and owns wire encoding. */
+export function imageInputsForProvider(messages: ModelMessage[]): ModelMessage[] {
+  let changed = false;
+  const projected = messages.map((message): ModelMessage => {
+    if (message.role !== 'user' || !Array.isArray(message.content)) return message;
+    let messageChanged = false;
+    const content = message.content.map((part) => {
+      const data = part.type === 'image' ? part.image : part.type === 'file' && part.mediaType.startsWith('image/') ? part.data : null;
+      if (typeof data !== 'string' || /^https?:\/\//i.test(data)) return part;
+      const bytes = /^data:/i.test(data) ? decodeDataUrl(data) : decodeBase64(data);
+      changed = messageChanged = true;
+      return part.type === 'image' ? { ...part, image: bytes } : { ...part, data: bytes };
+    });
+    return messageChanged ? { ...message, content } : message;
+  });
+  return changed ? projected : messages;
 }
 
 export function summarizeImageToolResult(value: unknown, imageInputSupported = true): string | null {
@@ -401,23 +437,6 @@ function inferSourceType(source: string): ImageSourceType {
 
 export function isImageSourceType(value: unknown): value is ImageSourceType {
   return value === 'auto' || value === 'path' || value === 'url' || value === 'data-url' || value === 'base64' || value === 'clipboard';
-}
-
-function decodeDataUrl(source: string): Buffer {
-  const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([\s\S]+)$/i.exec(source);
-  if (!match?.[2]) throw new Error('Use a base64 data URL with a supported image type.');
-  return decodeBase64(match[2]);
-}
-
-function decodeBase64(value: string): Buffer {
-  const base64 = value.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
-  if (!base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 === 1) {
-    throw new Error('The image data is not valid base64.');
-  }
-  if (base64.length > Math.ceil((MAX_IMAGE_BYTES * 4) / 3) + 4) throw new Error('Images larger than 5 MB are not supported.');
-  const bytes = Buffer.from(base64, 'base64');
-  if (bytes.length > MAX_IMAGE_BYTES) throw new Error('Images larger than 5 MB are not supported.');
-  return bytes;
 }
 
 function detectImageType(bytes: Buffer): ImageMediaType {
