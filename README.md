@@ -20,14 +20,14 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
 ```
 
-A specific release: `bash -s -- --version 0.4.1` for the shell installer, or
-download `install.ps1` first and run `.\install.ps1 -Version 0.4.1`.
+A specific release: `bash -s -- --version 0.4.2` for the shell installer, or
+download `install.ps1` first and run `.\install.ps1 -Version 0.4.2`.
 `--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
 Both installers verify the result with `ranite --version`; restart the
 terminal afterwards so the updated PATH takes effect.
 
-Published builds: Windows x64 today; Linux x64 and arm64 archives join the same
-release next, macOS follows in a later release.
+Published builds: Windows x64, Linux x64 and Linux arm64 in the same release;
+macOS follows in a later release.
 
 Configure a provider and model once:
 

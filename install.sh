@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
     --version)
       requested_version="${2:-}"
       if [ -z "$requested_version" ]; then
-        echo "Error: --version needs a value (e.g. --version 0.4.1)." >&2
+        echo "Error: --version needs a value (e.g. --version 0.4.2)." >&2
         exit 1
       fi
       shift 2
