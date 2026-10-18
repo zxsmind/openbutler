@@ -54,13 +54,14 @@ describe('team messaging over the hub', () => {
     expect(group.messages.map((message) => message.body)).toEqual(['two']);
   });
 
-  it('reads the group incrementally and advances the stored cursor', async () => {
+  it('keeps an unacknowledged group page available after a lost response', async () => {
     await postMessage(target, murphyTicket, { recipient: 'group', body: 'first' });
     const read = await readGroup(target, murphyTicket, 50);
     expect(read.messages.map((message) => message.body)).toEqual(['first']);
-    // A second read returns nothing new, proving the cursor advanced.
+    // Discarding the first response does not advance the hub cursor.
     const again = await readGroup(target, murphyTicket, 50);
-    expect(again.messages).toHaveLength(0);
+    expect(again.messages).toEqual(read.messages);
+    await setGroupCursor(target, murphyTicket, read.messages.at(-1)!.seq);
     await postMessage(target, murphyTicket, { recipient: 'group', body: 'second' });
     const third = await readGroup(target, murphyTicket, 50);
     expect(third.messages.map((message) => message.body)).toEqual(['second']);

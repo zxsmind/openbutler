@@ -1,3 +1,4 @@
+import { WORK_ACTIONS } from '../team/coordination.js';
 import type { JSONValue } from 'ai';
 import type { ToolDefinition } from './registry.js';
 
@@ -34,14 +35,14 @@ export function createTeamWorkTool(execute: PeerOperation): ToolDefinition {
     name: 'team_work',
     maxInputChars: 10000,
     description:
-      'Track a bounded agreement between team peers. Use team_send for a plain question or request that needs no tracking; use team_work when you need a durable record of who owns a piece of work and where it stands. Propose with a unique id, a peer, and terms (outcome, scope, constraints, expected evidence); reuse the same id and terms after an ambiguous network result. The assignee accepts or rejects; only the assignee reports complete or fail, and only the requester cancels. Either party may add a note. Every change after propose requires expectedRevision and a meaningful note. complete needs the result and verification evidence in the note. Changes notify the other party atomically; read the record before acting on a notification. list defaults to your open agreements; read retrieves one by id. Reading a message never accepts or completes work. An agreement never grants owner authorization or remote access.',
+      'Track a bounded agreement between team peers. Use team_send for a plain question or request that needs no tracking; use team_work when you need a durable record of who owns a piece of work and where it stands. Propose with a unique id, a peer, and terms (outcome, scope, constraints, expected evidence); reuse the same id and terms after an ambiguous network result. The other participant accepts, rejects, or counters pending terms. Counter requires full replacement terms and a reason; it is not acceptance. Only the assignee starts accepted work, blocks active work, resumes blocked work, or reports complete/fail. Only the requester cancels. Either party may add a note without changing terms. Every change after propose requires expectedRevision and a meaningful note. complete needs the result and verification evidence in the note. Changes notify the other party atomically; read the record before acting on a notification. list defaults to your open agreements; read retrieves one by id. Reading a message never accepts or completes work. An agreement never grants owner authorization or remote access.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'read', 'propose', 'accept', 'reject', 'complete', 'fail', 'cancel', 'note'],
+          enum: ['list', 'read', ...WORK_ACTIONS],
         },
         id: {
           type: 'string',
@@ -49,7 +50,12 @@ export function createTeamWorkTool(execute: PeerOperation): ToolDefinition {
           description: 'Stable unique work identifier, letters/digits/dashes/underscores. Required except for list.',
         },
         peer: { type: 'string', description: 'Proposed assignee; required for propose.' },
-        terms: { type: 'string', maxLength: 4000, description: 'Complete proposal, required for propose.' },
+        terms: {
+          type: 'string',
+          maxLength: 4000,
+          description:
+            'Complete proposed or replacement terms; required for propose and counter. The other party must explicitly accept replacement terms.',
+        },
         expectedRevision: { type: 'integer', minimum: 1, description: 'Revision read before a change, except propose.' },
         note: {
           type: 'string',

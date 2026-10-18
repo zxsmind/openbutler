@@ -16,8 +16,21 @@ export interface PeerCapabilities {
   observedAt: number;
 }
 
-export type WorkState = 'proposed' | 'accepted' | 'completed' | 'failed' | 'rejected' | 'cancelled';
-export type WorkAction = 'propose' | 'accept' | 'reject' | 'complete' | 'fail' | 'cancel' | 'note';
+export type WorkState = 'proposed' | 'countered' | 'accepted' | 'working' | 'blocked' | 'completed' | 'failed' | 'rejected' | 'cancelled';
+export const WORK_ACTIONS = [
+  'propose',
+  'counter',
+  'accept',
+  'reject',
+  'start',
+  'block',
+  'resume',
+  'complete',
+  'fail',
+  'cancel',
+  'note',
+] as const;
+export type WorkAction = (typeof WORK_ACTIONS)[number];
 
 export interface PeerWork {
   id: string;
@@ -25,6 +38,8 @@ export interface PeerWork {
   assignee: string;
   originalTerms: string;
   terms: string;
+  /** Older records without this field contain the requester's original proposal. */
+  termsAuthor?: string;
   state: WorkState;
   revision: number;
   createdAt: number;
@@ -36,6 +51,7 @@ export interface PeerWork {
 }
 
 export const TERMINAL_WORK_STATES: readonly WorkState[] = ['completed', 'rejected', 'cancelled', 'failed'];
+export const ACTIVE_WORK_STATES: readonly WorkState[] = ['accepted', 'working', 'blocked'];
 
 function text(value: unknown, field: string, max = 4000): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max)
@@ -133,6 +149,7 @@ export class TeamCoordination {
         assignee,
         originalTerms: terms,
         terms,
+        termsAuthor: actor,
         state: 'proposed',
         revision: 1,
         createdAt: now,
@@ -149,28 +166,53 @@ export class TeamCoordination {
       throw new TeamError('No accessible peer work with this id.', 404);
     if (input.action === 'read') return current;
     const action = input.action;
-    const allowed: WorkAction[] = ['accept', 'reject', 'complete', 'fail', 'cancel', 'note'];
+    const allowed = WORK_ACTIONS.filter((item) => item !== 'propose') as readonly string[];
     if (!allowed.includes(action as WorkAction)) throw new TeamError('Unknown peer work action.', 400);
     const expected = revision(input.expectedRevision);
     const note = text(input.note, 'note');
-    if (current.revision === expected + 1 && current.lastActor === actor && current.lastAction === action && current.lastNote === note)
+    const replacement = action === 'counter' ? text(input.terms, 'terms') : undefined;
+    if (
+      current.revision === expected + 1 &&
+      current.lastActor === actor &&
+      current.lastAction === action &&
+      current.lastNote === note &&
+      (replacement === undefined || current.terms === replacement)
+    )
       return current;
     if (current.revision !== expected) throw new TeamError('Work changed. Read its current state before acting.', 409);
     if (TERMINAL_WORK_STATES.includes(current.state)) throw new TeamError('This work is closed. Propose new work instead.', 409);
     const assigned = current.assignee === actor;
+    const offerAuthor = current.termsAuthor ?? current.requester;
+    const pendingOffer = current.state === 'proposed' || current.state === 'countered';
     let state = current.state;
     switch (action) {
+      case 'counter':
+        if (!pendingOffer || actor === offerAuthor) throw new TeamError('Only the other participant may counter pending terms.', 409);
+        state = 'countered';
+        break;
       case 'accept':
       case 'reject':
         // Only the assignee answers a fresh proposal; the requester cannot
         // accept its own offer.
-        if (!assigned || state !== 'proposed') throw new TeamError('Only the assignee may answer a fresh proposal.', 409);
+        if (!pendingOffer || actor === offerAuthor) throw new TeamError('Only the other participant may answer pending terms.', 409);
         state = action === 'accept' ? 'accepted' : 'rejected';
         break;
       case 'complete':
       case 'fail':
-        if (!assigned || state !== 'accepted') throw new TeamError('Only the assignee may report an accepted agreement.', 409);
+        if (!assigned || !ACTIVE_WORK_STATES.includes(state))
+          throw new TeamError('Only the assignee may report an accepted agreement.', 409);
         state = action === 'complete' ? 'completed' : 'failed';
+        break;
+      case 'start':
+      case 'resume':
+        if (!assigned || state !== (action === 'start' ? 'accepted' : 'blocked'))
+          throw new TeamError('Only the assignee may start accepted work or resume blocked work.', 409);
+        state = 'working';
+        break;
+      case 'block':
+        if (!assigned || (state !== 'accepted' && state !== 'working'))
+          throw new TeamError('Only the assignee may block active work.', 409);
+        state = 'blocked';
         break;
       case 'cancel':
         if (assigned) throw new TeamError('Only the requester may cancel; report a failure if you cannot continue.', 403);
@@ -181,6 +223,7 @@ export class TeamCoordination {
     }
     const next: PeerWork = {
       ...current,
+      ...(replacement === undefined ? {} : { terms: replacement, termsAuthor: actor }),
       state,
       revision: current.revision + 1,
       updatedAt: Date.now(),

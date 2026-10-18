@@ -1,23 +1,16 @@
+import { TEAM_PRESENCE_WINDOW_MS } from './contracts.js';
 import * as client from './client.js';
+import type { TeamMessage, TeamMemoryEntry, TeamMemberView } from './contracts.js';
+export type { TeamMessage, TeamMemoryEntry, TeamMemberView } from './contracts.js';
 import { makeFileId } from './service.js';
 import { TeamOperations } from './operations.js';
-import { copyFileSync, mkdirSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { createReadStream } from 'node:fs';
-import { basename, dirname } from 'node:path';
-import { ensureFilesDir, fileExists, filePath, hashFile } from './files.js';
+import { basename } from 'node:path';
+import { fileExists, filePath, hashFile, storeFileBytes, writeVerifiedFile } from './files.js';
 import type { TeamStore } from './store.js';
 import type { JoinTarget } from './tailnet.js';
-import { TeamCoordination, type PeerProfile, type PeerCapabilities } from './coordination.js';
-
-export interface TeamMessage {
-  seq: number;
-  msgId: string;
-  sender: string;
-  recipient: string;
-  body: string;
-  createdAt: number;
-  replyTo: string | null;
-}
+import { TeamCoordination, type PeerCapabilities } from './coordination.js';
 
 export interface SendResult {
   msgId: string;
@@ -28,27 +21,6 @@ export interface SendResult {
 
 export type TeamMemoryTopic = 'decisions' | 'shared';
 
-export interface TeamMemoryEntry {
-  seq: number;
-  topic: TeamMemoryTopic;
-  author: string;
-  body: string;
-  createdAt: number;
-}
-
-export interface TeamMemberView {
-  name: string;
-  role: string;
-  online: boolean;
-  lastSeen: number;
-  lastMessageAt: number | null;
-  lastMessageTo: string | null;
-  lastMemoryAt: number | null;
-  profile?: PeerProfile | null;
-  capabilities?: PeerCapabilities | null;
-  activeWorkCount?: number;
-}
-
 export interface TeamStatusView {
   team: string;
   you: string;
@@ -58,17 +30,25 @@ export interface TeamStatusView {
   members: TeamMemberView[];
 }
 
+/** One immutable membership and transport selection for the entire operation. */
+export interface TeamConnection {
+  readonly key: string;
+  readonly teamId: string;
+  readonly channel: TeamChannel;
+  isCurrent(): boolean;
+  close(): void;
+}
+
 /** A member counts as online when it has polled within this window (poll is 1s). */
-const PRESENCE_WINDOW_MS = 15_000;
 
 /**
  * Reads the whole shared-memory log, paging until caught up. A single call is
  * capped, so a team with more than one page of entries must loop or the mirror
  * silently loses the tail; this is the one place that loops.
  */
-export async function readAllTeamMemory(channel: TeamChannel): Promise<{ entries: TeamMemoryEntry[]; latestSeq: number }> {
+export async function readAllTeamMemory(channel: TeamChannel, sinceSeq = 0): Promise<{ entries: TeamMemoryEntry[]; latestSeq: number }> {
   const entries: TeamMemoryEntry[] = [];
-  let since = 0;
+  let since = sinceSeq;
   let latestSeq = 0;
   for (;;) {
     const page = await channel.memory(since);
@@ -94,12 +74,16 @@ export interface TeamChannel {
   group(since: number): Promise<{ latestSeq: number; messages: TeamMessage[] }>;
   groupCursor(): number;
   setGroupCursor(seq: number): Promise<void>;
-  /** Read new group messages after this member's cursor, advancing it. */
+  /** Read without advancing; setGroupCursor acknowledges the handled page explicitly. */
   groupRead(limit: number): Promise<{ messages: TeamMessage[]; cursor: number; latestSeq: number }>;
   /** Page older messages from the group or a DM conversation, newest first. */
   history(query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }): Promise<{ messages: TeamMessage[] }>;
   /** Send a local file to a member or the group. No approval; receiving needs it. */
-  sendFile(input: { recipient: string; path: string }): Promise<{ id: string; seq: number }>;
+  sendFile(input: {
+    recipient: string;
+    path: string;
+    transfer?: { id: string; name: string; size: number; sha256: string };
+  }): Promise<{ id: string; seq: number }>;
   /** Download a shared file to a local path, verifying its hash. */
   receiveFile(input: { id: string; to: string }): Promise<{ path: string; name: string; size: number }>;
   /** Files this member can receive (addressed to them or the group). */
@@ -107,7 +91,7 @@ export interface TeamChannel {
   /** Team roster with presence and last activity. */
   status(): Promise<TeamStatusView>;
   inbox(): Promise<{ count: number; messages: TeamMessage[] }>;
-  /** Read unread DMs and consume them in one step (reading is handled). */
+  /** Read pending DMs without acknowledging them. */
   readInbox(limit: number): Promise<{ count: number; messages: TeamMessage[]; remaining: number }>;
   ack(msgIds: readonly string[]): Promise<{ acknowledged: number; remaining: number }>;
   memory(since: number): Promise<{ latestSeq: number; entries: TeamMemoryEntry[] }>;
@@ -146,13 +130,10 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
       return store.getGroupCursor(memberName);
     },
     async setGroupCursor(seq) {
-      store.setGroupCursor(memberName, seq);
+      operations.acknowledgeGroup(memberName, seq);
     },
     async groupRead(limit) {
-      const cursor = store.getGroupCursor(memberName);
-      const messages = store.groupMessages(cursor, limit);
-      if (messages.length > 0) store.setGroupCursor(memberName, messages.at(-1)!.seq);
-      return { messages, cursor: store.getGroupCursor(memberName), latestSeq: store.groupLatestSeq() };
+      return operations.readGroup(memberName, limit);
     },
     async history(query) {
       const before = query.before ?? 0;
@@ -165,25 +146,27 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
     async sendFile(input) {
       const info = statSync(input.path);
       if (!info.isFile()) throw new Error(`${input.path} is not a file.`);
-      const sha256 = await hashFile(input.path);
-      const id = makeFileId();
-      ensureFilesDir();
-      copyFileSync(input.path, filePath(id));
-      const message = operations.registerFile(memberName, {
+      const file = operations.prepareFile(memberName, {
         recipient: input.recipient,
-        name: basename(input.path),
-        size: info.size,
-        sha256,
-        fileId: id,
+        name: input.transfer?.name ?? basename(input.path),
+        size: input.transfer?.size ?? info.size,
+        sha256: input.transfer?.sha256 ?? (await hashFile(input.path)),
+        fileId: input.transfer?.id ?? makeFileId(),
       });
-      return { id, seq: message.seq };
+      await storeFileBytes(createReadStream(input.path), file.id, file);
+      const message = operations.registerFile(memberName, {
+        recipient: file.recipient,
+        name: file.name,
+        size: file.size,
+        sha256: file.sha256,
+        fileId: file.id,
+      });
+      return { id: file.id, seq: message.seq };
     },
     async receiveFile(input) {
-      const file = store.getFile(input.id);
-      if (!file) throw new Error(`No such file: ${input.id}`);
+      const file = operations.fileForMember(memberName, input.id);
       if (!fileExists(file.id)) throw new Error(`The bytes for ${file.name} are no longer on the hub.`);
-      mkdirSync(dirname(input.to), { recursive: true });
-      copyFileSync(filePath(file.id), input.to);
+      await writeVerifiedFile(createReadStream(filePath(file.id)), input.to, file);
       return { path: input.to, name: file.name, size: file.size };
     },
     async listFiles() {
@@ -196,7 +179,7 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
         memberCount: store.listMembers().length,
         groupCursor: store.getGroupCursor(memberName),
         groupLatestSeq: store.groupLatestSeq(),
-        members: store.memberSummaries(Date.now(), PRESENCE_WINDOW_MS),
+        members: store.memberSummaries(Date.now(), TEAM_PRESENCE_WINDOW_MS),
       };
     },
     async inbox() {
@@ -204,13 +187,7 @@ export function localChannel(store: TeamStore, memberName: string): TeamChannel 
     },
     async readInbox(limit) {
       const messages = store.unreadDms(memberName, limit);
-      if (messages.length > 0)
-        store.ackDms(
-          memberName,
-          messages.map((message) => message.msgId),
-          Date.now(),
-        );
-      return { count: messages.length, messages, remaining: store.unreadDmCount(memberName) };
+      return { count: messages.length, messages, remaining: Math.max(0, store.unreadDmCount(memberName) - messages.length) };
     },
     async ack(msgIds) {
       const acknowledged = store.ackDms(memberName, msgIds, Date.now());
@@ -262,12 +239,12 @@ export function remoteChannel(target: JoinTarget, ticket: string, memberName: st
     async sendFile(input) {
       const info = statSync(input.path);
       if (!info.isFile()) throw new Error(`${input.path} is not a file.`);
-      const sha256 = await hashFile(input.path);
       return client.uploadFile(target, ticket, {
         recipient: input.recipient,
-        name: basename(input.path),
-        size: info.size,
-        sha256,
+        name: input.transfer?.name ?? basename(input.path),
+        size: input.transfer?.size ?? info.size,
+        sha256: input.transfer?.sha256 ?? (await hashFile(input.path)),
+        id: input.transfer?.id ?? makeFileId(),
         source: createReadStream(input.path),
       });
     },

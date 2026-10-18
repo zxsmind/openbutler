@@ -325,7 +325,7 @@ describe('full-context LLM compaction', () => {
     const deltas: string[] = [];
     const onStart = vi.fn();
     const result = await compactConversation({
-      ...getAgentContext(original),
+      ...getAgentContext(original, undefined, dataDir, undefined, true, undefined, '11111111-1111-4111-8111-111111111111'),
       model,
       tools: { inspect: tool({ description: 'Inspect context', inputSchema: schema, execute }) },
       contextWindowTokens: 250_000,
@@ -351,8 +351,11 @@ describe('full-context LLM compaction', () => {
     }
     expect(request.prompt.at(-1)).toEqual({ role: 'user', content: [{ type: 'text', text: COMPACTION_PROMPT }] });
     expect(request.prompt.find((message) => message.role === 'user')!.content).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: 'file', mediaType: 'image/png' })]),
+      expect.arrayContaining([expect.objectContaining({ type: 'text', text: expect.stringContaining('[image#1=') })]),
     );
+    expect(
+      request.prompt.some((message) => typeof message.content !== 'string' && message.content.some((part) => part.type === 'file')),
+    ).toBe(false);
     expect(request.toolChoice).toEqual({ type: 'auto' });
     expect(request.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'inspect' })]));
     expect(execute).not.toHaveBeenCalled();

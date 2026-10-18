@@ -1,7 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Readable } from 'node:stream';
+import { filePath } from '../src/team/files.js';
 import { downloadFile, listFiles, uploadFile } from '../src/team/client.js';
 import { TeamOperations, TeamError } from '../src/team/operations.js';
 import { startTeamServer, type StartedTeamServer } from '../src/team/server.js';
@@ -32,6 +34,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await server?.close();
   server = null;
   store.close();
@@ -106,5 +109,48 @@ describe('file transfer over the hub', () => {
     const to = join(dataDir, 'received.txt');
     await member.receiveFile({ id: sent.id, to });
     expect(readFileSync(to, 'utf8')).toBe('hello from the hub');
+  });
+});
+
+describe('file delivery invariants', () => {
+  it('reuses the same transfer id without duplicating metadata or notifications', async () => {
+    const bytes = Buffer.from('same report bytes');
+    const sha256 = (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
+    const input = { id: 'f_1234567890abcdef', recipient: 'Atreus-Ranite', name: 'report.md', size: bytes.length, sha256 };
+    const first = await uploadFile(target, murphyTicket, { ...input, source: Readable.from(bytes) });
+    const retry = await uploadFile(target, murphyTicket, { ...input, source: Readable.from(bytes) });
+    expect(retry).toEqual(first);
+    expect(store.filesForMember('Atreus-Ranite')).toHaveLength(1);
+    expect(store.unreadDmCount('Atreus-Ranite')).toBe(1);
+    await expect(uploadFile(target, murphyTicket, { ...input, name: 'different-intent.md', source: Readable.from(bytes) })).rejects.toThrow(
+      'different file',
+    );
+    expect(readFileSync(filePath(input.id))).toEqual(bytes);
+  });
+
+  it('verifies local hub receives and preserves an existing destination when hub bytes are corrupt', async () => {
+    const source = join(dataDir, 'source.txt');
+    const destination = join(dataDir, 'destination.txt');
+    writeFileSync(source, 'original');
+    writeFileSync(destination, 'keep this file');
+    const hub = localChannel(store, 'Atreus-Ranite');
+    const sent = await hub.sendFile({ recipient: 'group', path: source });
+    writeFileSync(filePath(sent.id), 'tampered');
+    await expect(hub.receiveFile({ id: sent.id, to: destination })).rejects.toThrow('sha256');
+    expect(readFileSync(destination, 'utf8')).toBe('keep this file');
+  });
+
+  it('binds upload cancellation to the complete network operation', async () => {
+    const abort = AbortSignal.abort(new DOMException('deadline', 'TimeoutError'));
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(abort);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/v1/status'))
+        return new Response(JSON.stringify({ protocol: 'ranite-team/2', team: 'Proof', you: 'Self', members: [] }));
+      expect(init?.signal).toBe(abort);
+      throw abort.reason;
+    });
+    await expect(
+      uploadFile(target, murphyTicket, { recipient: 'group', name: 'x', size: 0, sha256: 'a'.repeat(64), source: Readable.from([]) }),
+    ).rejects.toThrow('did not complete');
   });
 });

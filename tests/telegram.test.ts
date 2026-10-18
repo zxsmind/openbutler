@@ -20,17 +20,19 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function transport(webhook = '') {
+function transport(webhook = '', imageBytes?: Buffer) {
   let waiting: ((updates: unknown[]) => void) | null = null;
   const queued: unknown[][] = [];
   const sent: Array<Record<string, unknown>> = [];
   let messageId = 0;
   const fetcher = vi.fn(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(url).includes('/file/bot') && imageBytes) return new Response(new Uint8Array(imageBytes));
     const method = String(url).split('/').at(-1)!;
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
     let result: unknown = true;
     if (method === 'getMe') result = { is_bot: true, username: 'fixture_bot' };
     if (method === 'getWebhookInfo') result = { url: webhook };
+    if (method === 'getFile' && imageBytes) result = { file_path: 'photos/owner-image.png', file_size: imageBytes.length };
     if (method === 'sendMessage') {
       sent.push(body);
       result = { message_id: ++messageId };
@@ -84,6 +86,44 @@ const message = (id: number, chatId: number, text: string) => ({
 });
 
 describe('owner Telegram authentication and replay protection', () => {
+  it.each(['photo', 'document'])('accepts an owner %s image and never downloads an unauthenticated attachment', async (kind) => {
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6C9sAAAAASUVORK5CYII=', 'base64');
+    const api = transport('', bytes);
+    const hooks = callbacks();
+    adapter = new TelegramAdapter(config(true), ledger, hooks, api.fetcher);
+    await adapter.start();
+    const payload =
+      kind === 'photo'
+        ? { photo: [{ file_id: 'owner-photo' }] }
+        : { document: { file_id: 'owner-document', file_name: 'reference.png', mime_type: 'image/png' } };
+    api.emit([
+      {
+        update_id: 1,
+        message: { chat: { id: 200, type: 'private' }, from: { id: 200, is_bot: false }, caption: 'Private image', ...payload },
+      },
+    ]);
+    const offsetKey = `telegram:offset:${createHash('sha256').update(TOKEN).digest('hex').slice(0, 24)}`;
+    await vi.waitFor(() => expect(ledger.getState(offsetKey)).toBe('2'));
+    expect(api.calls.mock.calls.some(([url]) => String(url).endsWith('getFile'))).toBe(false);
+    expect(hooks.message).not.toHaveBeenCalled();
+    api.emit([
+      {
+        update_id: 2,
+        message: {
+          chat: { id: 100, type: 'private' },
+          from: { id: 100, is_bot: false },
+          caption: '[image#1] Can we use this?',
+          ...payload,
+        },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(hooks.message).toHaveBeenCalledWith(2, '[image#1] Can we use this?', {
+        image: { bytes, filename: kind === 'document' ? 'reference.png' : 'telegram-image.png', mediaType: 'image/png' },
+      }),
+    );
+  });
+
   it('does not expose the token when a transport error includes its request URL', async () => {
     adapter = new TelegramAdapter(config(true), ledger, callbacks(), async () => {
       throw new Error(`Failed URL https://api.telegram.org/bot${TOKEN}/getMe`);

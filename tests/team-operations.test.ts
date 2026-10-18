@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeamOperations, TeamError } from '../src/team/operations.js';
 import { hashTicket, makeTicket, validateMemberName } from '../src/team/service.js';
 import { TeamStore } from '../src/team/store.js';
@@ -106,5 +106,33 @@ describe('reading and replying close a direct message', () => {
     // Replying to a group id is a no-op for the inbox (ackDms only touches own DMs).
     operations.postMessage('Murphy-Ranite', { recipient: 'group', body: 'ack', replyTo: group.message.msgId });
     expect(store.unreadDmCount('Murphy-Ranite')).toBe(0);
+  });
+});
+
+describe('atomic reply handling', () => {
+  it('rolls a reply back if its inbox acknowledgement fails, and a retry completes both', () => {
+    const incoming = operations.postMessage('Atreus-Ranite', { recipient: 'Murphy-Ranite', body: 'request' });
+    if (incoming.duplicate) throw new Error('unexpected duplicate');
+    const input = { recipient: 'Atreus-Ranite', body: 'answer', msgId: 'atomic-reply', replyTo: incoming.message.msgId };
+    const failure = vi.spyOn(store, 'ackDms').mockImplementationOnce(() => {
+      throw new Error('injected ack failure');
+    });
+    expect(() => operations.postMessage('Murphy-Ranite', input)).toThrow('injected ack failure');
+    expect(store.hasMessage('atomic-reply')).toBe(false);
+    expect(store.unreadDmCount('Murphy-Ranite')).toBe(1);
+    failure.mockRestore();
+    operations.postMessage('Murphy-Ranite', input);
+    expect(store.hasMessage('atomic-reply')).toBe(true);
+    expect(store.unreadDmCount('Murphy-Ranite')).toBe(0);
+  });
+
+  it('repairs an old split reply/ack on an identical retry and rejects conflicting identity reuse', () => {
+    const incoming = operations.postMessage('Atreus-Ranite', { recipient: 'Murphy-Ranite', body: 'request' });
+    if (incoming.duplicate) throw new Error('unexpected duplicate');
+    const input = { recipient: 'Atreus-Ranite', body: 'answer', msgId: 'old-reply', replyTo: incoming.message.msgId };
+    store.postMessage({ ...input, sender: 'Murphy-Ranite', createdAt: Date.now() });
+    expect(operations.postMessage('Murphy-Ranite', input).duplicate).toBe(true);
+    expect(store.unreadDmCount('Murphy-Ranite')).toBe(0);
+    expect(() => operations.postMessage('Murphy-Ranite', { ...input, body: 'different intent' })).toThrow('different operation');
   });
 });

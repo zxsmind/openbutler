@@ -1,7 +1,9 @@
+import type { TeamMessage, TeamMemoryEntry } from './contracts.js';
+export type { TeamMessage, TeamMemoryEntry } from './contracts.js';
 import { chmodSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { getDataPath } from '../paths.js';
-import { TERMINAL_WORK_STATES, type PeerProfile, type PeerCapabilities, type PeerWork } from './coordination.js';
+import { TERMINAL_WORK_STATES, ACTIVE_WORK_STATES, type PeerProfile, type PeerCapabilities, type PeerWork } from './coordination.js';
 
 const TEAM_SCHEMA = `
 CREATE TABLE IF NOT EXISTS team_meta (
@@ -117,18 +119,6 @@ export interface TeamInvite {
 
 export type JoinStatus = 'pending' | 'approved' | 'denied';
 
-export interface TeamMessage {
-  seq: number;
-  msgId: string;
-  sender: string;
-  recipient: string;
-  kind: string;
-  body: string;
-  fileId: string | null;
-  createdAt: number;
-  replyTo: string | null;
-}
-
 export interface TeamFile {
   id: string;
   name: string;
@@ -149,14 +139,6 @@ export interface JoinRequest {
 }
 
 export type TeamMemoryTopic = 'decisions' | 'shared';
-
-export interface TeamMemoryEntry {
-  seq: number;
-  topic: TeamMemoryTopic;
-  author: string;
-  body: string;
-  createdAt: number;
-}
 
 export interface TeamAuditEntry {
   seq: number;
@@ -206,6 +188,39 @@ export class TeamStore {
 
   close(): void {
     this.database.close();
+  }
+
+  /** Domain owners define the unit of work; persistence guarantees its atomicity. */
+  transaction<T>(operation: () => T): T {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const result = operation();
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  getMessage(msgId: string): TeamMessage | null {
+    return (
+      (this.database
+        .prepare(
+          'SELECT seq, msg_id AS msgId, sender, recipient, kind, body, file_id AS fileId, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE msg_id = ?',
+        )
+        .get(msgId) as unknown as TeamMessage | undefined) ?? null
+    );
+  }
+
+  fileMessage(fileId: string): TeamMessage | null {
+    return (
+      (this.database
+        .prepare(
+          'SELECT seq, msg_id AS msgId, sender, recipient, kind, body, file_id AS fileId, created_at AS createdAt, reply_to AS replyTo FROM team_messages WHERE file_id = ? ORDER BY seq LIMIT 1',
+        )
+        .get(fileId) as unknown as TeamMessage | undefined) ?? null
+    );
   }
 
   getMeta(key: string): string | null {
@@ -258,10 +273,10 @@ export class TeamStore {
 
   /** Work the member has accepted but not yet closed: the active load. */
   activePeerWorkCount(member: string): number {
-    const terminal = TERMINAL_WORK_STATES.map(() => '?').join(', ');
+    const active = ACTIVE_WORK_STATES.map(() => '?').join(', ');
     const row = this.database
-      .prepare(`SELECT COUNT(*) AS count FROM team_work WHERE assignee = ? AND state = 'accepted' AND state NOT IN (${terminal})`)
-      .get(member, ...TERMINAL_WORK_STATES) as { count: number };
+      .prepare(`SELECT COUNT(*) AS count FROM team_work WHERE assignee = ? AND state IN (${active})`)
+      .get(member, ...ACTIVE_WORK_STATES) as { count: number };
     return row.count;
   }
 

@@ -65,7 +65,7 @@ function saveSession(options: { entries: SessionEntry[]; workspace?: string; tit
 }
 
 function sessionPath(id: string): string {
-  return join(sessionsDir, `${id}.json`);
+  return join(sessionsDir, id, `${id}.json`);
 }
 
 async function run(tool: ToolDefinition, input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -361,7 +361,7 @@ describe('session_read', () => {
 
   it('returns an empty transcript for a saved file with no display entries', async () => {
     const id = randomUUID();
-    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(join(sessionsDir, id), { recursive: true });
     writeFileSync(
       sessionPath(id),
       `${JSON.stringify(

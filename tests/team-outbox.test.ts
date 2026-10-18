@@ -40,13 +40,12 @@ describe('team outbox', () => {
     expect(outbox.list('t_a').map((entry) => entry.body)).toEqual(['B']);
   });
 
-  it('drops the oldest entries past the cap', () => {
+  it('refuses new work at capacity without losing previously accepted deliveries', () => {
     const outbox = new TeamOutbox(path);
-    for (let index = 0; index < TEAM_OUTBOX_LIMIT + 5; index++) outbox.enqueue({ teamId: 't_a', recipient: 'group', body: `msg ${index}` });
-    const entries = outbox.list('t_a');
-    expect(entries).toHaveLength(TEAM_OUTBOX_LIMIT);
-    expect(entries[0]?.body).toBe('msg 5');
-    expect(entries.at(-1)?.body).toBe(`msg ${TEAM_OUTBOX_LIMIT + 4}`);
+    for (let index = 0; index < TEAM_OUTBOX_LIMIT; index++) outbox.enqueue({ teamId: 't_a', recipient: 'group', body: `msg ${index}` });
+    expect(() => outbox.enqueue({ teamId: 't_a', recipient: 'group', body: 'overflow' })).toThrow('full');
+    expect(new TeamOutbox(path).list('t_a')).toHaveLength(TEAM_OUTBOX_LIMIT);
+    expect(outbox.list('t_a')[0]?.body).toBe('msg 0');
   });
 
   it('keeps teams separate so a message never lands in the wrong team', () => {

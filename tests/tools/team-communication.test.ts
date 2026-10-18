@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createTeamGroupTool,
   createTeamHistoryTool,
-  createTeamInboxTool,
   createTeamSendTool,
   createTeamStatusTool,
 } from '../../src/tools/team-communication.js';
@@ -24,19 +23,6 @@ describe('team_send tool', () => {
     const result = (await tool.execute!({ text: '   ' })) as { status: string };
     expect(result.status).toBe('invalid');
     expect(send).not.toHaveBeenCalled();
-  });
-});
-
-describe('team_inbox tool', () => {
-  it('reads and consumes with a limit, and validates the limit', async () => {
-    const inbox = vi.fn(async () => ({ status: 'ok', count: 0, messages: [] }));
-    const tool = createTeamInboxTool(inbox);
-    await tool.execute!({ limit: 5 });
-    expect(inbox).toHaveBeenCalledWith(5);
-
-    const bad = (await tool.execute!({ limit: 999 })) as { status: string };
-    expect(bad.status).toBe('invalid');
-    expect(inbox).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -194,8 +194,8 @@ export class TelegramAdapter {
     const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
     const mediaType = imageTypeFromBytes(bytes);
     if (!mediaType) throw new Error('Telegram attachment is not a supported PNG, JPEG, GIF, or WebP image.');
-    const extension = mediaType === 'image/jpeg' ? '.jpg' : mediaType.slice('image/'.length);
-    return { bytes, mediaType, filename: `telegram-image${extension}` };
+    const extension = mediaType === 'image/jpeg' ? 'jpg' : mediaType.slice('image/'.length);
+    return { bytes, mediaType, filename: `telegram-image.${extension}` };
   }
 
   beginLiveDraft(onStop: () => void): number | null {
@@ -421,13 +421,26 @@ export class TelegramAdapter {
       } else {
         const photos = Array.isArray(message.photo) ? message.photo.filter(isRecord) : [];
         const photo = photos.at(-1);
-        const imageFileId = photo && typeof photo.file_id === 'string' ? photo.file_id : null;
+        const document = isRecord(message.document) ? message.document : null;
+        const imageDocument =
+          document &&
+          ((typeof document.mime_type === 'string' && document.mime_type.startsWith('image/')) ||
+            (typeof document.file_name === 'string' && /\.(?:png|jpe?g|gif|webp)$/i.test(document.file_name)))
+            ? document
+            : null;
+        const imageFileId =
+          photo && typeof photo.file_id === 'string'
+            ? photo.file_id
+            : imageDocument && typeof imageDocument.file_id === 'string'
+              ? imageDocument.file_id
+              : null;
         const body = text || (typeof message.caption === 'string' ? message.caption : '');
         if (imageFileId || body.trim()) {
           if (!imageFileId) await this.callbacks.message(updateId, body);
           else {
             try {
               const image = await this.downloadOwnerImage(imageFileId);
+              if (imageDocument && typeof imageDocument.file_name === 'string') image.filename = imageDocument.file_name;
               await this.callbacks.message(updateId, body, { image });
             } catch (error) {
               await this.callbacks.message(updateId, body, { attachmentError: errorText(error) });

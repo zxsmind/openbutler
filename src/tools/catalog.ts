@@ -1,3 +1,5 @@
+import type { InboxRequest } from '../inbox.js';
+import type { ParentMessageInput } from '../worker-records.js';
 import type { MemoryIndex } from '../memory-index.js';
 import { createScheduleTool } from './schedule.js';
 import { createExecuteCommandTool } from './execute-command.js';
@@ -13,21 +15,21 @@ import { createSessionListTool } from './session-list.js';
 import { createSessionMessageTool } from './session-message.js';
 import { createSessionReadTool } from './session-read.js';
 import { createSessionSearchTool } from './session-search.js';
-import { createSubagentPollTool } from './subagent-poll.js';
+import { createInboxTool } from './inbox.js';
 import { createSubagentStopTool } from './subagent-stop.js';
 import { createSubagentTool, type SubagentRequest } from './subagent.js';
 import type { ToolDefinition } from './registry.js';
-import { createReadOwnerMessagesTool, createSendMessageToOwnerTool } from './owner-communication.js';
+import { createSendMessageToOwnerTool } from './owner-communication.js';
 import { createTeamProfileTool, createTeamWorkTool } from './team-coordination.js';
 import {
   createTeamFilesTool,
   createTeamGroupTool,
   createTeamHistoryTool,
-  createTeamInboxTool,
   createTeamReceiveFileTool,
   createTeamRememberTool,
   createTeamSendFileTool,
   createTeamSendTool,
+  createTeamDeliveryTool,
   createTeamStatusTool,
 } from './team-communication.js';
 
@@ -39,11 +41,11 @@ export interface ToolCatalogueOptions {
   /** Rebuilds the registry after an MCP connection change. */
   onMcpConnectionsChanged: () => void;
   backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string, senderSessionId: string | undefined) => Promise<unknown>;
+  inbox?: (request: InboxRequest, sessionId: string | undefined) => Promise<unknown>;
   ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
-  ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamDelivery?: (input: Record<string, unknown>) => Promise<unknown>;
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
-  teamInbox?: (limit: number) => Promise<unknown>;
-  teamGroup?: (limit: number) => Promise<unknown>;
+  teamGroup?: (limit: number, acknowledge?: number) => Promise<unknown>;
   teamHistory?: (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
   teamSendFile?: (input: { path: string; to: string }) => Promise<unknown>;
@@ -54,8 +56,7 @@ export interface ToolCatalogueOptions {
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
-  parentMessage?: (input: { text: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
-  subagentPoll?: (input: { session: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
+  parentMessage?: (input: ParentMessageInput, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagentStop?: (input: { session: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
 }
 
@@ -89,15 +90,10 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     createSessionSearchTool(options.workspaceRoot),
     createSessionReadTool(),
     createSendMessageToOwnerTool(options.workspaceRoot, options.ownerMessageSend ?? unavailable('send_message_to_owner')),
-    createReadOwnerMessagesTool(
-      options.ownerInboxRead ??
-        (async () => ({ status: 'unavailable' as const, error: 'read_owner_messages is not available in this session.' })),
-    ),
+    createInboxTool(options.inbox ?? unavailable('inbox')),
     createSessionMessageTool(options.sessionMessage ?? (async () => ({ status: 'unavailable' as const }))),
+    createTeamDeliveryTool(options.teamDelivery ?? (async () => ({ status: 'unavailable', error: 'Team delivery is not available.' }))),
     createTeamSendTool(options.teamSend ?? unavailable('team_send')),
-    createTeamInboxTool(
-      options.teamInbox ?? (async () => ({ status: 'unavailable' as const, error: 'team_inbox is not available in this session.' })),
-    ),
     createTeamGroupTool(options.teamGroup ?? unavailable('team_group')),
     createTeamHistoryTool(options.teamHistory ?? unavailable('team_history')),
     createTeamStatusTool(options.teamStatus ?? unavailable('team_status')),
@@ -111,7 +107,6 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     ),
     createSubagentTool(options.subagent ?? (async () => ({ status: 'unavailable' as const }))),
     createParentMessageTool(options.parentMessage ?? (async () => ({ status: 'unavailable' as const }))),
-    createSubagentPollTool(options.subagentPoll ?? (async () => ({ status: 'unavailable' as const }))),
     createSubagentStopTool(options.subagentStop ?? (async () => ({ status: 'unavailable' as const }))),
     createScheduleTool(
       options.workspaceRoot,

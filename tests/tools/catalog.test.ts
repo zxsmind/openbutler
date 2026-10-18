@@ -41,9 +41,8 @@ const ALWAYS_OFFERED = [
   'session_search',
   'session_read',
   'send_message_to_owner',
-  'read_owner_messages',
+  'inbox',
   'team_send',
-  'team_inbox',
   'team_group',
   'team_history',
   'team_status',
@@ -54,7 +53,6 @@ const ALWAYS_OFFERED = [
   'session_message',
   'subagent',
   'parent_message',
-  'subagent_poll',
   'subagent_stop',
   'mcp_manage',
   'schedule',
@@ -64,6 +62,7 @@ describe('tool catalogue', () => {
   it('offers every host tool to every session, even with no host handlers', () => {
     const names = catalogueNames();
     for (const name of ALWAYS_OFFERED) expect(names).toContain(name);
+    for (const retired of ['read_owner_messages', 'team_inbox', 'subagent_poll']) expect(names).not.toContain(retired);
   });
 
   it('answers unavailable instead of vanishing when a handler is absent', async () => {

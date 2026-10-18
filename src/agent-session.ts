@@ -1,3 +1,4 @@
+import { sessionFilePath } from './session-paths.js';
 import type { JSONValue, LanguageModel, ModelMessage } from 'ai';
 import type { CompactionResult } from './compaction.js';
 import type { ToolActionUpdate } from './activity-ledger.js';
@@ -23,9 +24,10 @@ import { ToolInputPreview } from './tool-preview.js';
 import { redactSensitive, redactSensitiveText } from './sensitive-data.js';
 import { DEFAULT_SESSION_LIST_LIMIT } from './tools/session-list.js';
 import { reportSessionActivity } from './session-registry.js';
-import { getDataPath } from './paths.js';
 import { sameReplyRoute, type TurnCommunication } from './communication.js';
 import { isUnsupportedImageInputError, omitUnsupportedImageInputs } from './image.js';
+import { attachmentReferences, storeAttachment, type FileAttachment } from './attachments.js';
+import { decodeBase64Image, MAX_IMAGE_BYTES } from './image-data.js';
 
 export type AgentProviderOptions = Record<string, Record<string, JSONValue>>;
 export type ApprovalDecision = 'allow' | 'deny' | 'always';
@@ -37,8 +39,13 @@ export type AgentTurnProgress =
 export type AgentEventOutput = { kind: 'assistant'; text: string };
 export type QueuedMessage = {
   text: string;
+  /** Legacy terminal wire input. Materialized to files before queue admission. */
   images: Array<{ base64: string; mediaType: 'image/png' }>;
+  /** Host-owned file references, never accepted from IPC callers. */
+  attachments?: FileAttachment[];
   eventId?: string;
+  /** Host-only refresh at queue admission; null withdraws a stale notification. */
+  beforeDelivery?: () => Promise<string | null>;
   /** Authenticated host facts, never accepted from client message payloads. */
   communication?: TurnCommunication;
   /** Host-only progress sink for transports that display a live turn. */
@@ -105,15 +112,18 @@ export interface AgentTurnPreferences {
 }
 
 type QueuedTurn = {
+  automatic: boolean;
   message: QueuedMessage;
   preferences: AgentTurnPreferences;
   resolve: () => void;
   reject: (error: unknown) => void;
 };
 
-export type AgentEventRunResult = { error: string | null; outputs: AgentEventOutput[]; replyHandledByEventId?: string };
+export type AgentEventRunResult = { error: string | null; outputs: AgentEventOutput[]; replyHandledByEventId?: string; skipped?: boolean };
 
 export interface AgentSessionOptions {
+  onAutomaticWakeReady?: () => void;
+  onSessionSaved?: (session: SavedSession) => void;
   /** Background-policy run: no interactive question channel and no tool-level self-approval. */
   background?: boolean;
   systemInstruction?: string;
@@ -256,6 +266,9 @@ export class AgentSessionController implements AgentSessionClient {
   get isBusy(): boolean {
     return this.busy;
   }
+  get automaticWakeHeld(): boolean {
+    return this.session.automaticWakeHeld === true;
+  }
   getLastRunError(): string | null {
     return this.runError;
   }
@@ -276,7 +289,7 @@ export class AgentSessionController implements AgentSessionClient {
   };
 
   private makeSnapshot(): AgentSessionSnapshot {
-    const queuedMessages = this.queuedMessages.map((turn) => ({ text: turn.message.text, imageCount: turn.message.images.length }));
+    const queuedMessages = this.queuedMessages.map((turn) => ({ text: turn.message.text, imageCount: messageImageCount(turn.message) }));
     const first = queuedMessages[0] ?? null;
     const { conversation, conversationArchive, ...session } = this.session;
     void conversation;
@@ -325,11 +338,12 @@ export class AgentSessionController implements AgentSessionClient {
     };
   }
 
-  private persistLatest(): void {
+  private persistLatest(allowEmpty = false): void {
     const latest = this.latestSessionSnapshot;
-    if (!latest || !latest.entries.some((entry) => entry.kind === 'user')) return;
+    if (!latest || (!allowEmpty && !latest.entries.some((entry) => entry.kind === 'user'))) return;
     try {
-      this.session = saveSession(latest);
+      this.session = saveSession(latest, { allowEmpty });
+      this.options.onSessionSaved?.(this.session);
       this.sessionSaveError = null;
     } catch (error) {
       this.sessionSaveError = error instanceof Error ? error.message : String(error);
@@ -337,11 +351,11 @@ export class AgentSessionController implements AgentSessionClient {
     this.publish(false);
   }
 
-  flushSave(): void {
+  flushSave(options: { allowEmpty?: boolean } = {}): void {
     if (this.sessionSaveTimer !== null) clearTimeout(this.sessionSaveTimer);
     this.sessionSaveTimer = null;
     this.latestSessionSnapshot = this.persistableSession();
-    this.persistLatest();
+    this.persistLatest(options.allowEmpty === true);
   }
 
   addEntry(entry: SessionEntry): void {
@@ -504,7 +518,8 @@ export class AgentSessionController implements AgentSessionClient {
    * their own (the TUI's Esc semantics). The hold is released by the next
    * explicit send, which runs the held messages together with the new one.
    */
-  stop(options: { keepQueue?: boolean; holdQueue?: boolean } = {}): void {
+  stop(options: { keepQueue?: boolean; holdQueue?: boolean; preserveWakePolicy?: boolean } = {}): void {
+    if (!options.preserveWakePolicy) this.session = { ...this.session, automaticWakeHeld: true };
     if (options.holdQueue === true) {
       this.queueHold = true;
     } else if (options.keepQueue !== true) {
@@ -523,7 +538,7 @@ export class AgentSessionController implements AgentSessionClient {
 
   private async closeSession(): Promise<void> {
     this.closed = true;
-    this.stop();
+    this.stop({ preserveWakePolicy: true });
     this.flushStreamedEntries();
     this.flushSave();
     await this.waitUntilIdle(CLOSE_IDLE_TIMEOUT_MS);
@@ -1007,33 +1022,83 @@ export class AgentSessionController implements AgentSessionClient {
       kind: 'user',
       text: message.text,
       ...(message.workspaceRoot ? { workspaceRoot: message.workspaceRoot } : {}),
-      ...(message.images.length > 0 ? { imageCount: message.images.length } : {}),
+      ...(messageImageCount(message) > 0 ? { imageCount: messageImageCount(message) } : {}),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       ...(message.communication ? { source: message.communication.source } : {}),
       ...(message.eventId ? { eventId: message.eventId } : {}),
     });
   }
 
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void> {
+    return this.enqueueMessage(message, preferences, false);
+  }
+
+  /** Automatic wake-ups share the normal queue but never release an owner's stop. */
+  sendEvent(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void> {
+    if (this.closed) return Promise.reject(new Error('The target session is closed.'));
+    if (this.automaticWakeHeld) return Promise.reject(new Error('Automatic wake is held by the owner.'));
+    return this.enqueueMessage(message, preferences, true);
+  }
+
+  private enqueueMessage(message: QueuedMessage, preferences: AgentTurnPreferences, automatic: boolean): Promise<void> {
     if (this.closed) return Promise.resolve();
-    if (message.images.length > 0 && !this.runtime.supportsVision) {
-      const count = message.images.length;
-      const unavailable = `[${count} image attachment${count === 1 ? '' : 's'} omitted: ${this.runtime.modelName} does not support image input.]`;
-      this.addNotice(`This model cannot read images. The attachment was not sent; continuing with the text portion.`, 'warn');
+    const wasHeld = this.automaticWakeHeld || this.queueHold;
+    if (!automatic && this.automaticWakeHeld) {
+      this.session = { ...this.session, automaticWakeHeld: false };
+      if (this.options.onAutomaticWakeReady) queueMicrotask(this.options.onAutomaticWakeReady);
+    }
+    if (message.images.length > 0) {
       message = {
         ...message,
-        text: [message.text === 'User attached image' ? '' : message.text.trim(), unavailable].filter(Boolean).join('\n\n'),
+        attachments: [
+          ...(message.attachments ?? []),
+          ...message.images.map((image, index) =>
+            storeAttachment(
+              this.session.id,
+              decodeBase64Image(image.base64, image.mediaType, MAX_IMAGE_BYTES),
+              `image-${index + 1}.png`,
+              image.mediaType,
+            ),
+          ),
+        ],
         images: [],
       };
     }
     return new Promise<void>((resolve, reject) => {
-      this.queuedMessages.push({ message, preferences, resolve, reject });
+      const turn = { message, preferences, resolve, reject, automatic };
+      if (!automatic && wasHeld) {
+        const events = this.queuedMessages.filter((queued) => queued.automatic);
+        const ownerMessages = this.queuedMessages.filter((queued) => !queued.automatic);
+        this.queuedMessages.splice(0, this.queuedMessages.length, ...ownerMessages, turn, ...events);
+      } else this.queuedMessages.push(turn);
       if (this.busy) this.publish();
       else {
         // An explicit send releases an Esc hold: held messages run together with this one.
-        this.queueHold = false;
+        if (!automatic) this.queueHold = false;
+        if (this.queueHold || (automatic && this.automaticWakeHeld)) return;
         void this.runQueuedMessages();
       }
     });
+  }
+
+  /** Resolve host notifications only when they are about to enter the conversation. */
+  private async prepareQueuedTurn(turn: QueuedTurn, signal: AbortSignal): Promise<boolean> {
+    if (!turn.message.beforeDelivery) return true;
+    try {
+      const text = await turn.message.beforeDelivery();
+      if (signal.aborted || this.closed) throw new Error('Run cancelled before execution.');
+      if (text === null) {
+        if (turn.message.eventId) this.eventRunResults.set(turn.message.eventId, { error: null, outputs: [], skipped: true });
+        turn.resolve();
+        return false;
+      }
+      turn.message = { ...turn.message, text };
+      return true;
+    } catch (error) {
+      // A notification refresh failure must not abort the owner's unrelated work.
+      turn.reject(error);
+      return false;
+    }
   }
 
   private recoverFromUnsupportedImageInput(error: unknown): boolean {
@@ -1087,6 +1152,12 @@ export class AgentSessionController implements AgentSessionClient {
       while (nextTurn) {
         const currentTurn = nextTurn;
         activeTurn = currentTurn;
+        if (!(await this.prepareQueuedTurn(currentTurn, abortController.signal))) {
+          activeTurn = null;
+          if (abortController.signal.aborted) break;
+          nextTurn = this.queuedMessages.shift() ?? null;
+          continue;
+        }
         const current = currentTurn.message;
         this.resetAutoReviewTurn();
         this.runError = null;
@@ -1105,8 +1176,8 @@ export class AgentSessionController implements AgentSessionClient {
         let titleRequest: { sessionId: string; message: string } | null = null;
         if (!this.sessionHasUserMessage) {
           this.sessionHasUserMessage = true;
-          const imageOnly = current.images.length > 0 && current.text === 'User attached image';
-          const titleSeed = imageOnly ? 'Image chat' : current.text || (current.images.length > 0 ? 'Image chat' : 'New session');
+          const imageOnly = messageImageCount(current) > 0 && current.text === 'User attached image';
+          const titleSeed = imageOnly ? 'Image chat' : current.text || (messageImageCount(current) > 0 ? 'Image chat' : 'New session');
           this.session = { ...this.session, title: fallbackSessionTitle(titleSeed) };
           if (current.text && !imageOnly) titleRequest = { sessionId: this.session.id, message: current.text };
           this.publish();
@@ -1166,6 +1237,7 @@ export class AgentSessionController implements AgentSessionClient {
           let streamedTextReceived = false;
           try {
             const result = await runAgent({
+              sessionId: this.session.id,
               model: this.runtime.model,
               workspaceRoot: this.runtime.workspaceRoot,
               supportsVision: this.runtime.supportsVision,
@@ -1179,7 +1251,7 @@ export class AgentSessionController implements AgentSessionClient {
                 try {
                   const compacted = await compactConversation({
                     ...context,
-                    archivePath: getDataPath(`sessions/${this.session.id}.json`),
+                    archivePath: sessionFilePath(this.session.id),
                     model: this.runtime.model,
                     contextWindowTokens: this.runtime.contextWindowTokens,
                     outputLimitTokens: this.runtime.outputLimitTokens,
@@ -1214,7 +1286,7 @@ export class AgentSessionController implements AgentSessionClient {
               },
               tools: tools.tools,
               shouldStop: tools.shouldStop,
-              takeQueuedMessages: () => {
+              takeQueuedMessages: async () => {
                 // Steering is admitted only at SDK prepareStep, after the prior tool batch.
                 // Scope/route changes remain FIFO followups so they cannot borrow an active binding.
                 // Owner-inbox and team signals carry no owner reply binding, so they steer any live run.
@@ -1224,10 +1296,14 @@ export class AgentSessionController implements AgentSessionClient {
                   const next = this.queuedMessages[0];
                   const live = this.liveTurnPreferences();
                   if (
-                    this.options.sessionWorkspaceRoot !== null ||
+                    (this.options.sessionWorkspaceRoot !== null &&
+                      next?.message.communication?.source !== 'inbox' &&
+                      next?.message.communication?.source !== 'worker') ||
                     !next ||
-                    (next.message.communication?.source !== 'owner-inbox' &&
+                    (next.message.communication?.source !== 'inbox' &&
+                      next.message.communication?.source !== 'owner-inbox' &&
                       next.message.communication?.source !== 'team' &&
+                      next.message.communication?.source !== 'worker' &&
                       !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
                     (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
                     next.preferences.reasoningVariantId !== live.reasoningVariantId ||
@@ -1235,6 +1311,10 @@ export class AgentSessionController implements AgentSessionClient {
                   )
                     break;
                   this.queuedMessages.shift();
+                  if (!(await this.prepareQueuedTurn(next, abortController.signal))) {
+                    if (abortController.signal.aborted) break;
+                    continue;
+                  }
                   this.flushStreamedEntries();
                   this.flushEventAssistantText();
                   this.addUserEntry(next.message);
@@ -1304,6 +1384,7 @@ export class AgentSessionController implements AgentSessionClient {
           // One tool-free finalization, based on settled results; completed actions never repeat.
           try {
             const answer = await runAgent({
+              sessionId: this.session.id,
               model: this.runtime.model,
               workspaceRoot: this.runtime.workspaceRoot,
               supportsVision: this.runtime.supportsVision,
@@ -1454,11 +1535,13 @@ export class AgentSessionController implements AgentSessionClient {
         this.runtime.workspaceRoot,
         this.options.systemInstruction,
         this.runtime.supportsVision,
+        undefined,
+        this.session.id,
       );
       const tools = await this.runtime.registry.createModelTools({ approve: async () => false, onResult: () => {} });
       const result = await compactConversation({
         ...context,
-        archivePath: getDataPath(`sessions/${this.session.id}.json`),
+        archivePath: sessionFilePath(this.session.id),
         tools: tools.tools,
         model: this.runtime.model,
         contextWindowTokens: this.runtime.contextWindowTokens,
@@ -1553,11 +1636,19 @@ function toolIdentity(request: Pick<ToolCallRequest, 'providerId' | 'name'>): st
 function workerSessionId(request: Pick<ToolCallRequest, 'providerId' | 'name'>, value: unknown): string | undefined {
   if (
     request.providerId !== 'host' ||
-    (request.name !== 'subagent' && request.name !== 'subagent_poll' && request.name !== 'subagent_stop')
+    (request.name !== 'subagent' && request.name !== 'inbox' && request.name !== 'subagent_poll' && request.name !== 'subagent_stop')
   ) {
     return undefined;
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  if (request.name === 'inbox') {
+    const items = (value as Record<string, unknown>).items;
+    if (!Array.isArray(items) || items.length !== 1) return undefined;
+    const item = items[0];
+    if (!item || typeof item !== 'object' || item.source !== 'Subagent') return undefined;
+    const session = item.content?.session;
+    return typeof session === 'string' ? session : undefined;
+  }
   const session = (value as Record<string, unknown>).session;
   return typeof session === 'string' && session ? session : undefined;
 }
@@ -1566,6 +1657,8 @@ export function toolDisplayCommand(request: Pick<ToolCallRequest, 'providerId' |
   if (request.providerId === 'host') {
     const input = request.input;
     switch (request.name) {
+      case 'inbox':
+        return `Inbox ${String(input.action ?? 'list')}${typeof input.source === 'string' ? ` · ${input.source}` : ''}`;
       case 'execute_command':
         if (typeof input.command === 'string') return input.command;
         break;
@@ -1708,6 +1801,8 @@ export function toolPreviewCommand(providerId: string, name: string, fields: rea
       return field.value.length > maxChars ? `${field.value.slice(0, maxChars)}…` : field.value;
     };
     switch (name) {
+      case 'inbox':
+        return `Inbox ${pick('action') ?? 'list'}${pick('source') ? ` · ${pick('source')}` : ''}`;
       case 'question': {
         const question = pick('question', 80);
         return question ? `Ask "${question}"` : 'question';
@@ -1780,6 +1875,23 @@ export function formatToolResult(request: Pick<ToolCallRequest, 'providerId' | '
 
 /** Content-first display text for host tool results; undefined defers to the generic rules. */
 function displayHostToolResult(name: string, result: Record<string, unknown>): { outcome: string; text: string } | undefined {
+  if (name === 'inbox' && Array.isArray(result.items)) {
+    const lines = [`Inbox · ${result.items.length} notification(s)`];
+    for (const raw of result.items) {
+      if (!raw || typeof raw !== 'object') continue;
+      const item = raw as Record<string, unknown>;
+      const content = item.content;
+      const worker =
+        content && typeof content === 'object' && !Array.isArray(content)
+          ? displayHostToolResult('subagent_poll', content as Record<string, unknown>)
+          : undefined;
+      lines.push(
+        `${String(item.source)}${worker ? `\n${worker.text}` : content === undefined ? ` · ${String(item.state)}` : `\n${JSON.stringify(content)}`}`,
+      );
+    }
+    if (Array.isArray(result.errors)) for (const error of result.errors) lines.push(`! ${JSON.stringify(error)}`);
+    return { outcome: String(result.status ?? 'completed'), text: lines.join('\n') };
+  }
   switch (name) {
     case 'file_write': {
       if (result.status !== 'completed') return undefined;
@@ -2023,23 +2135,25 @@ function formatExecOutput(result: Record<string, unknown>): { outcome: string; t
   return { outcome: typeof result.status === 'string' ? result.status : 'result', text: JSON.stringify(result, null, 2) ?? String(result) };
 }
 
+function messageImageCount(message: QueuedMessage): number {
+  return message.images.length + (message.attachments?.filter((attachment) => attachment.mediaType.startsWith('image/')).length ?? 0);
+}
+
 function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
-  const content: Array<{ type: 'text'; text: string } | { type: 'image'; image: string; mediaType: 'image/png' }> = [];
+  const content: Array<{ type: 'text'; text: string }> = [];
   const source = message.communication?.source;
   const sourceLabel =
     source === 'telegram'
       ? '[Host context: owner message via Telegram]'
       : source === 'terminal'
         ? '[Host context: owner message via terminal]'
-        : source === 'owner-inbox'
-          ? '[Host context: Telegram owner inbox signal]'
-          : source === 'team'
-            ? '[Host context: team direct message signal]'
-            : '';
+        : source === 'inbox' || source === 'owner-inbox' || source === 'team' || source === 'worker'
+          ? '[Host context: inbox notification]'
+          : '';
   const workspaceLabel = message.workspaceRoot ? `[Host context: active workspace ${message.workspaceRoot.replace(/[\r\n]/g, ' ')}]` : '';
   if (message.text || sourceLabel || workspaceLabel)
     content.push({ type: 'text', text: [sourceLabel, workspaceLabel, message.text].filter(Boolean).join('\n') });
-  for (const image of message.images) content.push({ type: 'image', image: image.base64, mediaType: image.mediaType });
+  if (message.attachments?.length) content.push({ type: 'text', text: attachmentReferences(message.attachments) });
   return { role: 'user', content, ...(message.eventId ? { providerOptions: { ranite: { queuedMessageId: message.eventId } } } : {}) };
 }
 

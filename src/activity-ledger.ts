@@ -308,6 +308,27 @@ export class ActivityLedger {
     return { id: existing?.event_id ?? id, inserted: false };
   }
 
+  /** Persist one domain transition and its observed event in the same commit. */
+  transaction<T>(operation: () => T): T {
+    this.assertOpen();
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const result = operation();
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  stateEntries(prefix: string): Array<{ key: string; value: string }> {
+    this.assertOpen();
+    return this.database
+      .prepare('SELECT key, value FROM ranite_state WHERE substr(key, 1, ?) = ?')
+      .all(prefix.length, prefix) as unknown as Array<{ key: string; value: string }>;
+  }
+
   claimEvent(id: string): ObservedEventRow | null {
     this.assertOpen();
     const now = new Date().toISOString();
@@ -328,7 +349,7 @@ export class ActivityLedger {
       .prepare(
         `
       UPDATE ranite_events SET
-        status = CASE WHEN source IN ('notification','owner-inbox') OR (source = 'telegram' AND kind LIKE 'inbox.%') THEN 'pending' ELSE 'interrupted' END,
+        status = CASE WHEN source IN ('notification','owner-inbox','worker') OR (source = 'telegram' AND kind LIKE 'inbox.%') THEN 'pending' ELSE 'interrupted' END,
         error = CASE WHEN source = 'owner-inbox' THEN 'Owner message is available for retry after host restart.' ELSE 'Host stopped while this event was being processed.' END,
         updated_at = ?
       WHERE status = 'processing'
@@ -413,6 +434,18 @@ export class ActivityLedger {
       )
       .all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);
+  }
+
+  /** Notification metadata includes read messages that still await handling. */
+  ownerInboxNotifications(): ObservedEventRow[] {
+    this.assertOpen();
+    return (
+      this.database
+        .prepare(
+          "SELECT * FROM ranite_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted','delivered') AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || e.event_id) ORDER BY received_at, rowid",
+        )
+        .all() as unknown as EventDbRow[]
+    ).map(eventFromRow);
   }
 
   ownerInboxEvents(limit = 10): ObservedEventRow[] {

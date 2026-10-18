@@ -94,7 +94,7 @@ describe('independent peer agreements', () => {
   it('records an agreement from proposal to completion with evidence', async () => {
     const proposed = await propose();
     expect(proposed).toMatchObject({ requester: 'Hub', assignee: 'Peer', state: 'proposed', revision: 1 });
-    await expect(hub.work({ action: 'accept', id: proposed.id, expectedRevision: 1, note: 'Assign it.' })).rejects.toThrow('assignee');
+    await expect(hub.work({ action: 'accept', id: proposed.id, expectedRevision: 1, note: 'Assign it.' })).rejects.toThrow('pending terms');
     await peer.work({ action: 'accept', id: proposed.id, expectedRevision: 1, note: 'Accepted, read-only.' });
     expect((await hub.status()).members.find((member) => member.name === 'Peer')?.activeWorkCount).toBe(1);
     const done = (await peer.work({
@@ -116,6 +116,8 @@ describe('independent peer agreements', () => {
   it('does not equate reading a notification with acceptance or completion', async () => {
     const proposed = await propose();
     expect((await peer.readInbox(20)).messages).toHaveLength(1);
+    expect((await peer.inbox()).count).toBe(1);
+    await peer.ack((await peer.inbox()).messages.map((message) => message.msgId));
     expect((await peer.inbox()).count).toBe(0);
     expect(await peer.work({ action: 'read', id: proposed.id })).toEqual(proposed);
     expect(await peer.work({ action: 'list' })).toEqual([proposed]);
@@ -181,4 +183,55 @@ describe('independent peer agreements', () => {
     const thirdPage = (await peer.work({ action: 'list', limit: 1, offset: 2 })) as PeerWork[];
     expect(new Set([...firstPage, ...secondPage, ...thirdPage].map((work) => work.id))).toEqual(new Set(['first', 'second', 'third']));
   });
+});
+
+describe('negotiated terms', () => {
+  it('requires explicit acceptance by the other party before executing countered terms', async () => {
+    const work = await propose('negotiation');
+    const counter = {
+      action: 'counter',
+      id: work.id,
+      expectedRevision: 1,
+      terms: 'Read logs only; return a bounded report.',
+      note: 'The original scope is too broad.',
+    };
+    const revised = (await peer.work(counter)) as PeerWork;
+    expect(revised).toMatchObject({ state: 'countered', terms: counter.terms, termsAuthor: 'Peer', revision: 2 });
+    expect(await peer.work(counter)).toEqual(revised);
+    await expect(peer.work({ action: 'accept', id: work.id, expectedRevision: 2, note: 'self accept' })).rejects.toThrow(
+      'other participant',
+    );
+    await expect(peer.work({ action: 'complete', id: work.id, expectedRevision: 2, note: 'premature' })).rejects.toThrow('accepted');
+    const accepted = (await hub.work({
+      action: 'accept',
+      id: work.id,
+      expectedRevision: 2,
+      note: 'Replacement terms accepted.',
+    })) as PeerWork;
+    expect(accepted).toMatchObject({ state: 'accepted', terms: counter.terms, revision: 3 });
+    const complete = (await peer.work({
+      action: 'complete',
+      id: work.id,
+      expectedRevision: 3,
+      note: 'Log event 1 and report attached.',
+    })) as PeerWork;
+    expect(complete.state).toBe('completed');
+  });
+});
+
+it('keeps durable working and blocked states under assignee ownership', async () => {
+  const work = await propose('execution-lifecycle');
+  await peer.work({ action: 'accept', id: work.id, expectedRevision: 1, note: 'Accepted.' });
+  await expect(hub.work({ action: 'start', id: work.id, expectedRevision: 2, note: 'Not my execution.' })).rejects.toThrow('assignee');
+  for (const [action, expectedRevision, expectedState] of [
+    ['start', 2, 'working'],
+    ['block', 3, 'blocked'],
+    ['resume', 4, 'working'],
+  ] as const) {
+    const changed = (await peer.work({ action, id: work.id, expectedRevision, note: `Evidence for ${action}.` })) as PeerWork;
+    expect(changed.state).toBe(expectedState);
+    expect((await hub.status()).members.find((member) => member.name === 'Peer')?.activeWorkCount).toBe(1);
+  }
+  await peer.work({ action: 'complete', id: work.id, expectedRevision: 5, note: 'Verified output delivered.' });
+  expect((await hub.status()).members.find((member) => member.name === 'Peer')?.activeWorkCount).toBe(0);
 });

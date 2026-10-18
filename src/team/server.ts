@@ -1,14 +1,13 @@
+import { TEAM_PRESENCE_WINDOW_MS, TEAM_PROTOCOL_VERSION } from './contracts.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
-import { Transform } from 'node:stream';
 import { isTailnetAddress } from './tailnet.js';
-import { fingerprintOf, GROUP_RECIPIENT, hashTicket, makeFileId, makeRequestId, validateMemberName } from './service.js';
-import { TeamOperations, TeamError, MAX_FILE_BYTES } from './operations.js';
+import { fingerprintOf, hashTicket, makeFileId, makeRequestId, validateMemberName } from './service.js';
+import { TeamOperations, TeamError } from './operations.js';
 import { TeamStore, type JoinRequest } from './store.js';
 import { TeamCoordination } from './coordination.js';
-import { deleteFileBytes, ensureFilesDir, fileExists, filePath, readFileStream } from './files.js';
+import { fileExists, readFileStream, storeFileBytes } from './files.js';
+import { TeamTransportError } from './contracts.js';
 
 const MAX_BODY_BYTES = 65_536;
 const MAX_GROUP_PAGE = 200;
@@ -17,12 +16,10 @@ const MAX_MEMORY_PAGE = 500;
 const MAX_HISTORY_PAGE = 200;
 /** How long an approved ticket may be re-fetched before it is forgotten. */
 const JOIN_TICKET_TTL_MS = 60 * 60_000;
-const PROTOCOL_VERSION = 'ranite-team/1';
 /** Brute-force brake: after this many failed joins from one address, refuse it for a while. */
 const JOIN_FAILURE_LIMIT = 3;
 const JOIN_BLOCK_MS = 5 * 60_000;
 /** A member counts as online when it has polled within this window (poll is 1s). */
-const PRESENCE_WINDOW_MS = 15_000;
 
 export interface TeamServerOptions {
   store: TeamStore;
@@ -245,13 +242,13 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
     }
     if (request.method === 'GET' && url.pathname === '/v1/status') {
       sendJson(response, 200, {
-        protocol: PROTOCOL_VERSION,
+        protocol: TEAM_PROTOCOL_VERSION,
         team: teamName,
         you: member.name,
         memberCount: store.listMembers().length,
         groupCursor: store.getGroupCursor(member.name),
         groupLatestSeq: store.groupLatestSeq(),
-        members: store.memberSummaries(now, PRESENCE_WINDOW_MS),
+        members: store.memberSummaries(now, TEAM_PRESENCE_WINDOW_MS),
       });
       return;
     }
@@ -299,20 +296,19 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
         sendJson(response, 400, { error: 'cursor needs { seq }.' });
         return;
       }
-      store.setGroupCursor(member.name, body.seq);
-      sendJson(response, 200, { cursor: store.getGroupCursor(member.name) });
+      try {
+        sendJson(response, 200, { cursor: operations.acknowledgeGroup(member.name, body.seq) });
+      } catch (error) {
+        if (!(error instanceof TeamError)) throw error;
+        sendJson(response, error.status, { error: error.message });
+      }
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/group/read') {
       const body = (await readJson(request)) as { limit?: unknown };
       const limit =
         typeof body?.limit === 'number' && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), MAX_GROUP_PAGE) : 50;
-      // Read after the member's stored cursor and advance it, so a read is
-      // incremental and stateless for the caller.
-      const cursor = store.getGroupCursor(member.name);
-      const messages = store.groupMessages(cursor, limit);
-      if (messages.length > 0) store.setGroupCursor(member.name, messages.at(-1)!.seq);
-      sendJson(response, 200, { messages, cursor: store.getGroupCursor(member.name), latestSeq: store.groupLatestSeq() });
+      sendJson(response, 200, operations.readGroup(member.name, limit));
       return;
     }
     if (request.method === 'GET' && url.pathname === '/v1/inbox') {
@@ -350,13 +346,12 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
     }
     const fileMatch = /^\/v1\/files\/(f_[0-9a-f]+)$/.exec(url.pathname);
     if (request.method === 'GET' && fileMatch) {
-      const file = store.getFile(fileMatch[1]!);
-      if (!file) {
-        sendJson(response, 404, { error: 'No such file.' });
-        return;
-      }
-      if (file.recipient !== member.name && file.recipient !== GROUP_RECIPIENT && file.sender !== member.name) {
-        sendJson(response, 403, { error: 'This file is not addressed to you.' });
+      let file;
+      try {
+        file = operations.fileForMember(member.name, fileMatch[1]!);
+      } catch (error) {
+        if (!(error instanceof TeamError)) throw error;
+        sendJson(response, error.status, { error: error.message });
         return;
       }
       if (!fileExists(file.id)) {
@@ -373,50 +368,21 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/files') {
-      const recipient = url.searchParams.get('recipient') ?? '';
-      const name = url.searchParams.get('name') ?? '';
-      const sha256 = url.searchParams.get('sha256') ?? '';
-      const size = Number(url.searchParams.get('size') ?? '');
-      const id = makeFileId();
-      ensureFilesDir();
-      const destination = filePath(id);
-      const hash = createHash('sha256');
-      let received = 0;
-      let overflowed = false;
-      const meter = new Transform({
-        transform(chunk: Buffer, _encoding, callback) {
-          received += chunk.length;
-          if (received > MAX_FILE_BYTES) {
-            overflowed = true;
-            callback(new Error('File exceeds the size limit.'));
-            return;
-          }
-          hash.update(chunk);
-          callback(null, chunk);
-        },
-      });
       try {
-        await pipeline(request, meter, createWriteStream(destination));
-      } catch {
-        deleteFileBytes(id);
-        sendJson(response, overflowed ? 413 : 400, { error: overflowed ? 'File exceeds the size limit.' : 'Upload failed.' });
-        return;
-      }
-      if (received !== size || hash.digest('hex') !== sha256) {
-        deleteFileBytes(id);
-        sendJson(response, 400, { error: 'Uploaded bytes do not match the declared size or sha256.' });
-        return;
-      }
-      try {
-        const message = operations.registerFile(member.name, { recipient, name, size, sha256, fileId: id });
-        sendJson(response, 200, { id, seq: message.seq, msgId: message.msgId });
+        const input = {
+          recipient: url.searchParams.get('recipient') ?? '',
+          name: url.searchParams.get('name') ?? '',
+          sha256: url.searchParams.get('sha256') ?? '',
+          size: Number(url.searchParams.get('size') ?? ''),
+          fileId: url.searchParams.get('id') ?? makeFileId(),
+        };
+        const file = operations.prepareFile(member.name, input);
+        await storeFileBytes(request, file.id, file);
+        const message = operations.registerFile(member.name, input);
+        sendJson(response, 200, { id: file.id, seq: message.seq, msgId: message.msgId });
       } catch (error) {
-        deleteFileBytes(id);
-        if (error instanceof TeamError) {
-          sendJson(response, error.status, { error: error.message });
-          return;
-        }
-        throw error;
+        if (!(error instanceof TeamError) && !(error instanceof TeamTransportError)) throw error;
+        sendJson(response, error.status ?? 500, { error: error.message });
       }
       return;
     }
@@ -424,16 +390,13 @@ export function startTeamServer(options: TeamServerOptions): Promise<StartedTeam
       const body = (await readJson(request)) as { limit?: unknown };
       const limit =
         typeof body?.limit === 'number' && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), MAX_INBOX_PAGE) : 20;
-      // Read and consume in one step: a read direct message is handled, so it
-      // never returns on a later wake.
+      // Reading is not handling: a lost response or interrupted run must not lose a DM.
       const messages = store.unreadDms(member.name, limit);
-      if (messages.length > 0)
-        store.ackDms(
-          member.name,
-          messages.map((message) => message.msgId),
-          now,
-        );
-      sendJson(response, 200, { count: messages.length, messages, remaining: store.unreadDmCount(member.name) });
+      sendJson(response, 200, {
+        count: messages.length,
+        messages,
+        remaining: Math.max(0, store.unreadDmCount(member.name) - messages.length),
+      });
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/inbox/ack') {

@@ -161,7 +161,7 @@ describe('team wake steering', () => {
     // Steered: the live run's next step sees the team text, with no extra run.
     expect(model.doStreamCalls).toHaveLength(2);
     expect(prompts[1]).toContain('TEAM_NOTE');
-    expect(prompts[1]).toContain('[Host context: team direct message signal]');
+    expect(prompts[1]).toContain('[Host context: inbox notification]');
   });
 
   it('still steers a same-route owner message', async () => {
@@ -182,4 +182,49 @@ describe('team wake steering', () => {
     expect(shouldWakeForTeamDms({ count: 1, highestSeq: 5, seenSeq: 5 })).toBe(false);
     expect(shouldWakeForTeamDms({ count: 0, highestSeq: 9, seenSeq: 0 })).toBe(false);
   });
+});
+
+it('withdraws an obsolete team wake before it enters a busy conversation', async () => {
+  const { model, release, first } = await setupBusyRun();
+  const stale = session!.sendMessage(
+    { text: 'STALE_TEAM_SIGNAL', images: [], eventId: 'stale-team', communication: { source: 'team' }, beforeDelivery: async () => null },
+    preferences,
+  );
+  release();
+  await Promise.all([first, stale]);
+  expect(model.doStreamCalls).toHaveLength(2);
+  expect(JSON.stringify(model.doStreamCalls)).not.toContain('STALE_TEAM_SIGNAL');
+  expect(session!.takeEventRunResult('stale-team')).toEqual({ error: null, outputs: [], skipped: true });
+});
+
+it('steers a worker lifecycle event into a busy parent at the tool boundary', async () => {
+  const { model, release, first } = await setupBusyRun();
+  const signal = session!.sendEvent(
+    { text: 'WORKER_RESULT_READY', images: [], eventId: 'worker-complete', communication: { source: 'inbox' } },
+    preferences,
+  );
+  release();
+  await Promise.all([first, signal]);
+  expect(model.doStreamCalls).toHaveLength(2);
+  expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('WORKER_RESULT_READY');
+  expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain('[Host context: inbox notification]');
+});
+
+it('preserves an owner stop across saves and releases it only on explicit input', async () => {
+  const { release, first } = await setupBusyRun();
+  session!.stop({ holdQueue: true });
+  release();
+  await first;
+  session!.flushSave();
+  const { loadSavedSession } = await import('../src/session-store.js');
+  const saved = loadSavedSession(session!.getSnapshot().session.id)!;
+  expect(saved.automaticWakeHeld).toBe(true);
+  await expect(session!.sendEvent({ text: 'automatic', images: [], communication: { source: 'inbox' } }, preferences)).rejects.toThrow(
+    'held',
+  );
+  await session!.sendMessage(
+    { text: 'Resume the task.', images: [], communication: { source: 'terminal', replyTo: { channel: 'terminal' } } },
+    preferences,
+  );
+  expect(session!.automaticWakeHeld).toBe(false);
 });

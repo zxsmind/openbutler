@@ -1,17 +1,18 @@
-import { createHash } from 'node:crypto';
-import { createWriteStream, mkdirSync, renameSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+import { writeVerifiedFile } from './files.js';
+import { makeFileId } from './service.js';
 import type { JoinTarget } from './tailnet.js';
 import type { PeerProfile, PeerCapabilities } from './coordination.js';
+import { TeamTransportError, TEAM_PROTOCOL_VERSION } from './contracts.js';
+import type { TeamMessage, TeamMemoryEntry } from './contracts.js';
+export type { TeamMessage, TeamMemoryEntry } from './contracts.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Thrown when the hub cannot be reached at all (network/timeout), as opposed to a refusal. */
-export class HubUnreachableError extends Error {
+export class HubUnreachableError extends TeamTransportError {
   constructor(message: string) {
-    super(message);
+    super(message, true);
     this.name = 'HubUnreachableError';
   }
 }
@@ -80,7 +81,11 @@ async function requestJson(
 
 function hubError(status: number, body: Record<string, unknown>, fallback: string): Error {
   const detail = typeof body.error === 'string' && body.error ? body.error : fallback;
-  return new Error(`Hub refused (${status}): ${detail}`);
+  return new TeamTransportError(
+    `Hub refused (${status}): ${detail}`,
+    status < 400 || status >= 500 || status === 408 || status === 429,
+    status,
+  );
 }
 
 /** The server binds the actor to the ticket; the input never selects an acting member. */
@@ -162,16 +167,6 @@ export async function postLeave(target: JoinTarget, ticket: string): Promise<voi
   if (status !== 200) throw hubError(status, body, 'Leave was not accepted.');
 }
 
-export interface TeamMessage {
-  seq: number;
-  msgId: string;
-  sender: string;
-  recipient: string;
-  body: string;
-  createdAt: number;
-  replyTo: string | null;
-}
-
 export interface SendResult {
   msgId: string;
   seq?: number;
@@ -217,19 +212,16 @@ export async function setGroupCursor(target: JoinTarget, ticket: string, seq: nu
   if (status !== 200) throw hubError(status, body, 'Cursor update failed.');
 }
 
-/** Authenticated: read new group messages after this member's stored cursor, advancing it. */
+/** Read without consuming, also when connected to an older hub with consuming /group/read. */
 export async function readGroup(
   target: JoinTarget,
   ticket: string,
   limit: number,
 ): Promise<{ messages: TeamMessage[]; cursor: number; latestSeq: number }> {
-  const { status, body } = await requestJson(`${baseUrl(target)}/v1/group/read`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ limit }),
-  });
-  if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'Group read failed.');
-  return body as unknown as { messages: TeamMessage[]; cursor: number; latestSeq: number };
+  const status = await fetchHubStatus(target, ticket);
+  const cursor = status.groupCursor ?? 0;
+  const page = await fetchGroup(target, ticket, cursor);
+  return { messages: page.messages.slice(0, limit), cursor, latestSeq: page.latestSeq };
 }
 
 /** Authenticated: page older messages from the group or a DM conversation, newest first. */
@@ -270,73 +262,71 @@ export async function listFiles(target: JoinTarget, ticket: string): Promise<Tea
  * Streams a local file to the hub as a shared file, without buffering it in
  * memory. The caller supplies the name, size, and sha256 it measured.
  */
+const FILE_TRANSFER_TIMEOUT_MS = 5 * 60_000;
+
+async function fileRequest<T>(
+  url: string,
+  init: RequestInit,
+  consume: (response: Response, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const signal = AbortSignal.timeout(FILE_TRANSFER_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal });
+    return await consume(response, signal);
+  } catch (error) {
+    if (error instanceof TeamTransportError) throw error;
+    if (signal.aborted || error instanceof TypeError)
+      throw new HubUnreachableError(`File transfer did not complete: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
+}
+
 export async function uploadFile(
   target: JoinTarget,
   ticket: string,
-  input: { recipient: string; name: string; size: number; sha256: string; source: NodeJS.ReadableStream },
+  input: { recipient: string; name: string; size: number; sha256: string; source: NodeJS.ReadableStream; id?: string },
 ): Promise<{ id: string; seq: number }> {
-  const params = new URLSearchParams({ recipient: input.recipient, name: input.name, size: String(input.size), sha256: input.sha256 });
-  const response = await fetch(`${baseUrl(target)}/v1/files?${params.toString()}`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/octet-stream', 'content-length': String(input.size) },
-    body: Readable.toWeb(input.source as Readable) as ReadableStream,
-    // Node's fetch needs this to send a streamed request body.
-    duplex: 'half',
-  } as RequestInit & { duplex: 'half' });
-  let body: Record<string, unknown> = {};
-  try {
-    body = (await response.json()) as Record<string, unknown>;
-  } catch {
-    /* non-JSON hub answers surface as a status error below */
-  }
-  if (!response.ok || typeof body.id !== 'string') throw hubError(response.status, body, 'File upload failed.');
-  return body as unknown as { id: string; seq: number };
+  const hub = await fetchHubStatus(target, ticket);
+  if (hub.protocol !== TEAM_PROTOCOL_VERSION)
+    throw new TeamTransportError('The hub must be upgraded before durable file delivery is available.', false, 409);
+  const id = input.id ?? makeFileId();
+  const params = new URLSearchParams({ id, recipient: input.recipient, name: input.name, size: String(input.size), sha256: input.sha256 });
+  return fileRequest(
+    `${baseUrl(target)}/v1/files?${params.toString()}`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/octet-stream', 'content-length': String(input.size) },
+      body: Readable.toWeb(input.source as Readable) as ReadableStream,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' },
+    async (response) => {
+      const body = (await response.json()) as Record<string, unknown>;
+      if (!response.ok || body.id !== id || typeof body.seq !== 'number') throw hubError(response.status, body, 'File upload failed.');
+      return { id, seq: body.seq };
+    },
+  );
 }
 
-/**
- * Streams a shared file from the hub to a local path, verifying size and
- * sha256 as it writes. Writes to a temporary file and renames on success, so a
- * failed transfer never leaves a partial file at the destination.
- */
+/** Downloads and local hub receives share the same integrity/atomic-write implementation. */
 export async function downloadFile(
   target: JoinTarget,
   ticket: string,
   id: string,
   destination: string,
 ): Promise<{ name: string; size: number; sha256: string }> {
-  const response = await fetch(`${baseUrl(target)}/v1/files/${id}`, { headers: { authorization: `Bearer ${ticket}` } });
-  if (!response.ok || !response.body) {
-    let body: Record<string, unknown> = {};
-    try {
-      body = (await response.json()) as Record<string, unknown>;
-    } catch {
-      /* ignore */
+  return fileRequest(`${baseUrl(target)}/v1/files/${id}`, { headers: { authorization: `Bearer ${ticket}` } }, async (response, signal) => {
+    if (!response.ok || !response.body) {
+      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      throw hubError(response.status, body, 'File download failed.');
     }
-    throw hubError(response.status, body, 'File download failed.');
-  }
-  const name = decodeURIComponent(response.headers.get('x-file-name') ?? '');
-  const sha256 = response.headers.get('x-file-sha256') ?? '';
-  const size = Number(response.headers.get('content-length') ?? '0');
-  mkdirSync(dirname(destination), { recursive: true });
-  const temporary = `${destination}.part`;
-  const hash = createHash('sha256');
-  let received = 0;
-  const meter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      received += chunk.length;
-      hash.update(chunk);
-      callback(null, chunk);
-    },
+    const name = decodeURIComponent(response.headers.get('x-file-name') ?? '');
+    const sha256 = response.headers.get('x-file-sha256') ?? '';
+    const size = Number(response.headers.get('content-length'));
+    if (!Number.isSafeInteger(size) || size < 0 || !/^[0-9a-f]{64}$/.test(sha256))
+      throw new TeamTransportError('Invalid file metadata from hub.', false, 400);
+    await writeVerifiedFile(Readable.fromWeb(response.body as never), destination, { size, sha256 }, signal);
+    return { name, size, sha256 };
   });
-  try {
-    await pipeline(Readable.fromWeb(response.body as never), meter, createWriteStream(temporary));
-    if (received !== size || hash.digest('hex') !== sha256) throw new Error('Downloaded bytes do not match the file hash.');
-    renameSync(temporary, destination);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
-  return { name, size, sha256 };
 }
 
 /** Authenticated: unread DMs for this member. */
@@ -346,19 +336,15 @@ export async function fetchInbox(target: JoinTarget, ticket: string): Promise<{ 
   return body as unknown as { count: number; messages: TeamMessage[] };
 }
 
-/** Authenticated: read unread DMs and consume them in one step (reading is handled). */
+/** Read pending DMs without consuming them, including when the hub is an older version. */
 export async function readInbox(
   target: JoinTarget,
   ticket: string,
   limit: number,
 ): Promise<{ count: number; messages: TeamMessage[]; remaining: number }> {
-  const { status, body } = await requestJson(`${baseUrl(target)}/v1/inbox/read`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${ticket}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ limit }),
-  });
-  if (status !== 200 || !Array.isArray(body.messages)) throw hubError(status, body, 'Inbox read failed.');
-  return body as unknown as { count: number; messages: TeamMessage[]; remaining: number };
+  const inbox = await fetchInbox(target, ticket);
+  const messages = inbox.messages.slice(0, limit);
+  return { count: messages.length, messages, remaining: Math.max(0, inbox.count - messages.length) };
 }
 
 /** Authenticated: acknowledge DMs so they stop counting as unread. */
@@ -374,14 +360,6 @@ export async function ackInbox(
   });
   if (status !== 200) throw hubError(status, body, 'Ack failed.');
   return body as unknown as { acknowledged: number; remaining: number };
-}
-
-export interface TeamMemoryEntry {
-  seq: number;
-  topic: 'decisions' | 'shared';
-  author: string;
-  body: string;
-  createdAt: number;
 }
 
 /** Authenticated: shared team-memory entries after `since`, oldest first. */

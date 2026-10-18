@@ -1,3 +1,4 @@
+import { requestHost, startDaemon } from '../daemon.js';
 import { confirm } from '@inquirer/prompts';
 import type { Parsed } from './args.js';
 import { loadSecrets, loadSettings, saveSecrets, saveSettings } from '../settings.js';
@@ -424,13 +425,9 @@ function renderMessages(messages: TeamMessage[]): void {
 async function runSay(parsed: Parsed): Promise<void> {
   const text = words(parsed).slice(1).join(' ').trim();
   if (!text) throw new Error('Usage: ranite team say <message>');
-  const { channel, close } = openChannel();
-  try {
-    const result = await channel.send('group', text);
-    ui.success(result.duplicate ? 'Already sent (duplicate ignored).' : 'Sent to the group.');
-  } finally {
-    close();
-  }
+  await startDaemon();
+  const result = await requestHost('team.send', { recipient: 'group', text });
+  ui.line(JSON.stringify(result));
 }
 
 async function runDm(parsed: Parsed): Promise<void> {
@@ -438,13 +435,9 @@ async function runDm(parsed: Parsed): Promise<void> {
   const recipient = arg[1];
   const text = arg.slice(2).join(' ').trim();
   if (!recipient || !text) throw new Error('Usage: ranite team dm <member> <message>');
-  const { channel, close } = openChannel();
-  try {
-    const result = await channel.send(recipient, text);
-    ui.success(result.duplicate ? 'Already sent (duplicate ignored).' : `Sent to ${recipient}.`);
-  } finally {
-    close();
-  }
+  await startDaemon();
+  const result = await requestHost('team.send', { recipient, text });
+  ui.line(JSON.stringify(result));
 }
 
 async function runInbox(): Promise<void> {
@@ -478,9 +471,10 @@ async function runRead(parsed: Parsed): Promise<void> {
         return;
       }
       renderMessages(messages);
+      if (!from) await channel.setGroupCursor(messages.at(-1)!.seq);
       return;
     }
-    // Reading consumes: a read direct message is handled.
+    // Displaying a DM never acknowledges handling on behalf of the agent.
     const inbox = from ? await channel.inbox() : await channel.readInbox(100);
     const messages = from ? inbox.messages.filter((message) => message.sender.toLowerCase() === from) : inbox.messages;
     if (messages.length === 0) {
@@ -488,7 +482,7 @@ async function runRead(parsed: Parsed): Promise<void> {
       return;
     }
     renderMessages(messages);
-    if (!from) ui.info(`Read ${messages.length}. ${'remaining' in inbox ? inbox.remaining : 0} DM(s) left unread.`);
+    if (!from) ui.info(`Shown ${messages.length}. Messages remain pending until acknowledged or answered with replyTo.`);
   } finally {
     close();
   }
@@ -579,13 +573,9 @@ async function runSendFile(parsed: Parsed): Promise<void> {
   const recipient = arg[1];
   const path = arg.slice(2).join(' ').trim();
   if (!recipient || !path) throw new Error('Usage: ranite team send-file <member|group> <path>');
-  const { channel, close } = openChannel();
-  try {
-    const result = await channel.sendFile({ recipient, path: resolve(path) });
-    ui.success(`Sent to ${recipient} (file ${result.id}).`);
-  } finally {
-    close();
-  }
+  await startDaemon();
+  const result = await requestHost('team.send-file', { to: recipient, path: resolve(path) });
+  ui.line(JSON.stringify(result));
 }
 
 async function runFiles(): Promise<void> {

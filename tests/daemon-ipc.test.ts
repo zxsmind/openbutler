@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -30,14 +30,14 @@ let connect: (typeof import('../src/daemon-client.js'))['connectDaemonSession'];
 let requestHost: (typeof import('../src/daemon.js'))['requestHost'];
 let model: MockLanguageModelV3;
 let registry: ToolRegistry;
+let fixtureVision = false;
 const registrySeen = new WeakSet<ToolRegistry>();
 const sessionMessageSeen = new WeakSet<ToolRegistry>();
 const subagentSeen = new WeakSet<ToolRegistry>();
 const parentMessageSeen = new WeakSet<ToolRegistry>();
-const subagentPollSeen = new WeakSet<ToolRegistry>();
 const subagentStopSeen = new WeakSet<ToolRegistry>();
 const ownerMessageSendSeen = new WeakSet<ToolRegistry>();
-const ownerInboxReadSeen = new WeakSet<ToolRegistry>();
+const inboxSeen = new WeakSet<ToolRegistry>();
 
 function stream(parts: LanguageModelV3StreamPart[], reason: 'stop' | 'tool-calls' = 'stop') {
   return {
@@ -95,15 +95,14 @@ async function createFixtureHost(): Promise<DaemonHost> {
         registry.register(createSendMessageToOwnerTool(options.workspaceRoot ?? process.cwd(), options.ownerMessageSend));
         ownerMessageSendSeen.add(registry);
       }
-      if (options?.ownerInboxRead && !ownerInboxReadSeen.has(registry)) {
-        const { createReadOwnerMessagesTool } = await import('../src/tools/owner-communication.js');
-        registry.register(createReadOwnerMessagesTool(options.ownerInboxRead));
-        ownerInboxReadSeen.add(registry);
+      if (options?.inbox && !inboxSeen.has(registry)) {
+        const { createInboxTool } = await import('../src/tools/inbox.js');
+        registry.register(createInboxTool(options.inbox));
+        inboxSeen.add(registry);
       }
       const sessionMessage = options?.sessionMessage;
       const subagent = options?.subagent;
       const parentMessage = options?.parentMessage;
-      const subagentPoll = options?.subagentPoll;
       const subagentStop = options?.subagentStop;
       const workspaceRoot = options?.workspaceRoot ?? process.cwd();
       const { createScheduleTool } = await import('../src/tools/schedule.js');
@@ -126,11 +125,6 @@ async function createFixtureHost(): Promise<DaemonHost> {
         registry.register(createParentMessageTool(parentMessage));
         parentMessageSeen.add(registry);
       }
-      if (subagentPoll && !subagentPollSeen.has(registry)) {
-        const { createSubagentPollTool } = await import('../src/tools/subagent-poll.js');
-        registry.register(createSubagentPollTool(subagentPoll));
-        subagentPollSeen.add(registry);
-      }
       if (subagentStop && !subagentStopSeen.has(registry)) {
         const { createSubagentStopTool } = await import('../src/tools/subagent-stop.js');
         registry.register(createSubagentStopTool(subagentStop));
@@ -144,7 +138,7 @@ async function createFixtureHost(): Promise<DaemonHost> {
         modelId: 'fixture',
         contextWindowTokens: null,
         outputLimitTokens: null,
-        supportsVision: false,
+        supportsVision: fixtureVision,
         supportsImageToolResult: true,
         reasoningVariants: [],
         reasoningMetadataSource: null,
@@ -165,6 +159,7 @@ async function createFixtureHost(): Promise<DaemonHost> {
 }
 
 beforeEach(async () => {
+  fixtureVision = false;
   root = mkdtempSync(join(tmpdir(), 'ranite-ipc-check-'));
   vi.stubEnv('RANITE_DATA_DIR', root);
   vi.resetModules();
@@ -272,9 +267,16 @@ describe('shared host and session IPC', () => {
       const viewer = await client();
       model.doStream = vi
         .fn()
-        .mockImplementationOnce(async () =>
-          stream([{ type: 'tool-call', toolCallId: 'read', toolName: 'read_owner_messages', input: '{}' }], 'tool-calls'),
-        )
+        .mockImplementationOnce(async (options: { prompt?: unknown }) => {
+          const prompt = JSON.stringify(options.prompt);
+          expect(prompt).toContain('[Host context: inbox notification]');
+          expect(prompt).not.toContain('Inspect this');
+          expect(prompt).not.toContain('owner message via Telegram');
+          return stream(
+            [{ type: 'tool-call', toolCallId: 'read', toolName: 'inbox', input: JSON.stringify({ action: 'read', source: 'Telegram' }) }],
+            'tool-calls',
+          );
+        })
         .mockImplementationOnce(async (options: { prompt?: unknown }) => {
           expect(JSON.stringify(options.prompt)).toContain('Inspect this');
           expect(JSON.stringify(options.prompt)).toContain('owner message via Telegram');
@@ -303,11 +305,13 @@ describe('shared host and session IPC', () => {
       );
       expect(sent).toEqual(['Explicit Telegram answer']);
       expect(sent).not.toContain('This final text stays in the terminal.');
-      expect(
-        viewer
-          .getSnapshot()
-          .session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'This final text stays in the terminal.'),
-      ).toBe(true);
+      await vi.waitFor(() =>
+        expect(
+          viewer
+            .getSnapshot()
+            .session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'This final text stays in the terminal.'),
+        ).toBe(true),
+      );
     } finally {
       vi.unstubAllGlobals();
     }
@@ -916,7 +920,10 @@ describe('shared host and session IPC', () => {
     model.doStream = vi
       .fn()
       .mockImplementationOnce(async () =>
-        stream([{ type: 'tool-call', toolCallId: 'read', toolName: 'read_owner_messages', input: '{}' }], 'tool-calls'),
+        stream(
+          [{ type: 'tool-call', toolCallId: 'read', toolName: 'inbox', input: JSON.stringify({ action: 'read', source: 'Telegram' }) }],
+          'tool-calls',
+        ),
       )
       .mockImplementation(async (options: { prompt?: unknown }) => {
         prompts.push(JSON.stringify(options.prompt));
@@ -932,7 +939,7 @@ describe('shared host and session IPC', () => {
     );
     expect(viewer.getSnapshot().session.id).toBe(mainId);
     // The inbox wake signal joins the shared thread as a user entry…
-    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'owner-inbox')).toBe(true);
+    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'inbox')).toBe(true);
     // …while the actual Telegram text only surfaces through an explicit inbox read.
     expect(prompts.some((prompt) => prompt.includes('Hello from Telegram') && prompt.includes('owner message via Telegram'))).toBe(true);
   }, 10_000);
@@ -1029,7 +1036,7 @@ describe('shared host and session IPC', () => {
     expect(inboxTexts).toContain('First long request');
     expect(inboxTexts).toContain('Second queued request');
     // …and its wake still ran on the shared thread after the stop.
-    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'owner-inbox')).toBe(true);
+    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'inbox')).toBe(true);
   }, 15_000);
 
   it('starts a new chat from Telegram with /clear', async () => {
@@ -1408,7 +1415,7 @@ describe('shared host and session IPC', () => {
     ).toBe(true);
   }, 20_000);
 
-  it('runs a background subagent without blocking; the parent polls its notes and final report', async () => {
+  it('runs a background subagent and automatically wakes its idle parent for the final report', async () => {
     registerFakeTool('file_read');
     registerFakeTool('file_write');
     registerFakeTool('execute_command');
@@ -1473,8 +1480,8 @@ describe('shared host and session IPC', () => {
           {
             type: 'tool-call',
             toolCallId: `poll-${parentStep}`,
-            toolName: 'subagent_poll',
-            input: JSON.stringify({ session: workerIdFrom(serialized) }),
+            toolName: 'inbox',
+            input: JSON.stringify({ action: 'read', ids: ['Subagent:' + workerIdFrom(serialized)] }),
           },
         ],
         'tool-calls',
@@ -1507,7 +1514,6 @@ describe('shared host and session IPC', () => {
     expect(noteResult).toContain('parent_message');
 
     releaseWorker();
-    await viewer.sendMessage({ text: 'Check the final report.', images: [] }, preferences);
     await vi.waitFor(() =>
       expect(
         viewer
@@ -1519,11 +1525,7 @@ describe('shared host and session IPC', () => {
       .getSnapshot()
       .session.entries.find((entry) => entry.kind === 'tool' && entry.result.includes('WORKER-REPORT'));
     expect(reportPoll).toBeDefined();
-    expect(
-      viewer
-        .getSnapshot()
-        .session.entries.some((entry) => entry.kind === 'user' && String(entry.text).includes('Background subagent finished')),
-    ).toBe(false);
+    expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'inbox')).toBe(true);
   }, 20_000);
 
   it('lets only the parent stop its background worker', async () => {
@@ -1584,8 +1586,8 @@ describe('shared host and session IPC', () => {
             {
               type: 'tool-call',
               toolCallId: 'poll-check-1',
-              toolName: 'subagent_poll',
-              input: JSON.stringify({ session: workerIdFrom(serialized) }),
+              toolName: 'inbox',
+              input: JSON.stringify({ action: 'read', ids: ['Subagent:' + workerIdFrom(serialized)] }),
             },
           ],
           'tool-calls',
@@ -1610,8 +1612,8 @@ describe('shared host and session IPC', () => {
             {
               type: 'tool-call',
               toolCallId: 'poll-stop-1',
-              toolName: 'subagent_poll',
-              input: JSON.stringify({ session: capturedWorkerId }),
+              toolName: 'inbox',
+              input: JSON.stringify({ action: 'read', ids: ['Subagent:' + capturedWorkerId] }),
             },
           ],
           'tool-calls',
@@ -1636,8 +1638,8 @@ describe('shared host and session IPC', () => {
           {
             type: 'tool-call',
             toolCallId: `poll-stop-${parentStep}`,
-            toolName: 'subagent_poll',
-            input: JSON.stringify({ session: capturedWorkerId }),
+            toolName: 'inbox',
+            input: JSON.stringify({ action: 'read', ids: ['Subagent:' + capturedWorkerId] }),
           },
         ],
         'tool-calls',
@@ -1950,3 +1952,308 @@ describe('shared host and session IPC', () => {
     expect(results.filter((result) => result.includes('"status": "completed"'))).toHaveLength(1);
   }, 20_000);
 });
+
+async function automaticWorkerFixture(options: { fail?: boolean; question?: boolean } = {}) {
+  const viewer = await client();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let spawned = false;
+  let noteSent = false;
+  let questionHandled = false;
+  let parentCalls = 0;
+  model.doStream = vi.fn(async (input: { prompt?: unknown; abortSignal?: AbortSignal | null }) => {
+    const serialized = JSON.stringify(input.prompt ?? []);
+    if (serialized.includes('You are a worker session')) {
+      if (options.question && !noteSent) {
+        noteSent = true;
+        return stream(
+          [
+            {
+              type: 'tool-call',
+              toolCallId: 'important-note',
+              toolName: 'parent_message',
+              input: JSON.stringify({ text: 'NEED_PARENT_DECISION', kind: 'question' }),
+            },
+          ],
+          'tool-calls',
+        );
+      }
+      await Promise.race([
+        gate,
+        new Promise<void>((resolve) => {
+          if (input.abortSignal?.aborted) resolve();
+          else input.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+        }),
+      ]);
+      if (options.fail) throw new Error('WORKER_FAILURE_FIXTURE');
+      return textStream('AUTOMATIC_WORKER_REPORT');
+    }
+    parentCalls++;
+    if (parentCalls > 20) return textStream(`FIXTURE_STALLED: ${serialized.slice(-1800)}`);
+    if (serialized.includes('AUTOMATIC_WORKER_REPORT')) return textStream('PARENT_RESULT_INTEGRATED');
+    if (serialized.includes('WORKER_FAILURE_FIXTURE')) return textStream('PARENT_FAILURE_HANDLED');
+    if (serialized.includes('NEED_PARENT_DECISION') && !questionHandled) {
+      questionHandled = true;
+      return textStream('PARENT_QUESTION_HANDLED');
+    }
+    if (!spawned) {
+      spawned = true;
+      return stream(
+        [
+          {
+            type: 'tool-call',
+            toolCallId: 'automatic-child',
+            toolName: 'subagent',
+            input: JSON.stringify({ task: 'Run a bounded background task.', mode: 'executor', background: true }),
+          },
+        ],
+        'tool-calls',
+      );
+    }
+    if (serialized.includes('[Host context: inbox notification]')) {
+      expect(serialized).not.toContain('AUTOMATIC_WORKER_REPORT');
+      const id = /\\?"session\\?":\s*\\?"([0-9a-f-]{36})\\?"/.exec(serialized)?.[1];
+      return stream(
+        [
+          {
+            type: 'tool-call',
+            toolCallId: `read-worker-${parentCalls}`,
+            toolName: 'inbox',
+            input: JSON.stringify({ action: 'read', ids: ['Subagent:' + (id ?? 'missing')] }),
+          },
+        ],
+        'tool-calls',
+      );
+    }
+    return textStream('PARENT_READY');
+  });
+  await viewer.sendMessage({ text: 'Delegate and continue independently.', images: [] }, preferences);
+  await vi.waitFor(() =>
+    expect(
+      viewer
+        .getSnapshot()
+        .session.entries.some((entry) => entry.kind === 'assistant' && ['PARENT_READY', 'PARENT_QUESTION_HANDLED'].includes(entry.text)),
+    ).toBe(true),
+  );
+  const worker = viewer
+    .getSnapshot()
+    .session.entries.find((entry) => entry.kind === 'tool' && entry.command.startsWith('subagent ') && entry.session);
+  if (!worker || worker.kind !== 'tool' || !worker.session) throw new Error('Worker id was not returned');
+  return { viewer, workerId: worker.session, release, parentCalls: () => parentCalls };
+}
+
+it('wakes the idle parent when its background worker fails', async () => {
+  const { viewer, release } = await automaticWorkerFixture({ fail: true });
+  release();
+  await vi.waitFor(() =>
+    expect(
+      viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'PARENT_FAILURE_HANDLED'),
+    ).toBe(true),
+  );
+  expect(viewer.getSnapshot().session.entries.filter((entry) => entry.kind === 'user' && entry.source === 'inbox')).toHaveLength(1);
+}, 20_000);
+
+it('enforces parent and owner boundaries through the single inbox tool', async () => {
+  const { workerId, release } = await automaticWorkerFixture();
+  const executeAs = async (sessionId: string, input: Record<string, unknown>) => {
+    const built = await registry.createModelTools({ sessionId, approve: async () => true, onResult: () => {} });
+    return built.tools.inbox!.execute!(input, { toolCallId: 'inbox-boundary', messages: [] });
+  };
+  try {
+    expect(await executeAs('another-parent', { action: 'list', source: 'Subagent' })).toMatchObject({ items: [] });
+    expect(await executeAs('another-parent', { action: 'read', ids: [`Subagent:${workerId}`] })).toMatchObject({
+      items: [{ content: { status: 'denied' } }],
+    });
+    expect(await executeAs(workerId, { action: 'read', ids: ['Telegram:any-id'] })).toMatchObject({
+      status: 'partial',
+      errors: [{ source: 'Telegram', error: expect.stringContaining('Workers may only read') }],
+    });
+    expect(await executeAs(workerId, { action: 'list', source: 'Team' })).toMatchObject({ items: [] });
+  } finally {
+    release();
+  }
+}, 20_000);
+
+it('wakes the parent for a material question while the worker is still running', async () => {
+  const { viewer, release } = await automaticWorkerFixture({ question: true });
+  await vi.waitFor(() =>
+    expect(
+      viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'PARENT_QUESTION_HANDLED'),
+    ).toBe(true),
+  );
+  expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'tool' && entry.result.includes('NEED_PARENT_DECISION'))).toBe(
+    true,
+  );
+  release();
+  await vi.waitFor(() =>
+    expect(
+      viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'PARENT_RESULT_INTEGRATED'),
+    ).toBe(true),
+  );
+}, 20_000);
+
+it('retains a completion across owner pause and host restart, then wakes only its original parent on resume', async () => {
+  const { viewer, release, workerId, parentCalls } = await automaticWorkerFixture();
+  const parentId = viewer.getSnapshot().session.id;
+  viewer.stop({ holdQueue: true });
+  await vi.waitFor(() => expect(viewer.getSnapshot().session.automaticWakeHeld).toBe(true));
+  const calls = parentCalls();
+  release();
+  const { ActivityLedger } = await import('../src/activity-ledger.js');
+  const { readWorkerRecord } = await import('../src/worker-records.js');
+  await vi.waitFor(() => {
+    const reader = new ActivityLedger(join(root, 'state.db'), { readOnly: true });
+    try {
+      expect(readWorkerRecord(reader, workerId)?.finished).toBe(true);
+      expect(reader.pendingEvents().some((event) => event.source === 'worker')).toBe(true);
+    } finally {
+      reader.close();
+    }
+  });
+  expect(parentCalls()).toBe(calls);
+  await Promise.all(clients.map((entry) => entry.close()));
+  clients = [];
+  await host.close();
+  registry = new ToolRegistry();
+  host = await createFixtureHost();
+  await host.start();
+  const resumed = await client();
+  expect(resumed.getSnapshot().session.id).toBe(parentId);
+  expect(resumed.getSnapshot().session.automaticWakeHeld).toBe(true);
+  expect(resumed.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'inbox')).toBe(false);
+  await resumed.sendMessage({ text: 'Resume my work.', images: [] }, preferences);
+  await vi.waitFor(() =>
+    expect(
+      resumed.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'PARENT_RESULT_INTEGRATED'),
+    ).toBe(true),
+  );
+  expect(resumed.getSnapshot().session.entries.filter((entry) => entry.kind === 'user' && entry.source === 'inbox')).toHaveLength(1);
+}, 20_000);
+
+it('reconciles a saved poll after a crash before its ledger receipt without waking the parent twice', async () => {
+  const { viewer, release, workerId, parentCalls } = await automaticWorkerFixture();
+  release();
+  await vi.waitFor(() =>
+    expect(
+      viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'PARENT_RESULT_INTEGRATED'),
+    ).toBe(true),
+  );
+  const { ActivityLedger } = await import('../src/activity-ledger.js');
+  const { readWorkerRecord, writeWorkerRecord } = await import('../src/worker-records.js');
+  const writer = new ActivityLedger(join(root, 'state.db'));
+  try {
+    await vi.waitFor(() => expect(readWorkerRecord(writer, workerId)?.reportedRevision).toBe(1));
+    writeWorkerRecord(writer, workerId, { ...readWorkerRecord(writer, workerId)!, reportedRevision: 0 });
+    const event = writer.listEvents().find((entry) => entry.source === 'worker' && entry.payload.workerId === workerId)!;
+    writer.setEventState(event.id, 'pending');
+  } finally {
+    writer.close();
+  }
+  const calls = parentCalls();
+  await Promise.all(clients.map((entry) => entry.close()));
+  clients = [];
+  await host.close();
+  registry = new ToolRegistry();
+  host = await createFixtureHost();
+  await host.start();
+  const reader = new ActivityLedger(join(root, 'state.db'), { readOnly: true });
+  try {
+    await vi.waitFor(() => expect(readWorkerRecord(reader, workerId)?.reportedRevision).toBe(1));
+  } finally {
+    reader.close();
+  }
+  const reconnected = await client();
+  expect(parentCalls()).toBe(calls);
+  expect(reconnected.getSnapshot().session.entries.filter((entry) => entry.kind === 'user' && entry.source === 'inbox')).toHaveLength(1);
+}, 20_000);
+
+it.each(['terminal', 'telegram'])(
+  'keeps %s images in the session folder until the agent explicitly opens them',
+  async (channel) => {
+    fixtureVision = true;
+    const { createReadTool } = await import('../src/tools/file-read.js');
+    registry.register(createReadTool(['image'], root));
+    if (channel === 'telegram') {
+      const settings = await import('../src/settings.js');
+      const store = settings.defaultSettings();
+      store.telegram = { enabled: true, tokenEnv: 'ATTACHMENT_TEST_TOKEN_NOT_CONFIGURED', workspaceRoot: root, chatId: '1', userId: '2' };
+      settings.saveSettings(store);
+    }
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6C9sAAAAASUVORK5CYII=', 'base64');
+    const viewer = await client();
+    const sessionId = viewer.getSnapshot().session.id;
+    let requestedRead = false;
+    let filePath = '';
+    model.doStream = vi.fn(
+      async (options: { prompt?: Array<{ role: string; content: string | Array<{ type: string; text?: string; data?: unknown }> }> }) => {
+        const messages = options.prompt ?? [];
+        const files = messages.flatMap((message) =>
+          Array.isArray(message.content) ? message.content.filter((part) => part.type === 'file') : [],
+        );
+        if (requestedRead) {
+          if (files.length) expect(Buffer.from(files[0]!.data as Uint8Array)).toEqual(bytes);
+          else expect(JSON.stringify(messages)).toContain(bytes.toString('base64'));
+          return textStream('IMAGE_WAS_OPENED');
+        }
+        expect(files).toHaveLength(0);
+        expect(JSON.stringify(messages)).not.toContain(bytes.toString('base64'));
+        const lines = messages
+          .filter((message) => message.role === 'user')
+          .flatMap((message) =>
+            typeof message.content === 'string'
+              ? [message.content]
+              : message.content.flatMap((part) => (part.type === 'text' ? [part.text ?? ''] : [])),
+          )
+          .flatMap((text) => text.split('\n'));
+        const mapping = lines.find((line) => line.startsWith('[image#1='));
+        if (!mapping)
+          return stream(
+            [
+              {
+                type: 'tool-call',
+                toolCallId: 'read-notification',
+                toolName: 'inbox',
+                input: JSON.stringify({ action: 'read', source: 'Telegram' }),
+              },
+            ],
+            'tool-calls',
+          );
+        filePath = JSON.parse(mapping.slice('[image#1='.length, -1)) as string;
+        expect(dirname(filePath)).toBe(join(root, 'sessions', sessionId, 'attachments'));
+        requestedRead = true;
+        return stream(
+          [{ type: 'tool-call', toolCallId: 'open-image', toolName: 'file_read', input: JSON.stringify({ path: filePath }) }],
+          'tool-calls',
+        );
+      },
+    );
+    if (channel === 'terminal')
+      await viewer.sendMessage(
+        { text: '[image#1] Inspect this reference.', images: [{ base64: bytes.toString('base64'), mediaType: 'image/png' }] },
+        preferences,
+      );
+    else
+      await host.receiveTelegramMessage(999, '[image#1] Inspect this reference.', {
+        image: { bytes, filename: 'reference.png', mediaType: 'image/png' },
+      });
+    await vi.waitFor(() =>
+      expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant' && entry.text === 'IMAGE_WAS_OPENED')).toBe(
+        true,
+      ),
+    );
+    expect(readFileSync(filePath)).toEqual(bytes);
+    await viewer.flushSave();
+    expect(existsSync(join(root, 'sessions', sessionId, `${sessionId}.json`))).toBe(true);
+    expect(existsSync(join(root, 'attachments'))).toBe(false);
+    if (channel === 'telegram') {
+      const events = (await requestHost('ledger.events')) as Array<{ id: string; source: string }>;
+      const event = events.find((item) => item.source === 'owner-inbox')!;
+      const tools = await registry.createModelTools({ sessionId, approve: async () => true, onResult: () => {} });
+      await tools.tools.inbox!.execute!({ action: 'acknowledge', ids: [`Telegram:${event.id}`] }, { toolCallId: 'handled', messages: [] });
+      expect(existsSync(filePath)).toBe(true);
+    }
+  },
+  20_000,
+);

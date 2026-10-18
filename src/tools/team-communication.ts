@@ -2,14 +2,38 @@ import type { JSONValue } from 'ai';
 import { MAX_TOOL_INPUT_CHARS, type ToolDefinition } from './registry.js';
 
 type TeamSend = (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
-type TeamInbox = (limit: number) => Promise<unknown>;
-type TeamGroup = (limit: number) => Promise<unknown>;
+type TeamGroup = (limit: number, acknowledge?: number) => Promise<unknown>;
 type TeamStatus = () => Promise<unknown>;
 type TeamHistory = (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
 type TeamSendFile = (input: { path: string; to: string }) => Promise<unknown>;
 type TeamReceiveFile = (input: { id: string; to?: string }) => Promise<unknown>;
 type TeamFiles = () => Promise<unknown>;
 type TeamRemember = (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
+
+export function createTeamDeliveryTool(delivery: (input: Record<string, unknown>) => Promise<unknown>): ToolDefinition {
+  return {
+    providerId: 'host',
+    name: 'team_delivery',
+    maxInputChars: 512,
+    description:
+      'Inspect outbound intent and durable sent/cancelled receipts with list or read by id. List defaults to 20; use limit/offset to page. Transient errors retry automatically; permanent failures remain visible. Use retry with an id after its cause is resolved, or cancel an unsent delivery that is no longer wanted. A retry preserves the original recipient, payload, transfer id and team membership. Cancellation cannot retract a message already delivered or stop a transfer in progress.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['list', 'read', 'retry', 'cancel'] },
+        id: { type: 'string', maxLength: 128, description: 'Delivery id for read, retry or cancel.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        offset: { type: 'integer', minimum: 0 },
+      },
+      required: ['action'],
+    },
+    effect: { change: 'modify', data: 'sensitive', network: 'used', reversible: 'none', outbound: 'model-and-tool-server' },
+    autoApprove: () => true,
+    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
+    execute: delivery,
+  };
+}
 
 /**
  * The team surface for the agent: post to the shared group or direct-message a
@@ -39,37 +63,15 @@ export function createTeamSendTool(send: TeamSend): ToolDefinition {
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'none', outbound: 'model-and-tool-server' },
     autoApprove: () => true,
     execute: (input) => {
+      if (Object.keys(input).some((key) => !['recipient', 'text', 'replyTo'].includes(key)))
+        return Promise.resolve({ status: 'invalid', error: 'Use recipient for the destination; unknown fields are not accepted.' });
+      if (input.recipient !== undefined && (typeof input.recipient !== 'string' || !input.recipient.trim()))
+        return Promise.resolve({ status: 'invalid', error: 'recipient must be a member name or "group".' });
       const text = typeof input.text === 'string' ? input.text : '';
       if (!text.trim()) return Promise.resolve({ status: 'invalid', error: 'text is required.' });
       const recipient = typeof input.recipient === 'string' && input.recipient.trim() ? input.recipient.trim() : 'group';
       const replyTo = typeof input.replyTo === 'string' && input.replyTo.trim() ? input.replyTo.trim() : undefined;
       return send({ recipient, text, ...(replyTo ? { replyTo } : {}) });
-    },
-  };
-}
-
-export function createTeamInboxTool(inbox: TeamInbox): ToolDefinition {
-  return {
-    providerId: 'host',
-    name: 'team_inbox',
-    maxInputChars: 128,
-    description:
-      'Read the direct messages your team sent to this ranite, oldest first. A direct message is what woke this session, so read it and act on it. Reading consumes the messages: they are marked handled in the same step, so a message never returns on a later wake. When you answer a message with team_send, include its id in replyTo and it is acknowledged for you.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Maximum messages to read; defaults to 20.' },
-      },
-    },
-    effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
-    autoApprove: () => true,
-    toModelOutput: (output) => ({ type: 'json', value: output as JSONValue }),
-    execute: (input) => {
-      const limit = input.limit ?? 20;
-      if (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 50)
-        return Promise.resolve({ status: 'invalid', error: 'limit must be an integer between 1 and 50.' });
-      return inbox(Number(limit));
     },
   };
 }
@@ -85,12 +87,17 @@ export function createTeamGroupTool(group: TeamGroup): ToolDefinition {
     name: 'team_group',
     maxInputChars: 128,
     description:
-      'Read new messages from the shared team group channel, oldest first, advancing your read position. The group is ambient: posting to it never wakes anyone, so use this to catch up on group traffic. To send to the group, use team_send with recipient "group".',
+      'Read pending group messages without consuming them. After handling a page, pass its last seq in acknowledge to advance your position and read the next page. A lost tool response leaves the page available. Group traffic is ambient and never wakes anyone. Send with team_send and recipient "group".',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Maximum messages to read; defaults to 50.' },
+        acknowledge: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Last group seq already handled; acknowledge before reading the next page.',
+        },
       },
     },
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
@@ -100,7 +107,9 @@ export function createTeamGroupTool(group: TeamGroup): ToolDefinition {
       const limit = input.limit ?? 50;
       if (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 100)
         return Promise.resolve({ status: 'invalid', error: 'limit must be an integer between 1 and 100.' });
-      return group(Number(limit));
+      if (input.acknowledge !== undefined && (!Number.isSafeInteger(input.acknowledge) || Number(input.acknowledge) < 0))
+        return Promise.resolve({ status: 'invalid', error: 'acknowledge must be a non-negative sequence.' });
+      return input.acknowledge === undefined ? group(Number(limit)) : group(Number(limit), Number(input.acknowledge));
     },
   };
 }
@@ -135,7 +144,7 @@ export function createTeamHistoryTool(history: TeamHistory): ToolDefinition {
     name: 'team_history',
     maxInputChars: 256,
     description:
-      'Read older messages from the shared group or a direct-message conversation, newest first. Use scope "group" for the shared channel, or scope "dm" with peer set to a member name for your conversation with that member. Pass before as a message id sequence to page further back. This is a read-only look at the persistent log: it never marks anything read, so use team_inbox or team_group to catch up on new messages.',
+      'Read older messages from the shared group or a direct-message conversation, newest first. Use scope "group" for the shared channel, or scope "dm" with peer set to a member name for your conversation with that member. Pass before as a message id sequence to page further back. This is a read-only look at the persistent log: it never marks anything read, so use inbox or team_group to catch up on new messages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -173,7 +182,7 @@ export function createTeamSendFileTool(send: TeamSendFile): ToolDefinition {
     name: 'team_send_file',
     maxInputChars: 1024,
     description:
-      'Send a file from this machine to a team member or the shared group. Give the absolute path of the local file and the recipient (a member name, or "group"). The hub stores the file and wakes the recipient, who downloads it with team_receive_file. Any file type is allowed. The secret store can never be sent.',
+      'Send a file from this machine to a team member or the shared group. Give the absolute path of the local file and the recipient (a member name, or "group"). A verified snapshot is queued durably; the hub wakes the recipient after delivery. Use team_delivery to inspect queued/failed transfers. The recipient downloads with team_receive_file. Any file type is allowed. The secret store can never be sent.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

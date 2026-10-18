@@ -1,3 +1,5 @@
+import type { InboxRequest } from './inbox.js';
+import type { ParentMessageInput } from './worker-records.js';
 import { realpathSync, statSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { getCatalogIndex } from './provider/catalog.js';
@@ -28,11 +30,11 @@ export interface CreateAgentRuntimeOptions {
   onMcpError?: (serverId: string, message: string) => void;
   onMcpConnected?: (serverId: string, toolCount: number) => void;
   backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string, senderSessionId: string | undefined) => Promise<unknown>;
+  inbox?: (request: InboxRequest, sessionId: string | undefined) => Promise<unknown>;
   ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
-  ownerInboxRead?: (limit: number, acknowledge?: string[]) => Promise<unknown>;
+  teamDelivery?: (input: Record<string, unknown>) => Promise<unknown>;
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
-  teamInbox?: (limit: number) => Promise<unknown>;
-  teamGroup?: (limit: number) => Promise<unknown>;
+  teamGroup?: (limit: number, acknowledge?: number) => Promise<unknown>;
   teamHistory?: (query: { scope: 'group' | 'dm'; peer?: string; before?: number; limit?: number }) => Promise<unknown>;
   teamStatus?: () => Promise<unknown>;
   teamSendFile?: (input: { path: string; to: string }) => Promise<unknown>;
@@ -43,8 +45,7 @@ export interface CreateAgentRuntimeOptions {
   teamRemember?: (input: { topic: 'decisions' | 'shared'; text: string }) => Promise<unknown>;
   sessionMessage?: (input: Record<string, unknown>, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
-  parentMessage?: (input: { text: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
-  subagentPoll?: (input: { session: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
+  parentMessage?: (input: ParentMessageInput, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagentStop?: (input: { session: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
 }
 
@@ -131,10 +132,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
           runtime.registry = createRegistry(activeInputModalities);
         },
         ...(options.backgroundManage ? { backgroundManage: options.backgroundManage } : {}),
+        ...(options.inbox ? { inbox: options.inbox } : {}),
         ...(options.ownerMessageSend ? { ownerMessageSend: options.ownerMessageSend } : {}),
-        ...(options.ownerInboxRead ? { ownerInboxRead: options.ownerInboxRead } : {}),
+        ...(options.teamDelivery ? { teamDelivery: options.teamDelivery } : {}),
         ...(options.teamSend ? { teamSend: options.teamSend } : {}),
-        ...(options.teamInbox ? { teamInbox: options.teamInbox } : {}),
         ...(options.teamGroup ? { teamGroup: options.teamGroup } : {}),
         ...(options.teamHistory ? { teamHistory: options.teamHistory } : {}),
         ...(options.teamStatus ? { teamStatus: options.teamStatus } : {}),
@@ -147,7 +148,6 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         ...(options.sessionMessage ? { sessionMessage: options.sessionMessage } : {}),
         ...(options.subagent ? { subagent: options.subagent } : {}),
         ...(options.parentMessage ? { parentMessage: options.parentMessage } : {}),
-        ...(options.subagentPoll ? { subagentPoll: options.subagentPoll } : {}),
         ...(options.subagentStop ? { subagentStop: options.subagentStop } : {}),
       })) {
         registry.register(definition);
