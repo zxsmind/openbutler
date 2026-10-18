@@ -1462,7 +1462,7 @@ function SessionScreen({
             width={composerWidth}
             flexDirection="column"
             borderStyle="single"
-            borderColor="gray"
+            borderDimColor
             backgroundColor={tokens.surface}
             paddingX={1}
           >
@@ -1576,7 +1576,7 @@ function SessionScreen({
       )}
       {queuedMessageCount > 0 && !pending ? (
         <Box position="absolute" top={queuedMessageCardTop} left={0} width="100%" justifyContent="center">
-          <Box flexDirection="column" borderStyle="single" borderColor="gray" backgroundColor={tokens.surface} paddingX={1} flexShrink={0}>
+          <Box flexDirection="column" borderStyle="single" borderDimColor backgroundColor={tokens.surface} paddingX={1} flexShrink={0}>
             <Box flexDirection="row" flexShrink={0}>
               <Text color={tokens.accent} bold>
                 {`${glyphs.dot} ${queuedCardTitle}`}
@@ -1612,7 +1612,7 @@ function SessionScreen({
             width="100%"
             flexDirection="column"
             borderStyle="single"
-            borderColor="gray"
+            borderDimColor
             backgroundColor={tokens.surface}
             paddingX={1}
             flexShrink={0}
@@ -3241,9 +3241,7 @@ function renderMarkdownBlocks(
       case 'hr':
         return (
           <Box key={key} width="100%" marginBottom={gap}>
-            <Text color="gray" dimColor={dimmed}>
-              {'─'.repeat(Math.max(1, width))}
-            </Text>
+            <Text dimColor={dimmed}>{'─'.repeat(Math.max(1, width))}</Text>
           </Box>
         );
       case 'html':
@@ -3294,9 +3292,7 @@ function MarkdownBlockquote({
   return (
     <Box width="100%" flexDirection="row" marginBottom={spaced ? 1 : 0} flexShrink={0}>
       <Box width={2} flexShrink={0}>
-        <Text color="gray" dimColor={dimmed}>
-          {bar}
-        </Text>
+        <Text dimColor={dimmed}>{bar}</Text>
       </Box>
       <Box ref={contentRef} width={bodyWidth} flexDirection="column" flexShrink={1}>
         {renderMarkdownBlocks(tokens, bodyWidth, dimmed, keyPrefix, 0, false)}
@@ -3329,19 +3325,19 @@ function renderInlineMarkdown(tokens: Token[], dimmed: boolean, keyPrefix: strin
         );
       case 'codespan':
         return (
-          <Text key={key} color="yellow" dimColor={dimmed}>
+          <Text key={key} dimColor>
             {token.text}
           </Text>
         );
       case 'link':
         return (
-          <Text key={key} color="cyan" underline dimColor={dimmed}>
+          <Text key={key} underline dimColor={dimmed}>
             {renderInlineMarkdown(childMarkdownTokens(token), dimmed, key)}
           </Text>
         );
       case 'image':
         return (
-          <Text key={key} color="blue" dimColor={dimmed}>
+          <Text key={key} dimColor={dimmed}>
             [Image: {token.text || token.href}]
           </Text>
         );
@@ -3433,20 +3429,11 @@ function renderMarkdownTable(table: Tokens.Table, width: number, dimmed: boolean
                     {renderInlineMarkdown(cell.tokens, dimmed, `${key}-cell-${rowIndex}-${columnIndex}`)}
                   </Text>
                 </Box>
-                {columnIndex < row.length - 1 ? (
-                  <Text color="gray" dimColor={dimmed}>
-                    {' '}
-                    │{' '}
-                  </Text>
-                ) : null}
+                {columnIndex < row.length - 1 ? <Text dimColor={dimmed}> │ </Text> : null}
               </Fragment>
             ))}
           </Box>
-          {rowIndex === 0 ? (
-            <Text color="gray" dimColor={dimmed}>
-              {divider}
-            </Text>
-          ) : null}
+          {rowIndex === 0 ? <Text dimColor={dimmed}>{divider}</Text> : null}
         </Fragment>
       ))}
     </Box>
