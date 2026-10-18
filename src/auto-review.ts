@@ -164,6 +164,7 @@ export async function reviewToolRequest(options: AutoReviewOptions): Promise<Aut
       requestId: options.request.requestId,
       providerId: options.request.providerId,
       tool: options.request.name,
+      ...(options.request.timeoutSeconds === undefined ? {} : { executionTimeoutSeconds: options.request.timeoutSeconds }),
       input: JSON.parse(serializedInput) as unknown,
       declaredEffects: options.request.effect,
       hostDerivedEffectFlags: deriveEffectFlags(options.request.effect),

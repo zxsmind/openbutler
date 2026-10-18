@@ -35,6 +35,22 @@ it('resolves timeout independently of an already exited shell and preserves capt
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it('uses the selected execution budget instead of a private 60-second shell timer', async () => {
+  vi.useFakeTimers();
+  const child = exitedShell();
+  const result = createExecuteCommandTool(process.cwd()).execute({ command: 'fixture' }, undefined, { timeoutSeconds: 120 });
+  child.stdout.write('partial long operation');
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(await result).toMatchObject({
+    status: 'timed_out',
+    stdout: 'partial long operation',
+    error: expect.stringContaining('120 seconds'),
+  });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('drains buffered output before completing a command naturally', async () => {
   const child = exitedShell();
   const result = createExecuteCommandTool(process.cwd()).execute({ command: 'fixture' });

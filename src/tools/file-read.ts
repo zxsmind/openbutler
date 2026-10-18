@@ -16,6 +16,8 @@ import {
 } from '../image.js';
 import { classifyFilePath, resolveFilePath } from '../file-write-core.js';
 import { classifyHostOwnedPath } from '../host-owned-paths.js';
+import { isAttachmentPath, isStoredAttachmentPath, verifyAttachmentPath } from '../attachments.js';
+import { DEFAULT_TOOL_TIMEOUT_SECONDS, runWithToolTimeout } from './timeout.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
 import { isTrustedSkillResourcePath } from '../skills.js';
 import { MAX_TOOL_INPUT_CHARS, type ToolDefinition, type ToolEffect } from './registry.js';
@@ -164,7 +166,7 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
      */
     hostPreAuthorized: (input, target) => {
       const source = target ?? (typeof input.path === 'string' ? input.path : '');
-      return classifyHostOwnedPath(source, workspaceRoot) === 'settings';
+      return classifyHostOwnedPath(source, workspaceRoot) === 'settings' || isStoredAttachmentPath(source);
     },
     assess: (input, target) => {
       const source = typeof input.path === 'string' ? input.path : '';
@@ -204,8 +206,9 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
       if (kind !== 'path') {
         if (hasRange) return { status: 'invalid', error: 'offset and limit apply only to local files and directories.' };
         if (!supportsVision) return { status: 'unsupported', error: 'The selected model does not support image input.' };
-        const operationSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
-        const image = await loadImageSource(source, kind, operationSignal);
+        const image = await runWithToolTimeout(context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS, signal, (operationSignal) =>
+          loadImageSource(source, kind, operationSignal),
+        );
         return createImageToolResult(image.bytes, image.mediaType);
       }
 
@@ -246,6 +249,7 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
         return { status: 'too_large', path: path.slice(0, 512), sizeBytes: details.size, maxBytes: MAX_OTHER_MEDIA_BYTES };
       }
 
+      if (isAttachmentPath(path)) verifyAttachmentPath(path);
       const bytes = await readFile(path, signal ? { signal } : undefined);
       const mediaType = imageTypeFromBytes(bytes);
       if (mediaType !== null) {

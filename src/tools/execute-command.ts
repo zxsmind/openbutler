@@ -4,10 +4,10 @@ import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ToolDefinition } from './registry.js';
 import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
+import { DEFAULT_TOOL_TIMEOUT_SECONDS, runWithToolTimeout, ToolTimeoutError } from './timeout.js';
 
 const MAX_COMMAND_CHARS = 10_000;
 const MAX_OUTPUT_CHARS = 24_000;
-const MAX_RUNTIME_MS = 60_000;
 
 export function createExecuteCommandTool(startDirectory: string): ToolDefinition {
   const workspaceRoot = canonicalPath(startDirectory);
@@ -43,7 +43,10 @@ export function createExecuteCommandTool(startDirectory: string): ToolDefinition
       if (!command || command.length > MAX_COMMAND_CHARS || /[\u0000-\u0008\u000B-\u001F\u007F]/.test(command)) {
         return { status: 'invalid', error: `command must be 1-${MAX_COMMAND_CHARS} characters and contain no control characters.` };
       }
-      return runShell(command, context?.target ?? resolveCommandDirectory(input.cwd, workspaceRoot), signal);
+      const run = (operationSignal: AbortSignal | undefined) =>
+        runShell(command, context?.target ?? resolveCommandDirectory(input.cwd, workspaceRoot), operationSignal);
+      if (signal?.aborted) return run(signal);
+      return runWithToolTimeout(context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS, signal, run);
     },
   };
 }
@@ -182,7 +185,6 @@ function runShell(command: string, cwd: string, signal?: AbortSignal): Promise<u
     const finish = (result: unknown) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
       resolve(result);
     };
@@ -200,11 +202,10 @@ function runShell(command: string, cwd: string, signal?: AbortSignal): Promise<u
       child.stdout.destroy();
       child.stderr.destroy();
     };
-    const onAbort = () => stop('cancelled', 'Command was stopped by the user.');
-    const timeout = setTimeout(
-      () => stop('timed_out', `Command exceeded ${MAX_RUNTIME_MS / 1_000} seconds and was stopped.`),
-      MAX_RUNTIME_MS,
-    );
+    const onAbort = () =>
+      signal?.reason instanceof ToolTimeoutError
+        ? stop('timed_out', signal.reason.message)
+        : stop('cancelled', 'Command was stopped by the user.');
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdout = append(stdout, chunk);

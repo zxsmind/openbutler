@@ -7,9 +7,9 @@ import { getMcpWorkingDirectory } from '../paths.js';
 import { loadSettings, parseMcpServerState, saveSettings, type McpServerState } from '../settings.js';
 import { getRaniteVersion } from '../version.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
+import { DEFAULT_TOOL_TIMEOUT_SECONDS, runWithToolTimeout } from './timeout.js';
 
 const MCP_HANDSHAKE_TIMEOUT_MS = 15_000;
-const MCP_TOOL_TIMEOUT_MS = 60_000;
 const MCP_CLOSE_TIMEOUT_MS = 5_000;
 
 export interface McpServerRequest {
@@ -25,13 +25,15 @@ export interface McpServerRequest {
 
 type ConnectedMcpServer = { id: string; client: Client; tools: ToolDefinition[] };
 
+export type McpOperation = { signal?: AbortSignal; timeoutSeconds?: number };
+
 export interface McpConnectionManager {
   readonly tools: ToolDefinition[];
   list(): Array<{ id: string; transport: string; connected: boolean; toolCount: number }>;
-  addServer(id: string, config: unknown): Promise<string[]>;
-  connectServer(id: string): Promise<{ connected: boolean; changed: boolean; tools: string[] }>;
-  disconnectServer(id: string): Promise<boolean>;
-  removeServer(id: string): Promise<boolean>;
+  addServer(id: string, config: unknown, operation?: McpOperation): Promise<string[]>;
+  connectServer(id: string, operation?: McpOperation): Promise<{ connected: boolean; changed: boolean; tools: string[] }>;
+  disconnectServer(id: string, operation?: McpOperation): Promise<boolean>;
+  removeServer(id: string, operation?: McpOperation): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -71,12 +73,13 @@ export async function connectMcpServers(
         };
       });
     },
-    async addServer(id, rawConfig) {
+    async addServer(id, rawConfig, operation) {
       const config = parseMcpServerState(rawConfig, id);
       if (id in loadSettings().mcpServers) throw new Error(`MCP server ${id} is already configured.`);
-      const connection = await openMcpServer(id, config, options, true);
+      const connection = await openMcpServer(id, config, options, true, operation);
       if (!connection) throw new Error(`MCP server ${id} was not connected.`);
       try {
+        operation?.signal?.throwIfAborted();
         const settings = loadSettings();
         if (id in settings.mcpServers) throw new Error(`MCP server ${id} is already configured.`);
         settings.mcpServers[id] = config;
@@ -88,23 +91,23 @@ export async function connectMcpServers(
         throw error;
       }
     },
-    async connectServer(id) {
+    async connectServer(id, operation) {
       if (connected.has(id)) return { connected: true, changed: false, tools: connected.get(id)!.tools.map((tool) => tool.name) };
       const config = loadSettings().mcpServers[id];
       if (!config) throw new Error(`MCP server ${id} is not configured.`);
-      const connection = await openMcpServer(id, config, options, true);
+      const connection = await openMcpServer(id, config, options, true, operation);
       if (!connection) throw new Error(`MCP server ${id} was not connected.`);
       connected.set(id, connection);
       return { connected: true, changed: true, tools: connection.tools.map((tool) => tool.name) };
     },
-    async disconnectServer(id) {
+    async disconnectServer(id, operation) {
       const connection = connected.get(id);
       if (!connection) return false;
       connected.delete(id);
-      await closeMcpServer(connection, options);
+      await closeMcpServer(connection, options, operation);
       return true;
     },
-    async removeServer(id) {
+    async removeServer(id, operation) {
       const settings = loadSettings();
       if (!(id in settings.mcpServers)) throw new Error(`MCP server ${id} is not configured.`);
       delete settings.mcpServers[id];
@@ -112,7 +115,7 @@ export async function connectMcpServers(
       const connection = connected.get(id);
       if (connection) {
         connected.delete(id);
-        await closeMcpServer(connection, options);
+        await closeMcpServer(connection, options, operation);
       }
       return true;
     },
@@ -171,29 +174,33 @@ export function createMcpManagementTool(manager: McpConnectionManager, onConnect
     },
     autoApprove: (input) => input.action === 'list',
     restartAfterExecute: (result) => isRecord(result) && result.changed === true,
-    execute: async (input) => {
+    execute: async (input, signal, context) => {
+      const operation: McpOperation = {
+        ...(signal ? { signal } : {}),
+        timeoutSeconds: context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
+      };
       const action = input.action;
       const id = typeof input.serverId === 'string' ? input.serverId : '';
       if (action === 'list') return { status: 'completed', changed: false, servers: manager.list() };
       if (!id) return { status: 'invalid', error: 'serverId is required for this action.' };
       if (action === 'add') {
         if (!isRecord(input.config)) return { status: 'invalid', error: 'config is required when adding an MCP server.' };
-        const tools = await manager.addServer(id, input.config);
+        const tools = await manager.addServer(id, input.config, operation);
         onConnectionsChanged();
         return { status: 'completed', changed: true, serverId: id, tools };
       }
       if (action === 'connect') {
-        const result = await manager.connectServer(id);
+        const result = await manager.connectServer(id, operation);
         if (result.changed) onConnectionsChanged();
         return { status: 'completed', changed: result.changed, serverId: id, tools: result.tools };
       }
       if (action === 'disconnect') {
-        const changed = await manager.disconnectServer(id);
+        const changed = await manager.disconnectServer(id, operation);
         if (changed) onConnectionsChanged();
         return { status: 'completed', changed, serverId: id };
       }
       if (action === 'remove') {
-        await manager.removeServer(id);
+        await manager.removeServer(id, operation);
         onConnectionsChanged();
         return { status: 'completed', changed: true, serverId: id };
       }
@@ -207,12 +214,32 @@ async function openMcpServer(
   config: McpServerState,
   options: Parameters<typeof connectMcpServers>[1],
   throwOnError: boolean,
+  operation?: McpOperation,
 ): Promise<ConnectedMcpServer | null> {
   const client = new Client({ name: 'ranite', version: getRaniteVersion() });
   try {
-    await withTimeout((signal) => client.connect(createTransport(config), { signal }), MCP_HANDSHAKE_TIMEOUT_MS, 'connect');
-    const listed = await withTimeout((signal) => client.listTools(undefined, { signal }), MCP_HANDSHAKE_TIMEOUT_MS, 'list tools');
+    const discover = async (signal: AbortSignal, timeout: number) => {
+      await client.connect(createTransport(config), { signal, timeout, maxTotalTimeout: timeout });
+      return client.listTools(undefined, { signal, timeout, maxTotalTimeout: timeout });
+    };
+    const listed = operation
+      ? await runWithToolTimeout(operation.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS, operation.signal, (signal) =>
+          discover(signal, (operation.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS) * 1000),
+        )
+      : await (async () => {
+          await withTimeout(
+            (signal) => client.connect(createTransport(config), { signal, timeout: MCP_HANDSHAKE_TIMEOUT_MS }),
+            MCP_HANDSHAKE_TIMEOUT_MS,
+            'connect',
+          );
+          return withTimeout(
+            (signal) => client.listTools(undefined, { signal, timeout: MCP_HANDSHAKE_TIMEOUT_MS }),
+            MCP_HANDSHAKE_TIMEOUT_MS,
+            'list tools',
+          );
+        })();
     const tools: ToolDefinition[] = [];
+    operation?.signal?.throwIfAborted();
     const names = new Set<string>();
     for (const definition of listed.tools.slice(0, 256)) {
       const schema = JSON.stringify(definition.inputSchema);
@@ -235,17 +262,19 @@ async function openMcpServer(
         description,
         inputSchema: definition.inputSchema as Record<string, unknown>,
         effect: { change: 'unknown', data: 'unknown', network: 'used', reversible: 'unknown', outbound: 'model-and-tool-server' },
-        execute: async (input, signal) =>
-          normalizeMcpResult(
-            await client.callTool(
-              { name: definition.name, arguments: input },
-              {
-                requestSignal: signal
-                  ? AbortSignal.any([signal, AbortSignal.timeout(MCP_TOOL_TIMEOUT_MS)])
-                  : AbortSignal.timeout(MCP_TOOL_TIMEOUT_MS),
-              },
+        execute: async (input, signal, context) =>
+          runWithToolTimeout(context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS, signal, async (operationSignal) =>
+            normalizeMcpResult(
+              await client.callTool(
+                { name: definition.name, arguments: input },
+                {
+                  requestSignal: operationSignal,
+                  timeout: (context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS) * 1000,
+                  maxTotalTimeout: (context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS) * 1000,
+                },
+              ),
+              options.inputModalities?.() ?? ['text'],
             ),
-            options.inputModalities?.() ?? ['text'],
           ),
         toModelOutput: (output) =>
           summarizeImageToolResult(output) !== null || summarizeFileToolResult(output) !== null
@@ -266,9 +295,15 @@ async function openMcpServer(
   }
 }
 
-async function closeMcpServer(server: ConnectedMcpServer, options: Parameters<typeof connectMcpServers>[1]): Promise<void> {
+async function closeMcpServer(
+  server: ConnectedMcpServer,
+  options: Parameters<typeof connectMcpServers>[1],
+  operation?: McpOperation,
+): Promise<void> {
   try {
-    await withTimeout(() => server.client.close(), MCP_CLOSE_TIMEOUT_MS, 'shutdown');
+    if (operation)
+      await runWithToolTimeout(operation.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS, operation.signal, () => server.client.close());
+    else await withTimeout(() => server.client.close(), MCP_CLOSE_TIMEOUT_MS, 'shutdown');
   } catch (error) {
     options.onError(server.id, error instanceof Error ? error.message : String(error));
   }

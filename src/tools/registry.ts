@@ -8,6 +8,7 @@ import { redactToolOutput } from '../sensitive-data.js';
 import type { ToolActionState } from '../activity-ledger.js';
 import type { ApprovalMode } from '../settings.js';
 import type { WorkspaceScope } from '../workspace-scope.js';
+import { runWithToolTimeout, toolTimeoutSeconds, ToolTimeoutError, TOOL_TIMEOUT_FIELD, withToolTimeoutSchema } from './timeout.js';
 
 const MAX_INPUT_CHARS = 50_000;
 export const MAX_TOOL_RESULT_CHARS = 80_000;
@@ -22,6 +23,8 @@ export interface ToolEffect {
 }
 
 export interface ToolExecutionContext {
+  /** Host-selected operation budget, separate from tool/server arguments. */
+  timeoutSeconds?: number;
   /** The target resolved once before the permission decision, when the definition declared one. */
   target?: string;
   /**
@@ -83,6 +86,7 @@ export interface ToolCallRequest {
   name: string;
   input: Record<string, unknown>;
   effect: ToolEffect;
+  timeoutSeconds?: number;
   /**
    * Why this call needs a human or reviewer decision. Set by the registry when
    * deterministic gates pass it to approve(); reviewers use it as context.
@@ -136,6 +140,7 @@ export class ToolRegistry {
     if (!schema || schema.length > 50_000) {
       throw new Error(`Tool schema is too large: ${definition.providerId}/${definition.name}`);
     }
+    withToolTimeoutSchema(definition.inputSchema);
     const id = `${definition.providerId}:${definition.name}`;
     if (this.definitions.has(id)) throw new Error(`Tool already registered: ${id}`);
     this.definitions.set(id, definition);
@@ -187,6 +192,14 @@ export class ToolRegistry {
       if (stopped) return { status: 'denied', error: 'A previous tool call was declined; this agent run has stopped.' };
       if (!input || typeof input !== 'object' || Array.isArray(input))
         return { status: 'rejected', error: 'Tool input must be an object.' };
+      let timeoutSeconds: number;
+      try {
+        timeoutSeconds = toolTimeoutSeconds(input[TOOL_TIMEOUT_FIELD]);
+      } catch (error) {
+        return { status: 'invalid', error: error instanceof Error ? error.message : String(error) };
+      }
+      const { [TOOL_TIMEOUT_FIELD]: _timeout, ...argumentsOnly } = input;
+      input = argumentsOnly;
       let serializedInput: string;
       try {
         serializedInput = JSON.stringify(input);
@@ -207,7 +220,14 @@ export class ToolRegistry {
       } catch (error) {
         return { status: 'rejected', error: `Could not assess tool effects: ${error instanceof Error ? error.message : String(error)}` };
       }
-      const request: ToolCallRequest = { requestId: randomUUID(), providerId: definition.providerId, name: definition.name, input, effect };
+      const request: ToolCallRequest = {
+        requestId: randomUUID(),
+        providerId: definition.providerId,
+        name: definition.name,
+        input,
+        effect,
+        timeoutSeconds,
+      };
       const reportResult = (result: unknown) => {
         try {
           options.onResult(request, result, toolCallId);
@@ -351,17 +371,14 @@ export class ToolRegistry {
         await options.onAction?.(request, 'started');
         options.onStart?.(request, toolCallId);
         executionStarted = true;
-        const executed = await definition.execute(
-          input,
-          options.signal,
-          target === undefined && options.ask === undefined && options.sessionId === undefined && options.guardWrite === undefined
-            ? undefined
-            : {
-                ...(target === undefined ? {} : { target }),
-                ...(options.ask === undefined ? {} : { ask: options.ask }),
-                ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
-                ...(options.guardWrite === undefined ? {} : { guardWrite: options.guardWrite }),
-              },
+        const executed = await runWithToolTimeout(timeoutSeconds, options.signal, (signal) =>
+          definition.execute(input, signal, {
+            timeoutSeconds,
+            ...(target === undefined ? {} : { target }),
+            ...(options.ask === undefined ? {} : { ask: options.ask }),
+            ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+            ...(options.guardWrite === undefined ? {} : { guardWrite: options.guardWrite }),
+          }),
         );
         executionCompleted = true;
         // One scrubber for every exit: the model, the transcript, the ledger, and notifications
@@ -392,6 +409,16 @@ export class ToolRegistry {
         return tagReviewed(bounded);
       } catch (error) {
         if (resultRecorded) throw error;
+        if (error instanceof ToolTimeoutError) {
+          const result = { status: 'timed_out', timeoutSeconds, error: error.message };
+          try {
+            await options.onAction?.(request, 'failed', { result, error: error.message });
+          } catch {
+            /* Preserve the paired timeout result. */
+          }
+          reportResult(result);
+          return result;
+        }
         if (options.signal?.aborted) {
           let cancelled: Record<string, unknown> = { status: 'cancelled', error: 'Execution was stopped by the user.' };
           try {
@@ -462,7 +489,7 @@ export class ToolRegistry {
       };
       modelTools[modelName] = tool({
         description: `${definition.description}\nSource: ${definition.providerId}/${definition.name}. Declared effects: ${JSON.stringify(definition.effect)}.`,
-        inputSchema: jsonSchema<Record<string, unknown>>(definition.inputSchema as Parameters<typeof jsonSchema>[0]),
+        inputSchema: jsonSchema<Record<string, unknown>>(withToolTimeoutSchema(definition.inputSchema) as Parameters<typeof jsonSchema>[0]),
         onInputStart: ({ toolCallId }) => {
           try {
             options.preview?.onStart?.({ toolCallId, providerId: definition.providerId, name: definition.name });
@@ -517,7 +544,12 @@ function toolOutcome(result: unknown): ToolActionState {
   if (result && typeof result === 'object') {
     const record = result as Record<string, unknown>;
     if (record.status === 'cancelled') return 'cancelled';
-    if (record.status === 'failed' || record.status === 'error' || (typeof record.exitCode === 'number' && record.exitCode !== 0))
+    if (
+      record.status === 'timed_out' ||
+      record.status === 'failed' ||
+      record.status === 'error' ||
+      (typeof record.exitCode === 'number' && record.exitCode !== 0)
+    )
       return 'failed';
   }
   return 'completed';
