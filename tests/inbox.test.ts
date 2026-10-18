@@ -81,6 +81,25 @@ describe('one extensible agent inbox', () => {
     expect(backend.read).toHaveBeenCalledWith(['ref:with / characters'], 'parent');
   });
 
+  it('reports the notifications a source has not listed yet', async () => {
+    const inbox = new AgentInbox();
+    inbox.register({
+      name: 'Paged',
+      list: async () => ({
+        items: [
+          { reference: 'one', receivedAt: '2026-10-18T10:00:00.000Z', state: 'unread' },
+          { reference: 'two', receivedAt: '2026-10-18T10:01:00.000Z', state: 'unread' },
+        ],
+        remaining: 5,
+      }),
+      read: async () => [],
+      acknowledge: async () => ({}),
+    });
+    // Seven notifications exist, the source lists two; a large limit must not claim the rest are gone.
+    expect(await inbox.execute({ action: 'list', limit: 20 }, 'parent')).toMatchObject({ remaining: 5 });
+    expect(await inbox.execute({ action: 'list', offset: 1, limit: 20 }, 'parent')).toMatchObject({ remaining: 5 });
+  });
+
   it('keeps healthy sources available while surfacing failures', async () => {
     const inbox = new AgentInbox();
     inbox.register({

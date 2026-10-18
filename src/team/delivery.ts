@@ -9,6 +9,8 @@ import { makeFileId } from './service.js';
 import type { TeamConnection } from './session.js';
 
 /** Owns durable outbound intent, retries and terminal failures for text and files. */
+export const MAX_LOCAL_FAILURE_ATTEMPTS = 6;
+
 export class TeamDelivery {
   private readonly inFlight = new Set<string>();
   private flushing: Promise<void> | null = null;
@@ -120,7 +122,15 @@ export class TeamDelivery {
       if (entry.file) await rm(outboundFilePath(entry.file.id), { force: true });
     } catch (error) {
       if (this.closed) return;
-      const retryable = error instanceof TeamTransportError ? error.retryable : !(error instanceof TeamError);
+      // A transport failure reports its own retryability; a business rejection is
+      // final; anything else is a local fault (a bug, a missing file, a full disk)
+      // that will not cure itself. Retrying that a few times is harmless, but
+      // looping forever behind the word "queued" hides a delivery that never
+      // happens, so after MAX_LOCAL_FAILURE_ATTEMPTS the record fails visibly.
+      const retryable =
+        error instanceof TeamTransportError
+          ? error.retryable
+          : !(error instanceof TeamError) && (entry.attempts ?? 0) < MAX_LOCAL_FAILURE_ATTEMPTS;
       this.outbox.outcome(entry.msgId, error instanceof Error ? error.message : String(error), retryable);
     } finally {
       this.inFlight.delete(entry.msgId);

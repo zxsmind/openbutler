@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TeamDelivery } from '../src/team/delivery.js';
+import { TeamDelivery, MAX_LOCAL_FAILURE_ATTEMPTS } from '../src/team/delivery.js';
 import { TeamOutbox } from '../src/team/outbox.js';
 import { TeamTransportError } from '../src/team/contracts.js';
 import { outboundFilePath } from '../src/team/files.js';
@@ -61,6 +61,21 @@ describe('durable team delivery', () => {
     expect(service.status('A')[0]).toMatchObject({ state: 'failed', error: 'Unknown recipient' });
     await service.manage({ action: 'cancel', id: result.messageId });
     expect(queue.size()).toBe(0);
+  });
+
+  it('stops retrying a local fault instead of queueing it forever', async () => {
+    const queue = new TeamOutbox(join(root, 'outbox.json'));
+    const send = vi.fn().mockRejectedValue(new Error('ENOENT: staged snapshot vanished'));
+    const service = new TeamDelivery(() => binding('A', { send }), queue);
+    const result = (await service.send({ recipient: 'Peer', text: 'request' })) as { status: string; messageId: string };
+    expect(result.status).toBe('queued');
+    for (let round = 0; round < 10; round += 1) {
+      if (service.status('A')[0]?.state === 'failed') break;
+      await service.manage({ action: 'retry', id: result.messageId });
+    }
+    expect(service.status('A')[0]).toMatchObject({ state: 'failed' });
+    expect(service.status('A')[0]?.error).toContain('ENOENT');
+    expect(send.mock.calls.length).toBeLessThanOrEqual(MAX_LOCAL_FAILURE_ATTEMPTS + 1);
   });
 
   it('does not retarget a captured queue when membership changes between sends', async () => {

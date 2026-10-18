@@ -62,6 +62,7 @@ export class AgentInbox {
         .sort((left, right) => left.receivedAt.localeCompare(right.receivedAt) || left.id.localeCompare(right.id));
       const total = items.length + pages.reduce((sum, page) => sum + (page.remaining ?? 0), 0);
       if (request.action === 'list') {
+        const page = items.slice(offset, offset + limit);
         return {
           type: 'inbox',
           status: errors.length ? 'partial' : 'ok',
@@ -70,8 +71,8 @@ export class AgentInbox {
             count: page.items.length + (page.remaining ?? 0),
             unread: page.items.filter((item) => item.state === 'unread').length,
           })),
-          items: items.slice(offset, offset + limit).map(({ reference: _reference, ...item }) => item),
-          remaining: Math.max(0, total - offset - limit),
+          items: page.map(({ reference: _reference, ...item }) => item),
+          remaining: Math.max(0, total - offset - page.length),
           errors,
         };
       }
