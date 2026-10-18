@@ -18,7 +18,10 @@ const MAX_SESSION_READ_LIMIT = 100;
 const DEFAULT_SESSION_READ_LIMIT = 30;
 const MAX_ENTRY_TEXT_CHARS = 4_000;
 const MAX_TOOL_COMMAND_CHARS = 1_000;
-const MAX_TOOL_RESULT_CHARS = 1_000;
+/** Per-entry tool output cap. Deliberately small and local; the registry's own
+ * MAX_TOOL_RESULT_CHARS (80k) bounds a whole tool result, not one transcript entry,
+ * and sharing the name made the two look interchangeable. */
+const MAX_TOOL_OUTPUT_CHARS = 1_000;
 const MAX_RESULT_TOTAL_CHARS = 30_000;
 const TRUNCATION_MARKER = '\n… [middle truncated] …\n';
 
@@ -195,7 +198,7 @@ function sessionSummary(session: {
 function projectEntry(entry: TranscriptEntry, index: number): { value: Record<string, unknown>; cost: number; truncated: boolean } {
   if (entry.kind === 'tool') {
     const command = truncateText(redactSensitiveText(entry.command), MAX_TOOL_COMMAND_CHARS);
-    const result = truncateText(redactSensitiveText(entry.result), MAX_TOOL_RESULT_CHARS);
+    const result = truncateText(redactSensitiveText(entry.result), MAX_TOOL_OUTPUT_CHARS);
     return {
       value: {
         index,
