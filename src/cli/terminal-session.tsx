@@ -2823,7 +2823,7 @@ export function sliceTextRows(
   return { text: lines.slice(first, last + 1).join('\n'), headRows, tailRows };
 }
 
-function estimateTranscriptEntryHeight(
+export function estimateTranscriptEntryHeight(
   entry: Entry,
   width: number,
   expandedTool = false,
@@ -2853,7 +2853,10 @@ function estimateTranscriptEntryHeight(
       .replace(/\r\n?/g, '\n')
       .replace(/\n[ \t]*\n+/g, '\n')
       .trim();
-    return text ? wrappedRows(text, width - 2) + 1 : 0;
+    // The reasoning text renders inside a box of exactly width columns, so
+    // that is the width Ink wraps at. Using the user-message gutter here made
+    // every long line count one row too many.
+    return text ? wrappedRows(text, width) + 1 : 0;
   }
   if (entry.kind === 'tool') {
     const command = displayableCommand(entry.command).replace(/\n/g, ' ↵ ');
@@ -2958,7 +2961,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({
     // Reasoning is one plain text run, so a row window can be applied exactly:
     // the lines on screen are the same lines, and the skipped rows become
     // spacers of the same height.
-    const sliced = rowWindow ? sliceTextRows(text, width - 2, rowWindow) : null;
+    const sliced = rowWindow ? sliceTextRows(text, width, rowWindow) : null;
     return (
       <Box width="100%" justifyContent="flex-start" flexDirection="column" marginBottom={1}>
         {sliced && sliced.headRows > 0 ? <Box height={sliced.headRows} flexShrink={0} /> : null}
