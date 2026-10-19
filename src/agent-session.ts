@@ -705,9 +705,13 @@ export class AgentSessionController implements AgentSessionClient {
 
   private flushStreamedEntries(): void {
     this.flushStreamedDeltas();
-    const wasStreaming = this.streamedAssistantEntry !== null || this.streamedReasoningEntry !== null;
+    // A reasoning block usually ends here: a tool call, a step boundary or the
+    // end of the run. Its duration has to be stamped before the pointer drops,
+    // otherwise every block that is not followed by assistant text keeps a bare
+    // "Thought" label forever.
+    this.finishStreamedReasoning();
+    const wasStreaming = this.streamedAssistantEntry !== null;
     this.streamedAssistantEntry = null;
-    this.streamedReasoningEntry = null;
     if (wasStreaming) this.publish();
   }
 

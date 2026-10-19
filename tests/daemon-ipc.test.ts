@@ -546,6 +546,42 @@ describe('shared host and session IPC', () => {
     expect(actions).toContainEqual(expect.objectContaining({ requestId: id, state: 'completed' }));
   }, 10_000);
 
+  it('hands a stamped thinking duration to the client instead of losing it in the patch', async () => {
+    // The publish diff treated a duration-only change as a text append with an
+    // empty delta, and the client rebuilt the entry from kind and text alone. The
+    // server had the duration while the transcript kept a bare "Thought" label.
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'Fixture tool',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => ({ status: 'completed', detail: 'Fixture result' }),
+    });
+    model.doStream = vi
+      .fn()
+      .mockImplementationOnce(async () =>
+        stream(
+          [
+            { type: 'reasoning-start', id: 'reasoning' },
+            { type: 'reasoning-delta', id: 'reasoning', delta: 'Think before the tool.' },
+            { type: 'reasoning-end', id: 'reasoning' },
+            { type: 'tool-call', toolCallId: 'inspect-duration', toolName: 'inspect', input: '{}' },
+          ],
+          'tool-calls',
+        ),
+      )
+      .mockImplementationOnce(async () => textStream('Fixture complete.'));
+    const viewer = await client();
+    await viewer.sendMessage({ text: 'Inspect fixture', images: [] }, { reasoningVariantId: 'default', showReasoning: true });
+    await vi.waitFor(() => expect(viewer.getSnapshot().busy).toBe(false));
+    const blocks = viewer.getSnapshot().session.entries.filter((entry) => entry.kind === 'reasoning');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'reasoning', text: 'Think before the tool.' });
+    expect((blocks[0] as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
+  }, 10_000);
+
   it('routes a model question through session.answer, ignores a stale id, and clears it after the answer', async () => {
     const { createQuestionTool } = await import('../src/tools/question.js');
     registry.register(createQuestionTool());

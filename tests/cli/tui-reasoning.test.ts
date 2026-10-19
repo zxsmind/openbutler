@@ -42,7 +42,7 @@ function reasoningEntry(durationMs?: number): SessionEntry {
   return { kind: 'reasoning', text: 'first thought line\nsecond thought line', ...(durationMs === undefined ? {} : { durationMs }) };
 }
 
-function element(entry: SessionEntry, options: { hideReasoning?: boolean; expandedReasoning?: boolean } = {}) {
+function element(entry: SessionEntry, options: { hideReasoning?: boolean; reasoningToggled?: boolean } = {}) {
   return createElement(TranscriptEntry, {
     entry,
     index: 0,
@@ -51,7 +51,7 @@ function element(entry: SessionEntry, options: { hideReasoning?: boolean; expand
     expanded: false,
     expandedMessage: false,
     expandedNotice: false,
-    expandedReasoning: options.expandedReasoning ?? false,
+    reasoningToggled: options.reasoningToggled ?? false,
     hideReasoning: options.hideReasoning ?? false,
     dimmed: false,
     setToolRef: () => {},
@@ -82,9 +82,17 @@ describe('reasoning block', () => {
   });
 
   it('opens one hidden block when it was toggled by hand', async () => {
-    const lines = await renderLines(element(reasoningEntry(4_500), { hideReasoning: true, expandedReasoning: true }));
+    const lines = await renderLines(element(reasoningEntry(4_500), { hideReasoning: true, reasoningToggled: true }));
     expect(lines[0]).toContain('Thought for 4.5s');
     expect(lines.join('\n')).toContain('first thought line');
+  });
+
+  it('folds a visible block when it was toggled by hand', async () => {
+    // The toggle has to work in both directions: with thinking on, a click on the
+    // block closes it, and the header stays so it can be opened again.
+    const lines = await renderLines(element(reasoningEntry(4_500), { reasoningToggled: true }));
+    expect(lines[0]).toContain('Thought for 4.5s');
+    expect(lines.join('\n')).not.toContain('first thought line');
   });
 
   it('formats minutes once a block runs past a minute', async () => {

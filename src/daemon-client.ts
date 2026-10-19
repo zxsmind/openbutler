@@ -510,7 +510,9 @@ function applyEntriesPatch(previous: SessionEntry[], patch: SessionEntriesPatch 
   for (const update of patch.appendText) {
     const entry = entries[update.index];
     if ((entry?.kind === 'assistant' || entry?.kind === 'reasoning') && typeof update.delta === 'string') {
-      entries[update.index] = { kind: entry.kind, text: entry.text + update.delta };
+      // Keep the rest of the entry: the server can add a field (a stamped
+      // thinking duration) while the text keeps growing.
+      entries[update.index] = { ...entry, text: entry.text + update.delta };
     }
   }
   for (const update of patch.replace) entries[update.index] = update.entry;

@@ -518,6 +518,54 @@ describe('session streaming message boundaries', () => {
     expect(entries[0]).toMatchObject({ kind: 'reasoning', text: 'Hidden but stored.' });
   });
 
+  it('stamps the thinking time when a tool call ends the block instead of assistant text', async () => {
+    // A reasoning block is usually followed by a tool call, not by prose. The
+    // tool boundary used to drop the pointer without stamping a duration, so
+    // every such block kept a bare "Thought" label with no elapsed time.
+    const registry = new ToolRegistry();
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'A local fixture tool',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => ({ status: 'completed', detail: 'Fixture result' }),
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi
+        .fn()
+        .mockImplementationOnce(async () =>
+          delayedStream(
+            [
+              { type: 'reasoning-start', id: 'reasoning' },
+              { type: 'reasoning-delta', id: 'reasoning', delta: 'Check the file first.' },
+              { pause: 60 },
+              { type: 'reasoning-end', id: 'reasoning' },
+              { type: 'tool-call', toolCallId: 'inspect-1', toolName: 'inspect', input: '{}' },
+            ],
+            'tool-calls',
+          ),
+        )
+        .mockImplementationOnce(async () =>
+          delayedStream([
+            { type: 'text-start', id: 'after' },
+            { type: 'text-delta', id: 'after', delta: 'Done.' },
+            { type: 'text-end', id: 'after' },
+          ]),
+        ),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model, registry));
+    await session.sendMessage({ text: 'inspect', images: [] }, preferences);
+
+    const blocks = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'reasoning');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ kind: 'reasoning', text: 'Check the file first.' });
+    expect((blocks[0] as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
+  });
+
   it('starts a new assistant entry at a real tool boundary while joining deltas on both sides', async () => {
     const registry = new ToolRegistry();
     registry.register({

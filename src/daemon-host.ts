@@ -3335,13 +3335,38 @@ function diffEntries(previous: readonly SessionEntry[], next: readonly SessionEn
     const before = previous[index]!;
     const after = next[index]!;
     if (before === after) continue;
-    if ((before.kind === 'assistant' || before.kind === 'reasoning') && after.kind === before.kind && after.text.startsWith(before.text)) {
+    // Only a pure text append can ride the delta. A change to any other field —
+    // a stamped thinking duration, for instance — has to replace the entry, or
+    // the client keeps a stale copy that never learns the new field.
+    if (
+      (before.kind === 'assistant' || before.kind === 'reasoning') &&
+      after.kind === before.kind &&
+      after.text.startsWith(before.text) &&
+      sameEntryExceptText(before, after)
+    ) {
       appendText.push({ index, delta: after.text.slice(before.text.length) });
     } else {
       replace.push({ index, entry: after });
     }
   }
   return { kind: 'delta', append: next.slice(previous.length), replace, appendText };
+}
+
+/**
+ * Whether two entries differ only in their text, which is the one field a delta
+ * patch can carry. Values are compared shallowly: a nested field that changed
+ * produces a new object, so identity is enough and the answer fails safe toward
+ * replacing the entry.
+ */
+function sameEntryExceptText(before: SessionEntry, after: SessionEntry): boolean {
+  const left = before as Record<string, unknown>;
+  const right = after as Record<string, unknown>;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (key === 'text') continue;
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
 }
 
 function toSnapshotData(snapshot: AgentSessionSnapshot): SessionSnapshotData {
