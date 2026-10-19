@@ -1709,6 +1709,11 @@ async function main(): Promise<void> {
       await runApprove(parsed);
       return;
     }
+    case 'web': {
+      const { runWebCommand } = await import('./cli/web.js');
+      await runWebCommand(parsed);
+      return;
+    }
     case 'uninstall': {
       await runUninstall(parsed);
       return;
