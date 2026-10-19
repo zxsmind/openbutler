@@ -1,4 +1,4 @@
-import { PassThrough, Writable } from 'node:stream';
+﻿import { PassThrough, Writable } from 'node:stream';
 import { createElement } from 'react';
 import { render } from 'ink';
 import { describe, expect, it } from 'vitest';
@@ -95,6 +95,11 @@ async function wheelDistance(chunks: number, perChunk: number): Promise<number> 
   const raw = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode: (enabled: boolean) => void };
   Object.defineProperty(raw, 'isTTY', { value: true });
   raw.setRawMode = () => {};
+  // The bridge only engages when the process looks interactive; without this
+  // the wheel handler is never wired and every scroll assertion compares two
+  // unchanged frames.
+  const stdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
   const mouseInput = createMouseInputBridge(raw);
   const selection = {
     get isDragging() {
@@ -141,6 +146,8 @@ async function wheelDistance(chunks: number, perChunk: number): Promise<number> 
   const top = topRow(lastFrame);
   instance.unmount();
   mouseInput.close();
+  if (stdoutIsTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutIsTTY);
+  else Object.defineProperty(process.stdout, 'isTTY', { value: undefined, configurable: true });
   return top;
 }
 
@@ -151,5 +158,16 @@ describe('mouse wheel input', () => {
     // Five notches in a single chunk is a trackpad-friendly terminal burst.
     const batched = await wheelDistance(1, 5);
     expect(batched).toBe(paced);
+  }, 60_000);
+
+  it('keeps moving on the notches after the first one', async () => {
+    // The scroll callback is rebuilt only when the content height changes, so a
+    // captured offset freezes: the first notch moves, every later notch
+    // recomputes the same target and the view stops.
+    const first = await wheelDistance(1, 1);
+    const second = await wheelDistance(2, 1);
+    const third = await wheelDistance(3, 1);
+    expect(second).toBeLessThan(first);
+    expect(third).toBeLessThan(second);
   }, 60_000);
 });

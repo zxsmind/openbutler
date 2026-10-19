@@ -341,14 +341,20 @@ export function SessionScreen({
   const activeReasoningLabel = runtime.reasoningVariants.find((variant) => variant.id === reasoningVariantId)?.label ?? reasoningVariantId;
   const maxScrollTop = Math.max(0, layoutMetrics.contentHeight - layoutMetrics.viewportHeight);
   const scrollTop = Math.min(requestedScrollTop, maxScrollTop);
+  const scrollTopRef = useRef(scrollTop);
+  scrollTopRef.current = scrollTop;
   const scrollBy = useCallback(
     (delta: number) => {
       if (delta === 0) return;
-      // A wheel burst delivers several events before the next render, so the
-      // offset has to be updated functionally. Reading the rendered `scrollTop`
-      // here would make every event in the burst compute the same target and
-      // collapse the whole burst into one step.
-      const next = Math.max(0, Math.min(maxScrollTop, scrollTop - delta));
+      // Read the pending offset from a ref, not from the rendered value: this
+      // callback is rebuilt only when maxScrollTop changes, so a captured
+      // `scrollTop` stays frozen while the user scrolls. A wheel burst also
+      // delivers several events before the next render. Both cases collapse
+      // every notch onto the same target, which reads as "it scrolls once and
+      // then stops".
+      const current = followTail.current ? maxScrollTop : scrollTopRef.current;
+      const next = Math.max(0, Math.min(maxScrollTop, current - delta));
+      scrollTopRef.current = next;
       if (next >= maxScrollTop) {
         followTail.current = true;
         setRequestedScrollTop(Number.MAX_SAFE_INTEGER);
@@ -361,8 +367,6 @@ export function SessionScreen({
   );
   const scrollByRef = useRef(scrollBy);
   scrollByRef.current = scrollBy;
-  const scrollTopRef = useRef(scrollTop);
-  scrollTopRef.current = scrollTop;
 
   useEffect(() => {
     if (followTail.current) setRequestedScrollTop(Number.MAX_SAFE_INTEGER);
