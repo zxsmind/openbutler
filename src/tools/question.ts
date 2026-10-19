@@ -18,7 +18,7 @@ export function createQuestionTool(): ToolDefinition {
     providerId: 'host',
     name: 'question',
     description:
-      'Ask the user one direct question during a run and wait for their answer. Provide short options when you can enumerate the likely answers; the user can still reply in their own words. Use it for a blocking choice or a missing detail you cannot discover with tools or safe defaults — not for progress updates or rhetorical questions. In unattended or background runs no interactive user is attached; the tool then reports that and you must include the question in your final response instead.',
+      'Ask the user one direct question during a run and wait for their answer. Provide short options when you can enumerate the likely answers; the user can still reply in their own words. Use it for a blocking choice or a missing detail you cannot discover with tools or safe defaults — not for progress updates or rhetorical questions. If no interactive user is attached, use send_message_to_owner for a necessary owner question when available; a worker reports it to its parent with parent_message or its final report. Otherwise preserve the blocker in the closing report. Continue independent work while awaiting a required answer; silence is not approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -60,7 +60,8 @@ export function createQuestionTool(): ToolDefinition {
       if (!context?.ask) {
         return {
           status: 'unavailable',
-          error: 'No interactive user is attached to this run. Include the question in your final response instead of waiting.',
+          error:
+            'No interactive user is attached to this run. Use send_message_to_owner when available; workers report to their parent. Otherwise record the question in your closing report. Continue independent work; do not assume a required answer.',
         };
       }
       const answer = await context.ask({ text: question, ...(options ? { options } : {}) }, signal);

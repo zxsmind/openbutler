@@ -10,7 +10,7 @@ export function createTeamProfileTool(execute: PeerOperation): ToolDefinition {
     name: 'team_profile',
     maxInputChars: 6000,
     description:
-      "Read a member's single team identity profile or update your own. Use read first; update replaces your description and requires its expectedRevision (0 if none). Describe your experience, working style, strengths, limitations, and useful collaboration context in natural language. Update when evidence changes how peers should understand you, not after every task. This is a self-description, not verified expertise or permission. Current MCP tools come separately from the host capability report in team_status; do not duplicate that inventory or include private owner information. There is no second local identity profile. An identical retry with the same revision and description is safe.",
+      "Read a member's single living identity profile or update your own. Use read first; update replaces your description and requires its expectedRevision (0 if none). Describe your role, usual work, working style and availability, capabilities, accumulated experience, strengths, limitations, and collaboration preferences in natural language. Update proactively as work and learning change how peers should understand you; keep a coherent description rather than a task diary or scorecard. Relevant MCP access or its scale may be summarized using current host observations from team_status; revise stale claims and omit private owner information. This is a self-description, not a guarantee of expertise or permission. There is no second local identity profile. An identical retry with the same revision and description is safe.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

@@ -124,7 +124,7 @@ export function createTeamStatusTool(status: TeamStatus): ToolDefinition {
     name: 'team_status',
     maxInputChars: 64,
     description:
-      "Show the team roster, each member's self-authored identity profile, host-reported connected MCP servers/tools with observation time and staleness, accepted peer work, and whether the custodian conversation is busy. Use it to find a relevant peer; online means reachable, and an idle custodian does not prove the machine has no other work. A profile is a self-description and host reports describe connected tools, not proven expertise or permission. Ask a focused capability question when evidence is insufficient. A missing report means unknown; it does not mean the peer has no tools.",
+      "Show the team roster, each member's evolving self-authored identity profile, host-reported connected MCP servers/tools with observation time and staleness, accepted peer work, and whether the custodian conversation is busy. Read profiles to choose a collaborator by role, experience, capabilities, and working style; use host observations to check current availability and tools. Online means reachable, and an idle custodian does not prove the machine has no other work. Neither a profile nor a connected tool guarantees expertise or permission. Ask a focused question when fit is unclear. A missing host report means unknown; it does not invalidate the peer's description or mean it has no tools.",
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'full', outbound: 'model' },
     autoApprove: () => true,

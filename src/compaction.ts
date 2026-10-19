@@ -43,7 +43,7 @@ Use these sections with concrete details from this conversation:
 ## Objective and current request
 Explain the desired outcome, why the work exists, and the latest request or correction. Distinguish the continuing objective from completed or abandoned work.
 ## Constraints, preferences, and authorization
-Record exact user requirements, approvals, prohibitions, scope boundaries, and choices that must affect the next action. Include corrections to earlier assumptions.
+Record exact user requirements, approvals, prohibitions, scope boundaries, and choices that must affect the next action. Include corrections, stewardship mandates and their authority, explicit stops/pauses/cancellations, and established MEMBER/GUEST ownership. Preserve their source and limits; never infer permission to resume.
 ## Workspace and runtime state
 Record exact workspace paths, relevant environment, selected providers/models, running processes, branches or uncommitted changes, persistence state, and backups when known. Distinguish observed state from assumptions and stale observations. Never copy credential values.
 ## Decisions and evidence
@@ -51,7 +51,7 @@ For each workstream, retain its specific requirements, implementation or investi
 ## Files and artifacts
 Use a separate subsection headed by the exact absolute path or artifact identifier for each relevant file created, changed, deleted, inspected, or depended on. In that entry explain its purpose, important interfaces/behavior, changes or findings, current status, verification evidence, remaining work, and links to related artifacts. Code inspection is a workstream too: preserve the specific module responsibilities, contracts, and findings obtained from source reads even if no code was changed. A file that was only listed must be marked as uninspected; do not invent its implementation. Do not group distinct source files into src/, daemon*.ts, memory-*.ts, or a single parent-folder entry. Deleted or superseded files need their individual purpose and final status when they explain the work. Include canonical data, configuration, and backups. Keep essential code snippets or data values when continuation depends on them; omit irrelevant bulk.
 ## Progress and remaining work
-Separate completed and verified work, implemented but unverified work, work in progress, blockers, and open questions. State what the agent was doing at the interruption and what results are still awaited. Do not turn intentions into accomplishments.
+Separate verified, unverified, ongoing, and blocked work. State the interrupted action and awaited results. Retain schedule ids, objectives, workspace, triggers, observed adapter/run state and stop conditions; pending owner deliveries; acquired capability paths/tool names and verification limits. Distinguish intended follow-ups, saved schedules, and successful runs. Do not turn intentions into accomplishments.
 ## Next actions
 Give an ordered, concrete continuation from the current state, including the next file/tool/command and expected evidence when known. Preserve any explicit phase gates or required user decisions.
 
