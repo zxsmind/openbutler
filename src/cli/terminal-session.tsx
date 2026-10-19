@@ -274,6 +274,9 @@ export function SessionScreen({
   const [expandedTools, setExpandedTools] = useState<Set<number>>(() => new Set());
   const [expandedMessages, setExpandedMessages] = useState<Set<number>>(() => new Set());
   const [expandedNotices, setExpandedNotices] = useState<Set<number>>(() => new Set());
+  // Per-entry reasoning bodies: the global thinking setting decides the default,
+  // and a click on one header flips that block either way.
+  const [expandedReasoning, setExpandedReasoning] = useState<Set<number>>(() => new Set());
   const [escapeWarning, setEscapeWarning] = useState<string | null>(null);
   const [composerKey, setComposerKey] = useState(0);
   const [composerText, setComposerText] = useState('');
@@ -647,6 +650,7 @@ export function SessionScreen({
       setExpandedTools(new Set());
       setExpandedMessages(new Set());
       setExpandedNotices(new Set());
+      setExpandedReasoning(new Set());
       toolRefs.current.clear();
       setSessionChooserOpen(false);
       followTail.current = true;
@@ -753,6 +757,7 @@ export function SessionScreen({
         setExpandedTools(new Set());
         setExpandedMessages(new Set());
         setExpandedNotices(new Set());
+        setExpandedReasoning(new Set());
         toolRefs.current.clear();
         followTail.current = true;
         setRequestedScrollTop(Number.MAX_SAFE_INTEGER);
@@ -871,6 +876,7 @@ export function SessionScreen({
         mouseInput.supported,
         streaming,
         reasoningHidden,
+        entry.kind === 'reasoning' && expandedReasoning.has(index),
       );
       let height = entryHeightCache.current.get(entry)?.get(layoutKey);
       if (height === undefined) {
@@ -882,6 +888,7 @@ export function SessionScreen({
           entry.kind === 'notice' && expandedNotices.has(index),
           mouseInput.supported,
           reasoningHidden,
+          entry.kind === 'reasoning' && expandedReasoning.has(index),
         );
         let cachedHeights = entryHeightCache.current.get(entry);
         if (!cachedHeights) {
@@ -900,6 +907,7 @@ export function SessionScreen({
     entries,
     expandedMessages,
     expandedNotices,
+    expandedReasoning,
     expandedTools,
     mouseInput.supported,
     showReasoning,
@@ -931,6 +939,7 @@ export function SessionScreen({
         const expanded = entry.kind === 'tool' && expandedTools.has(index);
         const expandedMessage = entry.kind === 'user' && expandedMessages.has(index);
         const expandedNotice = entry.kind === 'notice' && expandedNotices.has(index);
+        const expandedReasoningEntry = entry.kind === 'reasoning' && expandedReasoning.has(index);
         const streaming = entry.kind === 'assistant' && entry === snapshot.streamingAssistantEntry;
         // The render window reaches past the viewport so scrolling has somewhere to
         // land, but rows outside the viewport are clipped and never drawn. Laying
@@ -950,7 +959,7 @@ export function SessionScreen({
                 bottom: Math.min(entryHeight, scrollTop + viewportHeight - entryTop),
               }
             : undefined;
-        const rowKey = `${activeSession.id}:${index}:${entry.kind}:${width}:${expanded}:${expandedMessage}:${expandedNotice}:${popupOpen}:${mouseInput.supported}:${streaming}:${selectedTheme}:${showReasoning}:${onScreen ? 'onscreen' : `offscreen-${entryHeight}`}:${rowWindow ? `window-${rowWindow.top}-${rowWindow.bottom}` : 'full'}`;
+        const rowKey = `${activeSession.id}:${index}:${entry.kind}:${width}:${expanded}:${expandedMessage}:${expandedNotice}:${expandedReasoningEntry}:${popupOpen}:${mouseInput.supported}:${streaming}:${selectedTheme}:${showReasoning}:${onScreen ? 'onscreen' : `offscreen-${entryHeight}`}:${rowWindow ? `window-${rowWindow.top}-${rowWindow.bottom}` : 'full'}`;
         const cached = transcriptRowCache.current.get(entry);
         if (cached?.key === rowKey) return cached.element;
         const element = onScreen ? (
@@ -963,6 +972,7 @@ export function SessionScreen({
               expanded={expanded}
               expandedMessage={expandedMessage}
               expandedNotice={expandedNotice}
+              expandedReasoning={expandedReasoningEntry}
               hideReasoning={!showReasoning}
               dimmed={popupOpen}
               setToolRef={setToolRef}
@@ -982,6 +992,7 @@ export function SessionScreen({
       entries,
       expandedMessages,
       expandedNotices,
+      expandedReasoning,
       expandedTools,
       getEntryRef,
       mouseInput.supported,
@@ -1017,6 +1028,7 @@ export function SessionScreen({
         mouseInput.supported,
         streaming,
         entry.kind === 'reasoning' && !showReasoning,
+        entry.kind === 'reasoning' && expandedReasoning.has(index),
       );
       // Measuring is a full layout pass; a stable entry identity and layout key stays valid.
       let height = measuredHeightCache.current.get(entry)?.get(layoutKey);
@@ -1057,6 +1069,7 @@ export function SessionScreen({
     entries,
     expandedMessages,
     expandedNotices,
+    expandedReasoning,
     expandedTools,
     mouseInput.supported,
     showReasoning,
@@ -1235,6 +1248,23 @@ export function SessionScreen({
         const top = bounds.y - scrollTopRef.current;
         if (x >= bounds.x && x < bounds.x + bounds.width && y >= top && y < top + bounds.height) {
           setExpandedNotices((expanded) => {
+            const next = new Set(expanded);
+            if (next.has(index)) next.delete(index);
+            else next.add(index);
+            return next;
+          });
+          return;
+        }
+      }
+      for (const [index, element] of entryRefs.current) {
+        const entry = state.entries[index];
+        if (entry?.kind !== 'reasoning') continue;
+        const bounds = measureElement(element);
+        const top = bounds.y - scrollTopRef.current;
+        // Only the header row toggles, so a click inside the text still starts a
+        // selection instead of collapsing the block being read.
+        if (x >= bounds.x && x < bounds.x + bounds.width && y === top) {
+          setExpandedReasoning((expanded) => {
             const next = new Set(expanded);
             if (next.has(index)) next.delete(index);
             else next.add(index);
@@ -2792,6 +2822,13 @@ function lowerBoundTranscriptRow(offsets: number[], heights: number[], y: number
   return low;
 }
 
+function formatThoughtDuration(durationMs: number): string {
+  const seconds = Math.max(0, durationMs) / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds - minutes * 60)}s`;
+}
+
 function transcriptEntryLayoutKey(
   width: number,
   expandedTool: boolean,
@@ -2800,8 +2837,9 @@ function transcriptEntryLayoutKey(
   mouseSupported: boolean,
   streaming: boolean,
   reasoningHidden = false,
+  expandedReasoning = false,
 ): string {
-  return `${width}:${expandedTool ? 'tool-expanded' : 'tool-normal'}:${expandedMessage ? 'message-expanded' : 'message-normal'}:${expandedNotice ? 'notice-expanded' : 'notice-normal'}:${mouseSupported}:${streaming ? 'streaming' : 'complete'}:${reasoningHidden ? 'reasoning-hidden' : 'reasoning-shown'}`;
+  return `${width}:${expandedTool ? 'tool-expanded' : 'tool-normal'}:${expandedMessage ? 'message-expanded' : 'message-normal'}:${expandedNotice ? 'notice-expanded' : 'notice-normal'}:${mouseSupported}:${streaming ? 'streaming' : 'complete'}:${reasoningHidden ? 'reasoning-hidden' : 'reasoning-shown'}:${expandedReasoning ? 'reasoning-open' : 'reasoning-closed'}`;
 }
 
 /**
@@ -2853,6 +2891,7 @@ export function estimateTranscriptEntryHeight(
   expandedNotice = false,
   mouseSupported = true,
   reasoningHidden = false,
+  expandedReasoning = false,
 ): number {
   const wrappedRows = (text: string, availableWidth: number) =>
     text.split('\n').reduce((total, line) => total + Math.max(1, Math.ceil(terminalTextWidth(line) / Math.max(1, availableWidth))), 0);
@@ -2868,17 +2907,15 @@ export function estimateTranscriptEntryHeight(
     return wrappedRows(text, width - 2) + blocks + 1;
   }
   if (entry.kind === 'reasoning') {
-    // A hidden reasoning row occupies no space; the entry stays in place so
-    // index-keyed expansion state keeps pointing at the same rows.
-    if (reasoningHidden) return 0;
+    // The header row ("Thought for 13.2s") is always drawn, so a collapsed block
+    // costs one row plus its margin instead of vanishing from the layout.
     const text = entry.text
       .replace(/\r\n?/g, '\n')
       .replace(/\n[ \t]*\n+/g, '\n')
       .trim();
-    // The reasoning text renders inside a box of exactly width columns, so
-    // that is the width Ink wraps at. Using the user-message gutter here made
-    // every long line count one row too many.
-    return text ? wrappedRows(text, width) + 1 : 0;
+    if (!text) return 0;
+    const bodyVisible = expandedReasoning || !reasoningHidden;
+    return 1 + (bodyVisible ? wrappedRows(text, width) : 0) + 1;
   }
   if (entry.kind === 'tool') {
     const command = displayableCommand(entry.command).replace(/\n/g, ' ↵ ');
@@ -2925,6 +2962,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   expanded = false,
   expandedMessage = false,
   expandedNotice = false,
+  expandedReasoning = false,
   hideReasoning = false,
   dimmed = false,
   setToolRef,
@@ -2939,6 +2977,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   expanded?: boolean;
   expandedMessage?: boolean;
   expandedNotice?: boolean;
+  /** This one reasoning block was toggled by hand, overriding the global setting. */
+  expandedReasoning?: boolean;
   hideReasoning?: boolean;
   dimmed?: boolean;
   setToolRef: (index: number, element: DOMElement | null) => void;
@@ -2972,20 +3012,39 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   }
 
   if (entry.kind === 'reasoning') {
-    // Display-only hiding: the entry stays in the session and reappears when
-    // reasoning is switched back on. Height is already 0 via the estimator.
-    if (hideReasoning) return null;
     const text = entry.text
       .replace(/\r\n?/g, '\n')
       .replace(/\n[ \t]*\n+/g, '\n')
       .trim();
     if (!text) return null;
+    // The header always shows, so the block keeps its place in the transcript and
+    // a click can bring the body back. The body follows the global thinking
+    // setting unless this one block was toggled by hand.
+    const bodyVisible = expandedReasoning || !hideReasoning;
+    const label = entry.durationMs === undefined ? 'Thought' : `Thought for ${formatThoughtDuration(entry.durationMs)}`;
+    const marker = mouseSupported ? (bodyVisible ? '▾' : '▸') : '·';
+    const header = (
+      <Box width="100%" flexShrink={0}>
+        <Text dimColor={dimmed} {...(mouseSupported && !dimmed ? { color: tokens.accent } : {})}>
+          {`${marker} ${label}`}
+        </Text>
+      </Box>
+    );
+    if (!bodyVisible) {
+      return (
+        <Box width="100%" flexDirection="column" marginBottom={1} flexShrink={0}>
+          {header}
+        </Box>
+      );
+    }
     // Reasoning is one plain text run, so a row window can be applied exactly:
     // the lines on screen are the same lines, and the skipped rows become
-    // spacers of the same height.
-    const sliced = rowWindow ? sliceTextRows(text, width, rowWindow) : null;
+    // spacers of the same height. The header owns the entry's first row.
+    const bodyWindow = rowWindow ? { top: Math.max(0, rowWindow.top - 1), bottom: Math.max(0, rowWindow.bottom - 1) } : null;
+    const sliced = bodyWindow ? sliceTextRows(text, width, bodyWindow) : null;
     return (
       <Box width="100%" justifyContent="flex-start" flexDirection="column" marginBottom={1}>
+        {rowWindow && rowWindow.top > 0 ? <Box height={1} flexShrink={0} /> : header}
         {sliced && sliced.headRows > 0 ? <Box height={sliced.headRows} flexShrink={0} /> : null}
         <Box width={width}>
           <Text dimColor>{sliced ? sliced.text : text}</Text>

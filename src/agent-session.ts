@@ -228,6 +228,8 @@ export class AgentSessionController implements AgentSessionClient {
   private streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private streamedAssistantEntry: SessionEntry | null = null;
   private streamedReasoningEntry: SessionEntry | null = null;
+  /** When the current reasoning block started, for the duration it reports. */
+  private reasoningStartedAt: number | null = null;
   private runningToolEntry: { request: ToolCallRequest; entry: Extract<SessionEntry, { kind: 'tool' }> } | null = null;
   private readonly previewToolEntries = new Map<
     string,
@@ -571,6 +573,8 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   private appendStreamedText(delta: string): void {
+    // Assistant text ends the thinking block, so its duration is stamped first.
+    this.finishStreamedReasoning();
     const previous = this.streamedAssistantEntry;
     if (previous?.kind === 'assistant') {
       const next: SessionEntry = { kind: 'assistant', text: previous.text + delta };
@@ -587,18 +591,38 @@ export class AgentSessionController implements AgentSessionClient {
     if (!delta) return;
     const previous = this.streamedReasoningEntry;
     if (previous?.kind === 'reasoning') {
-      const next: SessionEntry = { kind: 'reasoning', text: previous.text + delta };
+      const next: SessionEntry = {
+        kind: 'reasoning',
+        text: previous.text + delta,
+        ...(previous.durationMs === undefined ? {} : { durationMs: previous.durationMs }),
+      };
       this.streamedReasoningEntry = next;
       this.replaceEntry(previous, next);
     } else {
       const entry: SessionEntry = { kind: 'reasoning', text: delta };
       this.streamedReasoningEntry = entry;
+      this.reasoningStartedAt = Date.now();
       const assistantIndex = this.streamedAssistantEntry ? this.session.entries.indexOf(this.streamedAssistantEntry) : -1;
       const entries = [...this.session.entries];
       entries.splice(assistantIndex < 0 ? entries.length : assistantIndex, 0, entry);
       this.session = { ...this.session, entries };
       this.publish();
     }
+  }
+
+  /**
+   * Stamps how long the model actually spent thinking on the current block, so
+   * the transcript can say "Thought for 13.2s". Called wherever the block ends:
+   * the next assistant token, a tool call, or the end of the run.
+   */
+  private finishStreamedReasoning(): void {
+    const entry = this.streamedReasoningEntry;
+    this.streamedReasoningEntry = null;
+    const startedAt = this.reasoningStartedAt;
+    this.reasoningStartedAt = null;
+    if (entry?.kind !== 'reasoning' || startedAt === null || entry.durationMs !== undefined) return;
+    const next: SessionEntry = { kind: 'reasoning', text: entry.text, durationMs: Math.max(0, Date.now() - startedAt) };
+    this.replaceEntry(entry, next);
   }
 
   private queueStreamDelta(kind: 'assistant' | 'reasoning', text: string): void {
@@ -1282,9 +1306,7 @@ export class AgentSessionController implements AgentSessionClient {
                       this.addNotice('Compacting the complete model context…');
                     },
                     onTextDelta: (delta) => this.queueStreamDelta('assistant', delta),
-                    onReasoningDelta: (delta) => {
-                      if (this.liveTurnPreferences().showReasoning) this.queueStreamDelta('reasoning', delta);
-                    },
+                    onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta),
                     abortSignal: abortController.signal,
                   });
                   if (compacted) {
@@ -1352,9 +1374,7 @@ export class AgentSessionController implements AgentSessionClient {
                 this.reportTurnProgress({ kind: 'assistant-delta', text: delta });
                 this.queueStreamDelta('assistant', delta);
               },
-              onReasoningDelta: (delta) => {
-                if (this.liveTurnPreferences().showReasoning) this.queueStreamDelta('reasoning', delta);
-              },
+              onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta),
               onConversationProgress: (conversation, responseMessages) => {
                 this.conversation = conversation;
                 if (this.conversationArchive.length > 0) {
@@ -1603,9 +1623,7 @@ export class AgentSessionController implements AgentSessionClient {
           );
         },
         onTextDelta: (delta) => this.queueStreamDelta('assistant', delta),
-        onReasoningDelta: (delta) => {
-          if (preferences.showReasoning) this.queueStreamDelta('reasoning', delta);
-        },
+        onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta),
         abortSignal: abortController.signal,
         force: true,
         ...(recovery ? { recovery: true } : {}),

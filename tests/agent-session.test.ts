@@ -394,14 +394,41 @@ describe('session streaming message boundaries', () => {
     await session.sendMessage({ text: 'selam', images: [] }, preferences);
 
     const snapshot = session.getSnapshot();
-    expect(snapshot.session.entries.filter((entry) => entry.kind === 'reasoning')).toEqual([
-      { kind: 'reasoning', text: 'A simple greeting.' },
-    ]);
+    const reasoningEntries = snapshot.session.entries.filter((entry) => entry.kind === 'reasoning');
+    expect(reasoningEntries).toHaveLength(1);
+    // The block keeps its text and now reports how long the model thought.
+    expect(reasoningEntries[0]).toMatchObject({ kind: 'reasoning', text: 'A simple greeting.' });
+    expect((reasoningEntries[0] as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
     expect(snapshot.session.entries.filter((entry) => entry.kind === 'assistant')).toEqual([
       { kind: 'assistant', text: 'Hello! 👋 How can I help you today?' },
     ]);
     expect(snapshot.streamingAssistantEntry).toBeNull();
     expect(snapshot.busy).toBe(false);
+  });
+
+  it('records reasoning even when thinking is hidden, so the toggle only hides it', async () => {
+    // Hiding reasoning used to drop the deltas at the source: the model had
+    // already produced (and billed) them, but the session never stored them, so
+    // switching thinking back on could not bring the history back.
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () =>
+        delayedStream([
+          { type: 'reasoning-start', id: 'reasoning' },
+          { type: 'reasoning-delta', id: 'reasoning', delta: 'Hidden but stored.' },
+          { type: 'reasoning-end', id: 'reasoning' },
+          { type: 'text-start', id: 'answer' },
+          { type: 'text-delta', id: 'answer', delta: 'Done.' },
+          { type: 'text-end', id: 'answer' },
+        ]),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model));
+    await session.sendMessage({ text: 'selam', images: [] }, { reasoningVariantId: 'default', showReasoning: false });
+
+    const entries = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'reasoning');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: 'reasoning', text: 'Hidden but stored.' });
   });
 
   it('starts a new assistant entry at a real tool boundary while joining deltas on both sides', async () => {
@@ -934,7 +961,9 @@ describe('session compaction persistence and continuation', () => {
           const snapshot = session!.getSnapshot();
           expect(snapshot.busy).toBe(true);
           expect(snapshot.streamingAssistantEntry).toEqual({ kind: 'assistant', text: 'Summary in progress.' });
-          expect(snapshot.session.entries).toContainEqual({ kind: 'reasoning', text: 'Preserving the current task.' });
+          expect(snapshot.session.entries).toContainEqual(
+            expect.objectContaining({ kind: 'reasoning', text: 'Preserving the current task.' }),
+          );
         },
         { timeout: 1_000, interval: 25 },
       );

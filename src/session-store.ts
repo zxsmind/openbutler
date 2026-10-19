@@ -51,7 +51,7 @@ export type SessionEntry =
     }
   | { kind: 'assistant'; text: string }
   | { kind: 'notice'; text: string; detail?: string; tone?: NoticeTone }
-  | { kind: 'reasoning'; text: string }
+  | { kind: 'reasoning'; text: string; durationMs?: number }
   | { kind: 'tool'; command: string; result: string; running?: boolean; preparing?: boolean; tool?: string; session?: string };
 
 export interface SessionFileInfo {
@@ -511,7 +511,15 @@ function isSessionEntry(value: unknown): value is SessionEntry {
       (value.imageCount === undefined ||
         (typeof value.imageCount === 'number' && Number.isSafeInteger(value.imageCount) && value.imageCount > 0))
     );
-  return ['assistant', 'notice', 'reasoning'].includes(String(value.kind)) && typeof value.text === 'string';
+  return (
+    ['assistant', 'notice', 'reasoning'].includes(String(value.kind)) &&
+    typeof value.text === 'string' &&
+    // A reasoning entry may carry how long the model thought, so the transcript
+    // can show "Thought for 13.2s" instead of an unlabelled block.
+    (value.kind !== 'reasoning' ||
+      value.durationMs === undefined ||
+      (typeof value.durationMs === 'number' && Number.isFinite(value.durationMs) && value.durationMs >= 0))
+  );
 }
 
 function isModelMessage(value: unknown): value is ModelMessage {
