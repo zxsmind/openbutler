@@ -13,6 +13,7 @@ import {
 } from '../file-write-core.js';
 import { classifyHostOwnedPath } from '../host-owned-paths.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
+import { inspectTextIntegrity } from '../text-integrity.js';
 import type { MemoryIndex } from '../memory-index.js';
 import { type ToolDefinition, type ToolEffect } from './registry.js';
 import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
@@ -90,6 +91,15 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
           previous = null;
         }
       }
+      const integrity = inspectTextIntegrity({ before: previous, after: text, path });
+      if (integrity.errors.length > 0) {
+        return {
+          status: 'integrity',
+          path: path.slice(0, 512),
+          errors: integrity.errors,
+          error: 'The write would damage the file; nothing was written.',
+        };
+      }
       await writeTextAtomically(path, text);
       const lineCount = text.split(/\r?\n/).length;
       const stat = !existed ? { addedLines: lineCount, removedLines: 0 } : previous === null ? null : diffStat(previous, text);
@@ -102,6 +112,7 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
         lineCount,
         ...(previous === null ? {} : { oldLineCount: previous.split(/\r?\n/).length }),
         ...(stat === null ? {} : { addedLines: stat.addedLines, removedLines: stat.removedLines }),
+        ...(integrity.warnings.length > 0 ? { integrityWarnings: integrity.warnings } : {}),
         ...(await memoryIndexOutcome(memoryIndex, path, workspaceRoot)),
       };
     },

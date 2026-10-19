@@ -30,6 +30,10 @@ const MAX_READ_INPUT_CHARS = MAX_TOOL_INPUT_CHARS;
 const MAX_DIRECTORY_ENTRIES = 500;
 const MAX_DIR_CHILD_STAT = 500;
 const MAX_FILE_READ_LINES = 5_000;
+/** Pattern mode returns at most this many matching lines per call. */
+const MAX_PATTERN_MATCHES = 100;
+/** A matched line longer than this is clipped, so one minified file cannot flood the result. */
+const MAX_PATTERN_LINE_CHARS = 400;
 const MAX_OTHER_MEDIA_BYTES = 10 * 1024 * 1024;
 
 const readEffect: ToolEffect = {
@@ -142,6 +146,19 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
           description:
             'Optional. When true, each returned line is prefixed with its 1-based number and a "→" marker, so a region can be cited or edited by line. The prefix is display only: never include it in an edit anchor. Ignored while characterOffset is non-zero, because the page then holds part of one line.',
         },
+        pattern: {
+          type: 'string',
+          description:
+            'Optional. Return only the lines that match this text, with surrounding context and line numbers. Literal substring by default; set regex to use a JavaScript regular expression. This is the replacement for shelling out to grep: it reports where the matches are and shows their neighbourhood in one call. Do not combine with offset or characterOffset.',
+        },
+        context: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 200,
+          description: 'Pattern mode: lines of context to include around each match; defaults to 3.',
+        },
+        regex: { type: 'boolean', description: 'Pattern mode: treat pattern as a JavaScript regular expression.' },
+        ignoreCase: { type: 'boolean', description: 'Pattern mode: match case-insensitively.' },
       },
       required: ['path'],
       additionalProperties: false,
@@ -307,6 +324,27 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
         return { status: 'unsupported', path: path.slice(0, 512), error: 'Binary or control-character files are not supported.' };
       }
 
+      const requestedPattern = typeof input.pattern === 'string' ? input.pattern : null;
+      if (requestedPattern !== null) {
+        if (requestedOffset !== undefined || requestedCharacterOffset !== undefined) {
+          return {
+            status: 'invalid',
+            path: path.slice(0, 512),
+            error: 'pattern returns its own window; do not combine it with offset or characterOffset.',
+          };
+        }
+        return searchFileContent({
+          content,
+          path,
+          bytes,
+          pattern: requestedPattern,
+          context: typeof input.context === 'number' ? input.context : 3,
+          regex: input.regex === true,
+          ignoreCase: input.ignoreCase === true,
+          limit: typeof requestedLimit === 'number' ? Math.min(requestedLimit, MAX_PATTERN_MATCHES) : MAX_PATTERN_MATCHES,
+        });
+      }
+
       const lines = content.split(/\r?\n/);
       const offset = typeof requestedOffset === 'number' ? requestedOffset : 1;
       const limit = typeof requestedLimit === 'number' ? requestedLimit : MAX_FILE_READ_LINES;
@@ -367,6 +405,106 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
 }
 
 type FileMedia = { modality: 'audio' | 'video' | 'pdf'; mediaType: string };
+
+/**
+ * Returns the lines that match a pattern, with their neighbourhood.
+ *
+ * This is the read-side counterpart to a shell `grep -C`: one call reports where
+ * the matches are and shows enough of the file around them to act, with the same
+ * `N→` numbering the line-number option uses, so the caller can cite or edit the
+ * region directly.
+ */
+function searchFileContent(options: {
+  content: string;
+  path: string;
+  bytes: Buffer;
+  pattern: string;
+  context: number;
+  regex: boolean;
+  ignoreCase: boolean;
+  limit: number;
+}): Record<string, unknown> {
+  const { content, path, pattern } = options;
+  const context = Math.max(0, Math.min(200, Math.floor(options.context)));
+  const lines = content.split(/\r?\n/);
+
+  let matches: (line: string) => boolean;
+  if (options.regex) {
+    let compiled: RegExp;
+    try {
+      compiled = new RegExp(pattern, options.ignoreCase ? 'i' : '');
+    } catch (error) {
+      return {
+        status: 'invalid',
+        path: path.slice(0, 512),
+        error: `pattern is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    matches = (line) => compiled.test(line);
+  } else {
+    const needle = options.ignoreCase ? pattern.toLowerCase() : pattern;
+    matches = (line) => (options.ignoreCase ? line.toLowerCase() : line).includes(needle);
+  }
+
+  const matchedLines: number[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (matches(lines[index]!)) matchedLines.push(index + 1);
+  }
+  if (matchedLines.length === 0) {
+    return {
+      status: 'no_matches',
+      path: path.slice(0, 512),
+      pattern,
+      matchCount: 0,
+      lineCount: lines.length,
+    };
+  }
+
+  const limit = Math.max(1, Math.min(MAX_PATTERN_MATCHES, Math.floor(options.limit)));
+  const shown = matchedLines.slice(0, limit);
+  const truncated = matchedLines.length > shown.length;
+
+  // Merge overlapping neighbourhoods so a cluster of matches is printed once.
+  const windows: { startLine: number; endLine: number }[] = [];
+  for (const line of shown) {
+    const startLine = Math.max(1, line - context);
+    const endLine = Math.min(lines.length, line + context);
+    const last = windows.at(-1);
+    if (last && startLine <= last.endLine + 1) last.endLine = Math.max(last.endLine, endLine);
+    else windows.push({ startLine, endLine });
+  }
+
+  const width = String(windows.at(-1)!.endLine).length;
+  const clip = (line: string) => (line.length > MAX_PATTERN_LINE_CHARS ? `${line.slice(0, MAX_PATTERN_LINE_CHARS)}…` : line);
+  const rendered = windows
+    .map((window) =>
+      lines
+        .slice(window.startLine - 1, window.endLine)
+        .map((line, index) => `${String(window.startLine + index).padStart(width)}→${clip(line)}`)
+        .join('\n'),
+    )
+    .join('\n…\n');
+
+  return {
+    status: 'completed',
+    path: path.slice(0, 512),
+    sizeBytes: options.bytes.length,
+    sha256: createHash('sha256').update(options.bytes).digest('hex'),
+    pattern,
+    matchCount: matchedLines.length,
+    matches: shown.map((line) => ({ line, text: clip(lines[line - 1]!) })),
+    windows,
+    content: rendered,
+    lineNumbers: true,
+    ...(truncated
+      ? {
+          truncated: true,
+          hasMore: true,
+          note: `Only the first ${limit} of ${matchedLines.length} matches are shown; narrow the pattern to see the rest.`,
+        }
+      : {}),
+  };
+}
 
 function sliceUnicodeCodePoints(
   value: string,

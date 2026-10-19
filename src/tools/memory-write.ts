@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { getMemoryPaths } from '../memory-paths.js';
 import { MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES } from '../memory-document.js';
 import { validateTextWrite, writeTextAtomically } from '../file-write-core.js';
+import { inspectTextIntegrity } from '../text-integrity.js';
 import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 import type { MemoryIndex } from '../memory-index.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
@@ -227,6 +228,15 @@ export function createMemoryWriteTool(workspaceRoot = process.cwd(), memoryIndex
 
       const validation = validateTextWrite(next, path, workspaceRoot);
       if (!validation.ok) return validation.failure;
+      const integrity = inspectTextIntegrity({ before: exists ? previous : null, after: next, path });
+      if (integrity.errors.length > 0) {
+        return {
+          status: 'integrity',
+          path,
+          errors: integrity.errors,
+          error: 'The note would be damaged; nothing was written.',
+        };
+      }
       await writeTextAtomically(path, next);
 
       const outcome: Record<string, unknown> = {

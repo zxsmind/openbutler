@@ -57,6 +57,94 @@ describe('file_read line numbers', () => {
   });
 });
 
+describe('file_read pattern mode', () => {
+  const body = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'].join('\n');
+
+  it('returns the matching lines with their neighbourhood and line numbers', async () => {
+    await writeFile(join(workspace, 'log.txt'), `${body}\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const result = (await tool.execute!({ path: 'log.txt', pattern: 'three', context: 1 }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    expect(result.status).toBe('completed');
+    expect(result.matchCount).toBe(1);
+    expect(result.matches).toEqual([{ line: 3, text: 'three' }]);
+    expect(result.windows).toEqual([{ startLine: 2, endLine: 4 }]);
+    expect(result.content).toBe('2→two\n3→three\n4→four');
+  });
+
+  it('merges overlapping windows so a cluster is printed once', async () => {
+    await writeFile(join(workspace, 'cluster.txt'), `${body}\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const result = (await tool.execute!({ path: 'cluster.txt', pattern: 't', context: 2, regex: false }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    const windows = result.windows as { startLine: number; endLine: number }[];
+    // Overlapping neighbourhoods are merged, never printed twice.
+    for (let index = 1; index < windows.length; index++) {
+      expect(windows[index]!.startLine).toBeGreaterThan(windows[index - 1]!.endLine + 1);
+    }
+  });
+
+  it('reports no_matches instead of an empty page', async () => {
+    await writeFile(join(workspace, 'plain.txt'), `${body}\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const result = (await tool.execute!({ path: 'plain.txt', pattern: 'not-here' }, undefined, undefined)) as Record<string, unknown>;
+    expect(result.status).toBe('no_matches');
+    expect(result.matchCount).toBe(0);
+    expect(result.content).toBeUndefined();
+  });
+
+  it('supports a regular expression and case-insensitive matching', async () => {
+    await writeFile(join(workspace, 'code.ts'), 'const Value = 1;\nconst other = 2;\n', 'utf8');
+    const tool = createReadTool([], workspace);
+    const result = (await tool.execute!(
+      { path: 'code.ts', pattern: '^const value', regex: true, ignoreCase: true, context: 0 },
+      undefined,
+      undefined,
+    )) as Record<string, unknown>;
+    expect(result.matchCount).toBe(1);
+    expect(result.matches).toEqual([{ line: 1, text: 'const Value = 1;' }]);
+  });
+
+  it('rejects an invalid regular expression and a mixed range request', async () => {
+    await writeFile(join(workspace, 'x.txt'), 'alpha\n', 'utf8');
+    const tool = createReadTool([], workspace);
+    const invalid = (await tool.execute!({ path: 'x.txt', pattern: '([', regex: true }, undefined, undefined)) as Record<string, unknown>;
+    expect(invalid.status).toBe('invalid');
+    const mixed = (await tool.execute!({ path: 'x.txt', pattern: 'alpha', offset: 1 }, undefined, undefined)) as Record<string, unknown>;
+    expect(mixed.status).toBe('invalid');
+  });
+
+  it('caps the number of matches and says so', async () => {
+    const many = Array.from({ length: 12 }, (_, index) => `hit ${index}`).join('\n');
+    await writeFile(join(workspace, 'many.txt'), `${many}\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const result = (await tool.execute!({ path: 'many.txt', pattern: 'hit', limit: 5, context: 0 }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    expect(result.matchCount).toBe(12);
+    expect(result.matches as unknown[]).toHaveLength(5);
+    expect(result.truncated).toBe(true);
+    expect(String(result.note)).toContain('first 5 of 12');
+  });
+
+  it('clips a very long matching line instead of flooding the result', async () => {
+    await writeFile(join(workspace, 'long.txt'), `head ${'x'.repeat(2_000)} tail\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const result = (await tool.execute!({ path: 'long.txt', pattern: 'head', context: 0 }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    const text = String((result.matches as { text: string }[])[0]!.text);
+    expect(text.length).toBeLessThanOrEqual(401);
+    expect(text.endsWith('…')).toBe(true);
+  });
+});
+
 describe('file_read directory listing', () => {
   it('returns sorted entries with types plus paging metadata', async () => {
     await mkdir(join(workspace, 'src', 'nested'), { recursive: true });

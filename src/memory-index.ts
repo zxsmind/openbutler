@@ -626,7 +626,7 @@ async function releaseEmbeddingRuntime(): Promise<void> {
 async function createEmbeddingRuntime() {
   const modelDirectory = memoryModelRevisionDirectory();
   if (!(await hasCompleteModelCache(modelDirectory))) {
-    throw new Error('The local memory model is not prepared. Run `ranite setup` and choose â€œPrepare local memory model onlyâ€.');
+    throw new Error('The local memory model is not prepared. Run `ranite setup` and choose ”Prepare local memory model only”.');
   }
 
   const [{ Tokenizer }, ort] = await Promise.all([import('@huggingface/tokenizers'), import('onnxruntime-node')]);

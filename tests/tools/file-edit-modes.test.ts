@@ -162,6 +162,43 @@ describe('file_edit modes', () => {
     expect(await readFile(target, 'utf8')).toBe('one\r\ntwo-and-a-half\r\nthree\r\n');
   });
 
+  it('refuses an edit that would leave the file unbalanced', async () => {
+    const target = await fixture('brace.ts', 'function a() {\n  return 1;\n}\n');
+    const tool = createEditTool(workspace);
+    const result = (await tool.execute!(
+      { path: 'brace.ts', old: '  return 1;\n}\n', new: '  return 1;\n' },
+      undefined,
+      undefined,
+    )) as Record<string, unknown>;
+    expect(result.status).toBe('integrity');
+    expect(String((result.errors as string[]).join(' '))).toContain('unclosed brace');
+    expect(await readFile(target, 'utf8')).toBe('function a() {\n  return 1;\n}\n');
+  });
+
+  it('reports a declaration that an edit removed while its name is still used', async () => {
+    const target = await fixture('ref.ts', 'const limit = 5;\nfunction read() {\n  return limit;\n}\n');
+    const tool = createEditTool(workspace);
+    const result = (await tool.execute!({ path: 'ref.ts', old: 'const limit = 5;\n', new: '' }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    expect(result.status).toBe('completed');
+    expect(String((result.integrityWarnings as string[]).join(' '))).toContain('limit');
+    expect(await readFile(target, 'utf8')).toContain('return limit;');
+  });
+
+  it('refuses an edit that would introduce a BOM', async () => {
+    const target = await fixture('bom.ts', 'const a = 1;\n');
+    const tool = createEditTool(workspace);
+    const result = (await tool.execute!(
+      { path: 'bom.ts', old: 'const a = 1;', new: '\uFEFFconst a = 2;' },
+      undefined,
+      undefined,
+    )) as Record<string, unknown>;
+    expect(result.status).toBe('integrity');
+    expect(await readFile(target, 'utf8')).toBe('const a = 1;\n');
+  });
+
   it('refuses to mix modes in one call', async () => {
     const target = await fixture('k.ts', 'one\n');
     const tool = createEditTool(workspace);

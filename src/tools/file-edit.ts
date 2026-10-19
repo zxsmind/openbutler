@@ -14,6 +14,7 @@ import {
 import type { MemoryIndex } from '../memory-index.js';
 import { classifyHostOwnedPath } from '../host-owned-paths.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from '../memory-paths.js';
+import { inspectTextIntegrity } from '../text-integrity.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
 import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 
@@ -344,6 +345,15 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
         isMemoryDocumentPath(path, workspaceRoot) && !isMemoryIndexPath(path, workspaceRoot) ? stampMemoryDocumentDate(next) : next;
       const validation = validateTextWrite(stamped, path, workspaceRoot);
       if (!validation.ok) return validation.failure;
+      const integrity = inspectTextIntegrity({ before: content, after: stamped, path });
+      if (integrity.errors.length > 0) {
+        return {
+          status: 'integrity',
+          path: path.slice(0, 512),
+          errors: integrity.errors,
+          error: 'The edit would damage the file; nothing was written.',
+        };
+      }
       const leaseDenied = context?.guardWrite?.(path);
       if (leaseDenied) return { status: 'denied', path: path.slice(0, 512), error: leaseDenied };
       await writeTextAtomically(path, stamped);
@@ -357,6 +367,7 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
         sha256: validation.sha256,
         oldLineCount: content.split(/\r?\n/).length,
         lineCount: stamped.split(/\r?\n/).length,
+        ...(integrity.warnings.length > 0 ? { integrityWarnings: integrity.warnings } : {}),
         ...(change === null ? {} : { addedLines: change.addedLines, removedLines: change.removedLines }),
         ...(await memoryIndexOutcome(memoryIndex, path, workspaceRoot)),
       };
