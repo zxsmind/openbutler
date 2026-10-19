@@ -24,11 +24,10 @@ import {
   type SessionSnapshotData,
 } from './daemon-protocol.js';
 import type { SessionEntry, SessionSummary, NoticeTone } from './session-store.js';
+import { LocalNoticeList, LOCAL_NOTICE_TTL_MS, MAX_LOCAL_NOTICES } from './local-notices.js';
 import type { ApprovalMode } from './settings.js';
 
 const CLIENT_CONNECT_TIMEOUT_MS = 10_000;
-/** How many client-local notices stay pinned to the transcript; oldest drops first. */
-const MAX_LOCAL_NOTICES = 5;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -69,12 +68,14 @@ class DaemonSessionClient implements AgentSessionClient {
   private reconnecting = false;
   private intentionalShutdown = false;
   /**
-   * Client-local notices (connection loss, IPC failures) pinned to the end of
-   * the visible transcript. They are re-appended after every server patch and
-   * snapshot instead of being stripped by the next update, so a notice can no
-   * longer blink out mid-stream before it is read. Capped; oldest drops first.
+   * Client-local notices (connection loss, IPC failures, host pings). The host
+   * does not know about them, so they are merged back into the transcript at
+   * the position they arrived instead of being pinned to the end: a notice
+   * parked below every later message never reads as old. They expire on their
+   * own, and the count is capped.
    */
-  private localNotices: SessionEntry[] = [];
+  private readonly localNotices = new LocalNoticeList(MAX_LOCAL_NOTICES, LOCAL_NOTICE_TTL_MS);
+  private localNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly workspaceKey: string;
   private savedSessions: SessionSummary[] = [];
 
@@ -224,6 +225,10 @@ class DaemonSessionClient implements AgentSessionClient {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.localNoticeTimer !== null) {
+      clearTimeout(this.localNoticeTimer);
+      this.localNoticeTimer = null;
+    }
     this.socket.end();
     this.handleClose(new Error('This Ranite client detached from the host.'), this.socket);
   }
@@ -315,6 +320,15 @@ class DaemonSessionClient implements AgentSessionClient {
   private applyEvent(event: DaemonEvent): void {
     if (event.event === 'notification') {
       if (event.title === 'Ranite host stopping') this.intentionalShutdown = true;
+      if (!event.title.trim()) {
+        // An owner-directed message delivered over the terminal is content, not
+        // a status ping: it becomes a session entry so it keeps its place and
+        // survives a reconnect, like any other turn.
+        void this.request('session.add-entry', {
+          entry: { kind: 'notice', text: event.message } satisfies SessionEntry,
+        }).catch((error: unknown) => this.addLocalNotice(error));
+        return;
+      }
       this.addLocalNotice(`${event.title}\n${event.message}`);
       return;
     }
@@ -328,7 +342,11 @@ class DaemonSessionClient implements AgentSessionClient {
     if (!this.snapshot) return;
     const current = this.snapshot;
     const serverEntries = this.withoutLocalNotices(current.session.entries);
-    const session = { ...event.patch.session, entries: this.withLocalNotices(applyEntriesPatch(serverEntries, event.patch.entriesPatch)) };
+    // The patch addresses server entries by index, so it is applied before the
+    // client-local notices are merged back in; otherwise a notice arriving
+    // mid-run would shift the streaming entry the host is pointing at.
+    const patchedEntries = applyEntriesPatch(serverEntries, event.patch.entriesPatch);
+    const session = { ...event.patch.session, entries: this.withLocalNotices(patchedEntries) };
     const streamingIndex = event.patch.streamingAssistantIndex;
     this.snapshot = {
       session,
@@ -340,7 +358,7 @@ class DaemonSessionClient implements AgentSessionClient {
       firstQueuedMessage: event.patch.firstQueuedMessage,
       queuedMessages: event.patch.queuedMessages ?? (event.patch.firstQueuedMessage ? [event.patch.firstQueuedMessage] : []),
       sessionSaveError: event.patch.sessionSaveError,
-      streamingAssistantEntry: streamingIndex === null ? null : (session.entries[streamingIndex] ?? null),
+      streamingAssistantEntry: streamingIndex === null ? null : (patchedEntries[streamingIndex] ?? null),
     };
     this.applyRuntime(event.patch.runtime);
     this.publish();
@@ -357,25 +375,42 @@ class DaemonSessionClient implements AgentSessionClient {
     if (!this.snapshot || this.closed) return;
     const text = error instanceof Error ? error.message : String(error);
     const notice: SessionEntry = tone === 'info' ? { kind: 'notice', text } : { kind: 'notice', text, tone };
-    this.localNotices = [...this.localNotices, notice].slice(-MAX_LOCAL_NOTICES);
+    const serverEntries = this.withoutLocalNotices(this.snapshot.session.entries);
+    this.localNotices.add(notice, serverEntries.length);
+    this.scheduleLocalNoticeExpiry();
     const current = this.snapshot;
-    this.snapshot = {
-      ...current,
-      session: { ...current.session, entries: this.withLocalNotices(this.withoutLocalNotices(current.session.entries)) },
-    };
+    this.snapshot = { ...current, session: { ...current.session, entries: this.localNotices.merge(serverEntries) } };
     this.publish();
   }
 
-  /** Server entries only: strips the pinned client-local notices from a merged view. */
-  private withoutLocalNotices(entries: SessionEntry[]): SessionEntry[] {
-    if (this.localNotices.length === 0) return entries;
-    const pinned = new Set(this.localNotices);
-    return entries.filter((entry) => !pinned.has(entry));
+  /** Re-publishes when the oldest notice passes its TTL, so it leaves on its own. */
+  private scheduleLocalNoticeExpiry(): void {
+    if (this.localNoticeTimer !== null || this.closed) return;
+    this.localNoticeTimer = setTimeout(() => {
+      this.localNoticeTimer = null;
+      if (this.closed || !this.snapshot) return;
+      if (this.localNotices.prune()) {
+        const serverEntries = this.withoutLocalNotices(this.snapshot.session.entries);
+        this.snapshot = {
+          ...this.snapshot,
+          session: { ...this.snapshot.session, entries: this.localNotices.merge(serverEntries) },
+        };
+        this.publish();
+      }
+      if (this.localNotices.length > 0) this.scheduleLocalNoticeExpiry();
+    }, LOCAL_NOTICE_TTL_MS + 50);
+    this.localNoticeTimer.unref?.();
   }
 
-  /** Merged view: server entries with the pinned client-local notices at the end. */
+  /** Server entries only: the view minus the client-local notices merged into it. */
+  private withoutLocalNotices(entries: SessionEntry[]): SessionEntry[] {
+    const own = this.localNotices.ownEntries();
+    return own.size === 0 ? entries : entries.filter((entry) => !own.has(entry));
+  }
+
+  /** Merged view: server entries with the live client-local notices in their place. */
   private withLocalNotices(entries: SessionEntry[]): SessionEntry[] {
-    return this.localNotices.length > 0 ? [...entries, ...this.localNotices] : entries;
+    return this.localNotices.merge(entries);
   }
 
   private publish(): void {
