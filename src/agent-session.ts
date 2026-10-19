@@ -120,6 +120,8 @@ type QueuedTurn = {
   preferences: AgentTurnPreferences;
   resolve: () => void;
   reject: (error: unknown) => void;
+  /** The owner message already has a transcript entry; the turn only delivers it to the model. */
+  entryAdded?: boolean;
 };
 
 export type AgentEventRunResult = { error: string | null; outputs: AgentEventOutput[]; replyHandledByEventId?: string; skipped?: boolean };
@@ -324,7 +326,10 @@ export class AgentSessionController implements AgentSessionClient {
   };
 
   private makeSnapshot(): AgentSessionSnapshot {
-    const queuedMessages = this.queuedMessages.map((turn) => ({ text: turn.message.text, imageCount: messageImageCount(turn.message) }));
+    // A held turn whose entry already sits in the transcript is not "queued" from
+    // the owner's point of view; counting it twice would show the same text twice.
+    const pending = this.queuedMessages.filter((turn) => !turn.entryAdded);
+    const queuedMessages = pending.map((turn) => ({ text: turn.message.text, imageCount: messageImageCount(turn.message) }));
     const first = queuedMessages[0] ?? null;
     const { conversation, conversationArchive, ...session } = this.session;
     void conversation;
@@ -335,7 +340,7 @@ export class AgentSessionController implements AgentSessionClient {
       pendingApproval: this.pendingApproval,
       pendingApprovalId: this.pendingApprovalId,
       pendingQuestion: this.pendingQuestion,
-      queuedMessageCount: this.queuedMessages.length,
+      queuedMessageCount: pending.length,
       firstQueuedMessage: first,
       queuedMessages,
       sessionSaveError: this.sessionSaveError,
@@ -557,6 +562,7 @@ export class AgentSessionController implements AgentSessionClient {
     if (!options.preserveWakePolicy) this.session = { ...this.session, automaticWakeHeld: true };
     if (options.holdQueue === true) {
       this.queueHold = true;
+      this.materializeHeldTurns();
     } else if (options.keepQueue !== true) {
       for (const turn of this.queuedMessages.splice(0)) turn.reject(new Error('Run cancelled before execution.'));
     }
@@ -1081,6 +1087,23 @@ export class AgentSessionController implements AgentSessionClient {
     if (text.trim()) this.activeEventOutputs?.push({ kind: 'assistant', text });
   }
 
+  /**
+   * An Esc hold keeps the queued owner messages pending, but the owner expects to
+   * see them in the transcript right away. Materialise each one exactly once: the
+   * entry appears in the chat, while the turn still waits for the next explicit
+   * send before it reaches the model.
+   */
+  private materializeHeldTurns(): void {
+    let added = false;
+    for (const turn of this.queuedMessages) {
+      if (turn.automatic || turn.entryAdded) continue;
+      turn.entryAdded = true;
+      this.addUserEntry(turn.message);
+      added = true;
+    }
+    if (added) this.publish();
+  }
+
   private addUserEntry(message: QueuedMessage): void {
     this.addEntry({
       kind: 'user',
@@ -1259,7 +1282,7 @@ export class AgentSessionController implements AgentSessionClient {
         this.publish();
         this.streamedAssistantEntry = null;
         this.streamedReasoningEntry = null;
-        this.addUserEntry(current);
+        if (!currentTurn.entryAdded) this.addUserEntry(current);
         this.conversation.push(userMessage);
         if (this.conversationArchive.length > 0) this.conversationArchive.push(userMessage);
         const conversationAtRunStart = [...this.conversation];
@@ -1397,7 +1420,7 @@ export class AgentSessionController implements AgentSessionClient {
                   }
                   this.flushStreamedEntries();
                   this.flushEventAssistantText();
-                  this.addUserEntry(next.message);
+                  if (!next.entryAdded) this.addUserEntry(next.message);
                   steeredTurns.push(next);
                   admitted.push(queuedUserMessageToModelMessage(next.message));
                 }

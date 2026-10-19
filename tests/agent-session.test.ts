@@ -1581,7 +1581,7 @@ describe('session activity reporting', () => {
     expect(session.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Second request.')).toBe(false);
   });
 
-  it('holds queued messages on a holdQueue stop: they stay visible without starting a run', async () => {
+  it('holds queued messages on a holdQueue stop: they land in the chat without starting a run', async () => {
     const { AgentSessionController } = await import('../src/agent-session.js');
     let calls = 0;
     const endless = () => {
@@ -1631,20 +1631,22 @@ describe('session activity reporting', () => {
 
     session.stop({ keepQueue: true, holdQueue: true });
     await vi.waitFor(() => expect(session!.getSnapshot().busy).toBe(false));
-    // The Esc contract: the queue survives visibly in the chat, but nothing restarts on its own.
+    // The Esc contract: the pending message lands in the chat right away, but nothing restarts on its own.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(calls).toBe(1);
-    expect(session.getSnapshot().queuedMessageCount).toBe(1);
+    expect(session.getSnapshot().queuedMessageCount).toBe(0);
+    const heldEntries = () =>
+      session!.getSnapshot().session.entries.filter((entry) => entry.kind === 'user' && entry.text === 'Second request.');
+    expect(heldEntries()).toHaveLength(1);
 
     // The next explicit send releases the hold: held and new messages run together.
     void session.sendMessage({ text: 'Third request.', images: [] }, preferences);
     await vi.waitFor(() =>
-      expect(session!.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Second request.')).toBe(true),
-    );
-    await vi.waitFor(() =>
       expect(session!.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Third request.')).toBe(true),
     );
     await vi.waitFor(() => expect(session!.getSnapshot().queuedMessageCount).toBe(0));
+    // The held message is delivered once, so its transcript entry must not be duplicated.
+    expect(heldEntries()).toHaveLength(1);
     await session.close();
     session = undefined;
   });
