@@ -83,6 +83,9 @@ export async function runTerminalSession(controller: AgentSessionClient): Promis
       />,
       {
         alternateScreen: true,
+        // Only changed lines are written back; the frame Ink computes does not
+        // change, so the screen looks the same with less terminal traffic.
+        incrementalRendering: true,
         exitOnCtrlC: false,
         stdin: mouseInput.stdin,
         stdout: createSelectionStdout(selection),
