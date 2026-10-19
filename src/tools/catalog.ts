@@ -1,4 +1,4 @@
-import type { InboxRequest } from '../inbox.js';
+﻿import type { InboxRequest } from '../inbox.js';
 import type { ParentMessageInput } from '../worker-records.js';
 import type { MemoryIndex } from '../memory-index.js';
 import { createScheduleTool } from './schedule.js';
@@ -9,6 +9,7 @@ import { createGlobTool, createGrepTool } from './file-search.js';
 import { createWriteTool } from './file-write.js';
 import { createMcpManagementTool, type McpConnectionManager } from './mcp.js';
 import { createMemorySearchTool } from './memory-search.js';
+import { createMemoryWriteTool } from './memory-write.js';
 import { createParentMessageTool } from './parent-message.js';
 import { createQuestionTool } from './question.js';
 import { createSessionListTool } from './session-list.js';
@@ -86,6 +87,7 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     createGrepTool(options.workspaceRoot),
     createQuestionTool(),
     createMemorySearchTool(options.memoryIndex),
+    createMemoryWriteTool(options.workspaceRoot, options.memoryIndex),
     createSessionListTool(options.workspaceRoot),
     createSessionSearchTool(options.workspaceRoot),
     createSessionReadTool(),

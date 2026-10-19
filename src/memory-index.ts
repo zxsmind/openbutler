@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+﻿import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { getMemoryPaths, teamSlug } from './memory-paths.js';
 import { getDataPath } from './paths.js';
 import { loadSettings } from './settings.js';
 import { migrateMemoryLayout } from './memory-layout.js';
-import { gateByRelevance, tokenizeTerms, type RelevanceGate } from './relevance-gate.js';
+import { tokenizeTerms } from './relevance-gate.js';
 import { MEMORY_DOCUMENT_REVISION, parseMemoryDocument, type MemoryScope, type MemoryType } from './memory-document.js';
 import { classifyWorkspacePath } from './workspace-scope.js';
 
@@ -28,18 +28,47 @@ const MAX_SEARCH_RESULTS = 10;
 const EMBEDDING_BYTES = MEMORY_EMBEDDING_DIMENSIONS * Float32Array.BYTES_PER_ELEMENT;
 
 /**
- * Calibrated 2026-10-09 on a live corpus: unrelated queries (kubernetes, physics,
- * rust, postgresql, sourdough, C++ templates) peaked at 0.21, while kept relevant
- * results scored 0.31 and above and relevant queries topped out at 0.41–0.99.
- * Recalibrate with the documented eval method before changing either constant.
+ * Relevance gate for memory search, calibrated on the live corpus 2026-10-19.
+ *
+ * A single absolute floor could not separate the two cases: unrelated rows
+ * reached 0.35 on vector noise alone, while correct answers whose wording
+ * differs from the note scored 0.49. Measured components on that corpus:
+ *
+ *   relevant  score 0.91 / 0.79 / 0.54 / 0.49 / 0.47 / 0.44   lexical 0.29-1.00
+ *   noise     score 0.35 / 0.29 / 0.19                        lexical 0.00-0.20
+ *
+ * So a row survives on evidence, not on score alone: a share of the query terms
+ * in the note (or an exact phrase/identifier) with a lower floor, or a strong
+ * vector match with the higher floor. Unrelated rows have neither.
  */
-export const MEMORY_SEARCH_FLOOR = 0.3;
+export const MEMORY_SEARCH_FLOOR = 0.42;
+/** Floor for a row that carries lexical, phrase or identifier evidence. */
+export const MEMORY_EVIDENCE_FLOOR = 0.35;
+/** Share of query terms a note must contain to count as evidence. */
+export const MEMORY_LEXICAL_EVIDENCE = 0.25;
+/** Vector similarity that stands on its own, with no term overlap. */
+export const MEMORY_STRONG_VECTOR = 0.6;
 export const MEMORY_SEARCH_BAND_RATIO = 0.65;
-export const MEMORY_SEARCH_GATE: RelevanceGate = { floor: MEMORY_SEARCH_FLOOR, bandRatio: MEMORY_SEARCH_BAND_RATIO };
 
-/** Relevance gates applied to the combined score via the shared rules in relevance-gate.ts. */
-export function gateMemoryScores<T extends { score: number }>(scored: readonly T[], limit: number): T[] {
-  return gateByRelevance(scored, limit, MEMORY_SEARCH_GATE);
+export interface MemoryScoredRow {
+  score: number;
+  vectorScore: number;
+  lexicalScore: number;
+  exactPhrase: boolean;
+  exactIdentifier: boolean;
+}
+
+/** Keeps rows that clear both a floor and an evidence test, then trims the tail. */
+export function gateMemoryScores<T extends MemoryScoredRow>(scored: readonly T[], limit: number): T[] {
+  const kept = scored.filter((item) => {
+    const hasEvidence = item.lexicalScore >= MEMORY_LEXICAL_EVIDENCE || item.exactPhrase || item.exactIdentifier;
+    if (hasEvidence) return item.score >= MEMORY_EVIDENCE_FLOOR;
+    return item.vectorScore >= MEMORY_STRONG_VECTOR && item.score >= MEMORY_SEARCH_FLOOR;
+  });
+  if (kept.length === 0) return [];
+  kept.sort((left, right) => right.score - left.score);
+  const topScore = kept[0]!.score;
+  return kept.filter((item) => item.score >= topScore * MEMORY_SEARCH_BAND_RATIO).slice(0, limit);
 }
 
 interface MemorySourceFile {
@@ -210,7 +239,7 @@ export async function prepareMemoryEmbeddingModel(options: PrepareMemoryModelOpt
   try {
     const output = await pipeline(['Local memory search readiness check.'], { pooling: 'mean', normalize: true });
     if (output.dims.length !== 2 || output.dims[0] !== 1 || output.dims[1] !== MEMORY_EMBEDDING_DIMENSIONS) {
-      throw new Error(`Expected a ${MEMORY_EMBEDDING_DIMENSIONS}-dimensional memory embedding; got ${output.dims.join('×')}.`);
+      throw new Error(`Expected a ${MEMORY_EMBEDDING_DIMENSIONS}-dimensional memory embedding; got ${output.dims.join('Ã—')}.`);
     }
     const vector = Array.from(output.data as ArrayLike<number>);
     const magnitude = vector.reduce((sum, value) => sum + value * value, 0);
@@ -298,7 +327,14 @@ export class MemoryIndex {
     const limit = Math.max(1, Math.min(MAX_SEARCH_RESULTS, Math.floor(requestedLimit)));
     const terms = tokenizeTerms(normalizedQuery);
     const queryLower = normalizedQuery.toLowerCase();
-    const scored: Array<{ chunk: StoredMemoryChunk; score: number }> = [];
+    const scored: Array<{
+      chunk: StoredMemoryChunk;
+      score: number;
+      vectorScore: number;
+      lexicalScore: number;
+      exactPhrase: boolean;
+      exactIdentifier: boolean;
+    }> = [];
     const chunks = database
       .prepare(
         `
@@ -319,10 +355,22 @@ export class MemoryIndex {
       const lexicalScore = terms.length === 0 ? 0 : matchedTerms / terms.length;
       const exactPhraseBoost = searchable.includes(queryLower) ? 0.2 : 0;
       const exactIdentifierBoost = terms.some((term) => /[\d_-]/.test(term) && searchable.includes(term)) ? 0.15 : 0;
-      scored.push({ chunk, score: vectorScore + lexicalScore * 0.12 + exactPhraseBoost + exactIdentifierBoost });
+      scored.push({
+        chunk,
+        score: vectorScore + lexicalScore * 0.12 + exactPhraseBoost + exactIdentifierBoost,
+        vectorScore,
+        lexicalScore,
+        exactPhrase: exactPhraseBoost > 0,
+        exactIdentifier: exactIdentifierBoost > 0,
+      });
     }
 
-    const matches = gateMemoryScores(scored, limit).map(({ chunk, score }) => ({
+    // With RANITE_MEMORY_DEBUG=1 the gate is skipped, so the top rows and their
+    // components are visible; that is how the thresholds get recalibrated.
+    const debug = process.env.RANITE_MEMORY_DEBUG === '1';
+    const matches = (
+      debug ? [...scored].sort((left, right) => right.score - left.score).slice(0, limit) : gateMemoryScores(scored, limit)
+    ).map(({ chunk, score, ...components }) => ({
       path: chunk.path,
       startLine: chunk.start_line,
       endLine: chunk.end_line,
@@ -332,6 +380,18 @@ export class MemoryIndex {
       heading: chunk.heading,
       score: Number(score.toFixed(4)),
       snippet: chunk.content.slice(0, 1_800),
+      // Opt-in: shows why a row survived the gate, so the thresholds can be
+      // recalibrated against a live corpus instead of by guesswork.
+      ...(process.env.RANITE_MEMORY_DEBUG === '1'
+        ? {
+            components: {
+              vector: Number(components.vectorScore.toFixed(4)),
+              lexical: Number(components.lexicalScore.toFixed(4)),
+              phrase: components.exactPhrase,
+              identifier: components.exactIdentifier,
+            },
+          }
+        : {}),
     }));
     return { matches, indexedSources: sourceCount, indexedChunks: chunkCount, emptyMemory: sourceCount === 0, ...issueField };
   }
@@ -566,7 +626,7 @@ async function releaseEmbeddingRuntime(): Promise<void> {
 async function createEmbeddingRuntime() {
   const modelDirectory = memoryModelRevisionDirectory();
   if (!(await hasCompleteModelCache(modelDirectory))) {
-    throw new Error('The local memory model is not prepared. Run `ranite setup` and choose “Prepare local memory model only”.');
+    throw new Error('The local memory model is not prepared. Run `ranite setup` and choose â€œPrepare local memory model onlyâ€.');
   }
 
   const [{ Tokenizer }, ort] = await Promise.all([import('@huggingface/tokenizers'), import('onnxruntime-node')]);

@@ -110,15 +110,43 @@ afterEach(() => {
 });
 
 describe('relevance gates', () => {
-  it('drops below-floor rows, trims the tail outside the top band, and applies the limit last', () => {
-    const scores = [0.9, 0.85, 0.8, 0.62, 0.58, 0.29, 0.1].map((score) => ({ score }));
-    // floor 0.30 removes 0.29/0.1; band 0.65 * 0.9 = 0.585 removes 0.58.
-    expect(gateMemoryScores(scores, 10).map((item) => item.score)).toEqual([0.9, 0.85, 0.8, 0.62]);
-    expect(gateMemoryScores(scores, 2).map((item) => item.score)).toEqual([0.9, 0.85]);
-    expect(gateMemoryScores([{ score: MEMORY_SEARCH_FLOOR - 0.01 }], 5)).toEqual([]);
+  it('keeps a row on lexical evidence even when the vector score is modest', () => {
+    // Measured 2026-10-19: a correct answer to "npm omit dev ..." scored 0.49
+    // with full term overlap, so a flat 0.7 floor would have dropped it.
+    const rows = [
+      { score: 0.4899, vectorScore: 0.3871, lexicalScore: 0.8571, exactPhrase: false, exactIdentifier: false },
+      { score: 0.543, vectorScore: 0.423, lexicalScore: 1, exactPhrase: false, exactIdentifier: false },
+    ];
+    expect(gateMemoryScores(rows, 10).map((row) => row.score)).toEqual([0.543, 0.4899]);
+  });
+
+  it('drops a vector-only row that has no term overlap', () => {
+    // The row that used to leak through the 0.3 floor: unrelated, lexical 0.
+    const noise = { score: 0.3495, vectorScore: 0.3495, lexicalScore: 0, exactPhrase: false, exactIdentifier: false };
+    expect(gateMemoryScores([noise], 5)).toEqual([]);
+    expect(gateMemoryScores([{ ...noise, score: 0.62, vectorScore: 0.62 }], 5)).toHaveLength(1);
+  });
+
+  it('keeps a weak-lexical row above the evidence floor but not below it', () => {
+    const base = { vectorScore: 0.3, exactPhrase: false, exactIdentifier: false };
+    expect(gateMemoryScores([{ ...base, score: 0.36, lexicalScore: 0.3 }], 5)).toHaveLength(1);
+    expect(gateMemoryScores([{ ...base, score: 0.34, lexicalScore: 0.3 }], 5)).toEqual([]);
+  });
+
+  it('trims the tail outside the top band and applies the limit last', () => {
+    const rows = [0.9, 0.85, 0.8, 0.62, 0.58].map((score) => ({
+      score,
+      vectorScore: score,
+      lexicalScore: 1,
+      exactPhrase: false,
+      exactIdentifier: false,
+    }));
+    // band 0.65 * 0.9 = 0.585 removes 0.58.
+    expect(gateMemoryScores(rows, 10).map((row) => row.score)).toEqual([0.9, 0.85, 0.8, 0.62]);
+    expect(gateMemoryScores(rows, 2).map((row) => row.score)).toEqual([0.9, 0.85]);
     expect(gateMemoryScores([], 5)).toEqual([]);
     expect(MEMORY_SEARCH_BAND_RATIO).toBeLessThan(1);
-    expect(MEMORY_SEARCH_FLOOR).toBeGreaterThan(0.2);
+    expect(MEMORY_SEARCH_FLOOR).toBeGreaterThan(0.3);
   });
 });
 
