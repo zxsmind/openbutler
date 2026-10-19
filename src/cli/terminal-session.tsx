@@ -48,7 +48,7 @@ const slashCommands = [
   { command: '/provider', description: 'Add a provider, API key, and model' },
   { command: '/session', description: 'Search and open a saved session' },
   { command: '/skills', description: 'List available global and workspace skills' },
-  { command: '/exit', description: 'Close Ranite' },
+  { command: '/exit', description: 'Close this terminal UI; the background host keeps running' },
 ];
 
 const themeOptions = ['Dark', 'Light', 'System'];
@@ -1117,6 +1117,18 @@ export function SessionScreen({
     selection.clear();
     repaintSelection();
   }, [repaintSelection, selection]);
+  /**
+   * Copies the selection through the in-app path, which drops layout chrome
+   * such as the prompt glyph. Everything else is the text the frame shows, so
+   * Ctrl+C and a finished drag both copy the same thing.
+   */
+  const copySelection = useCallback(() => {
+    const copied = selection.text();
+    if (!copied) return false;
+    writeClipboardText(copied);
+    setComposerNotice(`Copied ${copied.length} characters to the clipboard.`);
+    return true;
+  }, [selection]);
   const handleMouseEvent = useCallback(
     (event: MouseInputEvent) => {
       const state = mouseState.current;
@@ -1145,6 +1157,9 @@ export function SessionScreen({
       const gesture = selection.release();
       if (gesture === 'selection') {
         repaintSelection();
+        // A finished drag copies on its own; the highlight stays so Ctrl+C can
+        // copy it again and a wheel event clears it as before.
+        copySelection();
         return;
       }
       const { x, y } = event;
@@ -1222,7 +1237,7 @@ export function SessionScreen({
         }
       }
     },
-    [clearSelection, repaintSelection, selection],
+    [clearSelection, copySelection, repaintSelection, selection],
   );
 
   useEffect(() => {
@@ -1242,12 +1257,9 @@ export function SessionScreen({
   useInput(
     (input, key) => {
       if (!key.ctrl || input.toLowerCase() !== 'c') return;
-      const copied = selection.text();
-      if (copied) {
-        writeClipboardText(copied);
+      if (copySelection()) {
         selection.clear();
         repaintSelection();
-        setComposerNotice(`Copied ${copied.length} characters to the clipboard.`);
         return;
       }
       // Shell habit: Ctrl+C clears what you were typing before it stops or exits.
@@ -3302,6 +3314,9 @@ function renderMarkdownBlocks(
             code = codeToken.text;
           }
         }
+        // No left bar: any glyph before the text lands in a terminal selection,
+        // so code copied with the terminal (not the in-app selection) would come
+        // out prefixed. Colour and the blank line above and below carry the block.
         return (
           <Box key={key} width={width} flexDirection="column" marginBottom={gap} flexShrink={0}>
             {code.split('\n').map((line, lineIndex) => (
@@ -3311,7 +3326,6 @@ function renderMarkdownBlocks(
                 wrap="wrap"
                 dimColor={dimmed}
               >
-                {decorate('│ ')}
                 {line || ' '}
               </Text>
             ))}
