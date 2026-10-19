@@ -260,7 +260,10 @@ export function SessionScreen({
   const sessionSaveError = snapshot.sessionSaveError;
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
-  const width = Math.max(24, Math.min(columns - 4, 82));
+  // The transcript uses the whole width the terminal gives it. It used to stop
+  // at 82 columns for a comfortable reading measure, which left the right half
+  // of a wide terminal empty and made the transcript look cut off.
+  const width = Math.max(24, columns - 4);
   const composerWidth = Math.max(1, columns - 4);
   const [approvalSelection, setApprovalSelection] = useState(0);
   const [questionSelection, setQuestionSelection] = useState(0);
