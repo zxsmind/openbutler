@@ -137,6 +137,11 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
           description:
             'Optional 0-based Unicode code-point offset within the selected text line range; use nextCharacterOffset to continue the same range without losing long-line content.',
         },
+        lineNumbers: {
+          type: 'boolean',
+          description:
+            'Optional. When true, each returned line is prefixed with its 1-based number and a "→" marker, so a region can be cited or edited by line. The prefix is display only: never include it in an edit anchor. Ignored while characterOffset is non-zero, because the page then holds part of one line.',
+        },
       },
       required: ['path'],
       additionalProperties: false,
@@ -326,6 +331,17 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
       }
       const hasMoreLines = endLine < lines.length;
       const truncated = page.nextCharacterOffset !== undefined || hasMoreLines;
+      // Line numbers are a display aid for citing and editing a region; the
+      // prefix must never travel into an edit anchor, which is why the tool
+      // description says so and why paging inside one line turns it off.
+      const numbered = input.lineNumbers === true && characterOffset === 0;
+      const width = String(endLine).length;
+      const pageContent = numbered
+        ? page.content
+            .split('\n')
+            .map((line, index) => `${String(offset + index).padStart(width)}→${line}`)
+            .join('\n')
+        : page.content;
       return {
         status: 'completed',
         path: path.slice(0, 512),
@@ -335,7 +351,8 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
         limit,
         endLine,
         characterOffset,
-        content: page.content,
+        content: pageContent,
+        ...(numbered ? { lineNumbers: true } : {}),
         truncated,
         hasMore: truncated,
         ...(page.nextCharacterOffset === undefined

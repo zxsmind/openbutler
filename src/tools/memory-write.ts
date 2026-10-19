@@ -1,4 +1,4 @@
-﻿import { existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getMemoryPaths } from '../memory-paths.js';
@@ -244,7 +244,7 @@ export function createMemoryWriteTool(workspaceRoot = process.cwd(), memoryIndex
         const titleMatch = /^title: (.*)$/m.exec(next);
         const descriptionMatch = /^description: (.*)$/m.exec(next);
         const link = `${scope === 'preferences' ? 'user/preferences.md' : scope === 'profile' ? 'user/profile.md' : `${scope === 'topic' ? 'topics' : 'areas'}/${String(input.slug)}.md`}`;
-        const line = `- [${titleMatch?.[1] ?? link}](${link}) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${descriptionMatch?.[1] ?? ''} (${date})`;
+        const line = `- [${titleMatch?.[1] ?? link}](${link}) — ${descriptionMatch?.[1] ?? ''} (${date})`;
         const lines = index ? index.trimEnd().split('\n') : ['# Memory', ''];
         const existing = lines.findIndex((entry) => {
           const match = INDEX_LINK.exec(entry.trim());

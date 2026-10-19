@@ -1,4 +1,5 @@
 import { sessionFilePath } from './session-paths.js';
+import { RETRY_DELAYS_MS, type RetryEvent } from './provider/retry.js';
 import type { JSONValue, LanguageModel, ModelMessage } from 'ai';
 import type { CompactionResult } from './compaction.js';
 import type { ToolActionUpdate } from './activity-ledger.js';
@@ -70,6 +71,8 @@ export interface AgentSessionRuntimeView {
   saveReasoningPreference: (variantId: string) => void;
   showReasoningDefault: boolean;
   saveShowReasoningPreference: (visible: boolean) => void;
+  /** Receives provider retry and key-rotation events; set per run, cleared after. */
+  reportRetry?: (handler: ((event: RetryEvent) => void) | null) => void;
   approvalMode?: ApprovalMode;
   saveApprovalModePreference?: (mode: ApprovalMode) => void;
 }
@@ -228,6 +231,32 @@ export class AgentSessionController implements AgentSessionClient {
   private streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private streamedAssistantEntry: SessionEntry | null = null;
   private streamedReasoningEntry: SessionEntry | null = null;
+  /**
+   * The one notice a retry sequence owns. Each further attempt replaces this
+   * entry in place instead of appending a line per second, and the entry stays
+   * in the transcript after the sequence ends, so a slow turn explains itself.
+   */
+  private retryNotice: SessionEntry | null = null;
+
+  /** Turns a provider retry or key rotation into that single updating line. */
+  private reportModelRetry(event: RetryEvent): void {
+    const cause = describeRetryCause(event.error);
+    const text =
+      event.kind === 'retry'
+        ? `${cause}. Retry ${event.attempt + 1} of ${RETRY_DELAYS_MS.length + 1} in ${Math.max(1, Math.round(event.waitMs / 1000))}s.`
+        : `${cause}. ${event.reason === 'auth' ? 'Key rejected' : 'Retries exhausted'}, switching to the next key.`;
+    const next: SessionEntry = { kind: 'notice', text, tone: 'warn' };
+    const previous = this.retryNotice;
+    if (previous) this.replaceEntry(previous, next);
+    else this.addEntry(next);
+    this.retryNotice = next;
+  }
+
+  /** A response arrived, so the next retry belongs to a new line. */
+  private closeRetryNotice(): void {
+    this.retryNotice = null;
+  }
+
   /** When the current reasoning block started, for the duration it reports. */
   private reasoningStartedAt: number | null = null;
   private runningToolEntry: { request: ToolCallRequest; entry: Extract<SessionEntry, { kind: 'tool' }> } | null = null;
@@ -575,6 +604,8 @@ export class AgentSessionController implements AgentSessionClient {
   private appendStreamedText(delta: string): void {
     // Assistant text ends the thinking block, so its duration is stamped first.
     this.finishStreamedReasoning();
+    // A response arrived: any retry line belongs to a finished sequence.
+    this.closeRetryNotice();
     const previous = this.streamedAssistantEntry;
     if (previous?.kind === 'assistant') {
       const next: SessionEntry = { kind: 'assistant', text: previous.text + delta };
@@ -589,6 +620,7 @@ export class AgentSessionController implements AgentSessionClient {
 
   private appendStreamedReasoning(delta: string): void {
     if (!delta) return;
+    this.closeRetryNotice();
     const previous = this.streamedReasoningEntry;
     if (previous?.kind === 'reasoning') {
       const next: SessionEntry = {
@@ -1201,6 +1233,9 @@ export class AgentSessionController implements AgentSessionClient {
         this.currentReviewAuthorization = current.reviewAuthorization ?? null;
         this.activeEventId = current.eventId;
         this.reportTurnProgress({ kind: 'start' });
+        // Provider retries and key rotations belong to this turn's transcript.
+        this.retryNotice = null;
+        this.runtime.reportRetry?.((event) => this.reportModelRetry(event));
         let titleRequest: { sessionId: string; message: string } | null = null;
         if (!this.sessionHasUserMessage) {
           this.sessionHasUserMessage = true;
@@ -1531,6 +1566,9 @@ export class AgentSessionController implements AgentSessionClient {
       this.activeTurnProgress = undefined;
       this.activeEventId = undefined;
       this.busy = false;
+      // No run is active any more, so a late retry event must not write here.
+      this.runtime.reportRetry?.(null);
+      this.retryNotice = null;
       reportSessionActivity(this.session.id, false);
       if (this.activeRunAbort === abortController) this.activeRunAbort = null;
       this.publish();
@@ -1641,6 +1679,8 @@ export class AgentSessionController implements AgentSessionClient {
         );
     } finally {
       this.busy = false;
+      this.runtime.reportRetry?.(null);
+      this.retryNotice = null;
       reportSessionActivity(this.session.id, false);
       if (this.activeRunAbort === abortController) this.activeRunAbort = null;
       this.publish();
@@ -2280,6 +2320,22 @@ function fallbackSessionTitle(message: string): string {
   if (words.length === 0) return 'New session';
   if (words.length === 1) return `${words[0]} chat`;
   return words.join(' ').slice(0, 64);
+}
+
+/**
+ * A short, factual cause for a retry line: the status code when the provider
+ * sent one, otherwise that the request failed. No advice, no speculation.
+ */
+function describeRetryCause(error: unknown): string {
+  const status = error !== null && typeof error === 'object' ? (error as { statusCode?: unknown }).statusCode : undefined;
+  if (typeof status === 'number') {
+    if (status === 429) return 'Rate limited (429)';
+    if (status === 408) return 'Request timed out (408)';
+    if (status === 409) return 'Conflict (409)';
+    if (status >= 500) return `Provider error (${status})`;
+    return `Request failed (${status})`;
+  }
+  return 'Request failed';
 }
 
 function truncateUtf8Bytes(value: string, maxBytes: number): string {

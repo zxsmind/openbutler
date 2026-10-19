@@ -1,4 +1,4 @@
-﻿import { PassThrough, Writable } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { createElement } from 'react';
 import { render } from 'ink';
 import { describe, expect, it } from 'vitest';

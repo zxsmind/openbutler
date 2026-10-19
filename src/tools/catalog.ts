@@ -1,4 +1,4 @@
-﻿import type { InboxRequest } from '../inbox.js';
+import type { InboxRequest } from '../inbox.js';
 import type { ParentMessageInput } from '../worker-records.js';
 import type { MemoryIndex } from '../memory-index.js';
 import { createScheduleTool } from './schedule.js';

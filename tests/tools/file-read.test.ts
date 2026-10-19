@@ -14,6 +14,49 @@ afterEach(async () => {
   await rm(workspace, { recursive: true, force: true });
 });
 
+describe('file_read line numbers', () => {
+  it('prefixes each line with its number only when asked', async () => {
+    await writeFile(join(workspace, 'note.txt'), 'alpha\nbeta\ngamma\n', 'utf8');
+    const tool = createReadTool([], workspace);
+
+    const plain = (await tool.execute!({ path: 'note.txt', offset: 2, limit: 2 }, undefined, undefined)) as Record<string, unknown>;
+    expect(plain.content).toBe('beta\ngamma');
+    expect(plain.lineNumbers).toBeUndefined();
+
+    const numbered = (await tool.execute!({ path: 'note.txt', offset: 2, limit: 2, lineNumbers: true }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    expect(numbered.lineNumbers).toBe(true);
+    expect(numbered.content).toBe('2→beta\n3→gamma');
+    expect(numbered.offset).toBe(2);
+    expect(numbered.endLine).toBe(3);
+  });
+
+  it('keeps the prefix aligned to the widest line number in the page', async () => {
+    const body = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join('\n');
+    await writeFile(join(workspace, 'wide.txt'), `${body}\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const numbered = (await tool.execute!({ path: 'wide.txt', offset: 9, limit: 3, lineNumbers: true }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    expect(numbered.content).toBe(' 9→line 9\n10→line 10\n11→line 11');
+  });
+
+  it('does not number a page that slices inside one long line', async () => {
+    await writeFile(join(workspace, 'long.txt'), `${'x'.repeat(200)}\n`, 'utf8');
+    const tool = createReadTool([], workspace);
+    const page = (await tool.execute!({ path: 'long.txt', characterOffset: 10, lineNumbers: true }, undefined, undefined)) as Record<
+      string,
+      unknown
+    >;
+    expect(String(page.content).startsWith('→')).toBe(false);
+    expect(String(page.content).startsWith('x')).toBe(true);
+    expect(page.lineNumbers).toBeUndefined();
+  });
+});
+
 describe('file_read directory listing', () => {
   it('returns sorted entries with types plus paging metadata', async () => {
     await mkdir(join(workspace, 'src', 'nested'), { recursive: true });

@@ -369,6 +369,93 @@ describe('owner replies and safe steering', () => {
   });
 });
 
+describe('provider retry reporting', () => {
+  it('shows a retry as one line that updates in place and stays after recovery', async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () =>
+        delayedStream([
+          { pause: 120 },
+          { type: 'text-start', id: 'answer' },
+          { type: 'text-delta', id: 'answer', delta: 'Done.' },
+          { type: 'text-end', id: 'answer' },
+        ]),
+    });
+    let report:
+      | ((event: {
+          kind: 'retry' | 'rotate';
+          keyIndex: number;
+          attempt?: number;
+          waitMs?: number;
+          reason?: string;
+          error: unknown;
+        }) => void)
+      | null = null;
+    const runtime = runtimeFor(model);
+    runtime.reportRetry = (handler) => {
+      report = handler as typeof report;
+    };
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtime);
+
+    const running = session.sendMessage({ text: 'selam', images: [] }, preferences);
+    await vi.waitFor(() => expect(report).not.toBeNull());
+    const fire = report as unknown as (event: Record<string, unknown>) => void;
+    fire({ kind: 'retry', keyIndex: 0, attempt: 0, waitMs: 1_000, error: { statusCode: 429 } });
+    fire({ kind: 'retry', keyIndex: 0, attempt: 1, waitMs: 2_000, error: { statusCode: 429 } });
+    await running;
+
+    const notices = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'notice');
+    // One line for the whole sequence, carrying the latest attempt.
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ kind: 'notice', tone: 'warn' });
+    const text = (notices[0] as { text: string }).text;
+    expect(text).toContain('Rate limited (429)');
+    expect(text).toContain('Retry 2 of');
+    expect(text).toContain('2s');
+
+    // It is a real session entry, so it survives a reload.
+    session.flushSave();
+    const { loadSavedSession } = await import('../src/session-store.js');
+    const saved = loadSavedSession(session.getSnapshot().session.id);
+    expect(saved?.entries.filter((entry) => entry.kind === 'notice')).toHaveLength(1);
+  });
+
+  it('reports a key rotation in the same line', async () => {
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () =>
+        delayedStream([
+          { pause: 120 },
+          { type: 'text-start', id: 'answer' },
+          { type: 'text-delta', id: 'answer', delta: 'Done.' },
+          { type: 'text-end', id: 'answer' },
+        ]),
+    });
+    let report: ((event: Record<string, unknown>) => void) | null = null;
+    const runtime = runtimeFor(model);
+    runtime.reportRetry = (handler) => {
+      report = handler as typeof report;
+    };
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtime);
+
+    const running = session.sendMessage({ text: 'selam', images: [] }, preferences);
+    await vi.waitFor(() => expect(report).not.toBeNull());
+    (report as unknown as (event: Record<string, unknown>) => void)({
+      kind: 'rotate',
+      keyIndex: 0,
+      reason: 'auth',
+      error: { statusCode: 403 },
+    });
+    await running;
+
+    const notices = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'notice');
+    expect(notices).toHaveLength(1);
+    expect((notices[0] as { text: string }).text).toContain('switching to the next key');
+  });
+});
+
 describe('session streaming message boundaries', () => {
   it('keeps reasoning and assistant deltas in one entry across multiple repaint timers', async () => {
     const model = new MockLanguageModelV3({

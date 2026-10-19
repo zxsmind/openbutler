@@ -1,4 +1,4 @@
-﻿import { createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
@@ -239,7 +239,7 @@ export async function prepareMemoryEmbeddingModel(options: PrepareMemoryModelOpt
   try {
     const output = await pipeline(['Local memory search readiness check.'], { pooling: 'mean', normalize: true });
     if (output.dims.length !== 2 || output.dims[0] !== 1 || output.dims[1] !== MEMORY_EMBEDDING_DIMENSIONS) {
-      throw new Error(`Expected a ${MEMORY_EMBEDDING_DIMENSIONS}-dimensional memory embedding; got ${output.dims.join('Ã—')}.`);
+      throw new Error(`Expected a ${MEMORY_EMBEDDING_DIMENSIONS}-dimensional memory embedding; got ${output.dims.join('×')}.`);
     }
     const vector = Array.from(output.data as ArrayLike<number>);
     const magnitude = vector.reduce((sum, value) => sum + value * value, 0);

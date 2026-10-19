@@ -1,7 +1,7 @@
 import type { JSONValue, LanguageModel } from 'ai';
 import { getModel, getProvider, isCatalogLoaded, listProviderIdsForModel, type CatalogModel } from './catalog.js';
 import { importProviderFactory, packageReadsOwnEnv } from './install.js';
-import { createRotatingModel, type V3LanguageModel } from './retry.js';
+import { createRotatingModel, type RetryEvent, type V3LanguageModel } from './retry.js';
 import { hasCredential, type ProviderState, type SettingsStore } from '../settings.js';
 
 /**
@@ -426,6 +426,7 @@ export async function createLanguageModel(
   modelId: string,
   override?: ProviderOverride,
   fetch?: typeof globalThis.fetch,
+  onRetry?: (event: RetryEvent) => void,
 ): Promise<{ ok: true; model: LanguageModel; resolved: ResolvedProvider } | { ok: false; error: UnavailableProvider }> {
   const resolution = resolveProvider(providerId, override);
   if (!resolution.ok) return resolution;
@@ -438,7 +439,7 @@ export async function createLanguageModel(
       const perKey = source ? { ...provider, apiKey: source } : provider;
       models.push((await factory.createModel(perKey, modelId, fetch)) as V3LanguageModel);
     }
-    return { ok: true, model: createRotatingModel(models), resolved: provider };
+    return { ok: true, model: createRotatingModel(models, onRetry ? { onRetry } : {}), resolved: provider };
   } catch (error) {
     return {
       ok: false,

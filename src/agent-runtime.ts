@@ -22,6 +22,7 @@ import {
   withReasoningVisibility,
 } from './provider/registry.js';
 import { loadSettings, rememberProviderModel, saveSettings, type ApprovalMode } from './settings.js';
+import type { RetryEvent } from './provider/retry.js';
 import type { AgentEnvironment } from './agent-session.js';
 import type { SubagentRequest } from './tools/subagent.js';
 
@@ -77,7 +78,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   if (!defaultModelIsUsable(settings)) {
     throw new Error('The default model is not verified for native tool calls. Choose a tool-capable model: ranite setup');
   }
-  const resolved = await createLanguageModel(providerId, modelId, provider);
+  // Retry and key-rotation events surface through here so the session can show
+  // them in the transcript; the handler is swapped per run.
+  const retryRelay: { handler: ((event: RetryEvent) => void) | null } = { handler: null };
+  const reportRetry = (event: RetryEvent) => retryRelay.handler?.(event);
+
+  const resolved = await createLanguageModel(providerId, modelId, provider, undefined, reportRetry);
   if (!resolved.ok) throw new Error(resolved.error.reason);
   const reasoningCatalog = findReasoningCatalogMatch(providerId, modelId, resolved.resolved);
   const reasoningVariants = listReasoningVariants(resolved.resolved, reasoningCatalog.model);
@@ -196,6 +202,9 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         latest.approvalMode = mode;
         saveSettings(latest);
         runtime.approvalMode = mode;
+      },
+      reportRetry: (handler) => {
+        retryRelay.handler = handler;
       },
       saveShowReasoningPreference: (visible) => {
         const latest = loadSettings();
