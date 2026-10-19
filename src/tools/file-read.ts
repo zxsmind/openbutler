@@ -108,6 +108,9 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
     description:
       'Read a directory listing or a bounded range of a local UTF-8 text file. offset is a 1-based line/entry number and limit is a line/entry count. Directory entries carry sizes and modification times; directories additionally report the byte total of their direct files (filesBytes, capped scan) and child entry counts. If a text result has nextCharacterOffset, continue by repeating the same offset/limit and passing that value as characterOffset; when nextOffset is returned, continue at that line with characterOffset 0. sha256 always covers the complete on-disk text file, even when content is paged. Local image, audio, video, and PDF files are attached only when the selected model advertises that input modality. Images may also be loaded from HTTP(S) URLs, data URLs, base64, or clipboard. Workspace reads follow the active permission mode. Ranite memory, bundled skills, and installed global skill files are pre-authorized.',
     maxInputChars: MAX_READ_INPUT_CHARS,
+    // This tool pages its own output and never loses a byte, so the generic
+    // inline budget must not cut a page the agent explicitly asked for.
+    maxResultChars: 64_000,
     inputSchema: {
       type: 'object',
       properties: {
@@ -166,7 +169,8 @@ export function createReadTool(inputModalities: readonly string[], workspaceRoot
      */
     hostPreAuthorized: (input, target) => {
       const source = target ?? (typeof input.path === 'string' ? input.path : '');
-      return classifyHostOwnedPath(source, workspaceRoot) === 'settings' || isStoredAttachmentPath(source);
+      const kind = classifyHostOwnedPath(source, workspaceRoot);
+      return kind === 'settings' || kind === 'tool-output' || isStoredAttachmentPath(source);
     },
     assess: (input, target) => {
       const source = typeof input.path === 'string' ? input.path : '';

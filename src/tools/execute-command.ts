@@ -1,13 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ToolDefinition } from './registry.js';
 import { classifyTrustedPath, trustedRootsFor } from '../workspace-scope.js';
 import { DEFAULT_TOOL_TIMEOUT_SECONDS, runWithToolTimeout, ToolTimeoutError } from './timeout.js';
+import { openToolOutput, TOOL_OUTPUT_COMMAND_CHARS, TOOL_OUTPUT_MAX_FILE_BYTES, toolOutputNotice } from '../tool-output.js';
 
 const MAX_COMMAND_CHARS = 10_000;
-const MAX_OUTPUT_CHARS = 24_000;
+/** Inline preview kept in the result; everything past it streams to disk. */
+const MAX_OUTPUT_CHARS = TOOL_OUTPUT_COMMAND_CHARS;
 
 export function createExecuteCommandTool(startDirectory: string): ToolDefinition {
   const workspaceRoot = canonicalPath(startDirectory);
@@ -44,7 +46,7 @@ export function createExecuteCommandTool(startDirectory: string): ToolDefinition
         return { status: 'invalid', error: `command must be 1-${MAX_COMMAND_CHARS} characters and contain no control characters.` };
       }
       const run = (operationSignal: AbortSignal | undefined) =>
-        runShell(command, context?.target ?? resolveCommandDirectory(input.cwd, workspaceRoot), operationSignal);
+        runShell(command, context?.target ?? resolveCommandDirectory(input.cwd, workspaceRoot), operationSignal, context?.sessionId);
       if (signal?.aborted) return run(signal);
       return runWithToolTimeout(context?.timeoutSeconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS, signal, run);
     },
@@ -151,7 +153,20 @@ function cleanOutput(value: string): string {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
-function runShell(command: string, cwd: string, signal?: AbortSignal): Promise<unknown> {
+/** Removes terminal escape sequences from a spilled command log before the agent reads it. */
+function cleanSpillFile(path: string): void {
+  try {
+    const details = statSync(path);
+    if (!details.isFile() || details.size > TOOL_OUTPUT_MAX_FILE_BYTES) return;
+    const raw = readFileSync(path, 'utf8');
+    const cleaned = cleanOutput(raw);
+    if (cleaned !== raw) writeFileSync(path, cleaned, { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    // An unreadable spill file keeps its raw content; the inline preview is already cleaned.
+  }
+}
+
+function runShell(command: string, cwd: string, signal?: AbortSignal, sessionId?: string): Promise<unknown> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve({ status: 'cancelled', exitCode: null, stdout: '', stderr: '', error: 'Command was stopped by the user.', truncated: false });
@@ -164,6 +179,37 @@ function runShell(command: string, cwd: string, signal?: AbortSignal): Promise<u
     let stderr = '';
     let truncated = false;
     let settled = false;
+    // Only the first MAX_OUTPUT_CHARS of each stream stay in memory. The moment
+    // one overflows, the complete output starts streaming to a spill file, so
+    // the model can read the rest instead of re-running a narrower command to
+    // guess at it.
+    let spill: ReturnType<typeof openToolOutput> | null = null;
+    let spillChannel: 'stdout' | 'stderr' | null = null;
+    const prefixWritten = { stdout: false, stderr: false };
+    const ensureSpill = (channel: 'stdout' | 'stderr'): void => {
+      spill ??= openToolOutput({ ...(sessionId === undefined ? {} : { sessionId }), tool: 'execute_command' });
+      if (prefixWritten[channel]) return;
+      prefixWritten[channel] = true;
+      const buffered = channel === 'stdout' ? stdout : stderr;
+      spill.write(`[${channel}]\n${buffered}${buffered && !buffered.endsWith('\n') ? '\n' : ''}`);
+      spillChannel = channel;
+    };
+    const append = (current: string, chunk: Buffer, channel: 'stdout' | 'stderr'): string => {
+      const text = chunk.toString('utf8');
+      const next = current + text;
+      const overflow = next.length > MAX_OUTPUT_CHARS;
+      if (overflow) truncated = true;
+      if (overflow || spill) {
+        ensureSpill(channel);
+        if (!spill) return overflow ? next.slice(0, MAX_OUTPUT_CHARS) : next;
+        if (spillChannel !== channel) {
+          spill.write(`\n[${channel}]\n`);
+          spillChannel = channel;
+        }
+        spill.write(text);
+      }
+      return overflow ? next.slice(0, MAX_OUTPUT_CHARS) : next;
+    };
 
     const child = spawn(executable, args, {
       cwd,
@@ -174,23 +220,32 @@ function runShell(command: string, cwd: string, signal?: AbortSignal): Promise<u
       // never be set there.
       ...(windows ? {} : { detached: true }),
     });
-    const append = (current: string, chunk: Buffer): string => {
-      const next = current + chunk.toString('utf8');
-      if (next.length > MAX_OUTPUT_CHARS) {
-        truncated = true;
-        return next.slice(0, MAX_OUTPUT_CHARS);
-      }
-      return next;
-    };
-    const finish = (result: unknown) => {
+    /** Resolves the call once, adding the cleaned streams and the spill location. */
+    const finish = (payload: Record<string, unknown>) => {
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
-      resolve(result);
+      const result: Record<string, unknown> = {
+        ...payload,
+        stdout: cleanOutput(stdout),
+        stderr: cleanOutput(stderr),
+        truncated,
+      };
+      if (!spill) {
+        resolve(result);
+        return;
+      }
+      const closed = spill.close();
+      cleanSpillFile(closed.path);
+      resolve({
+        ...result,
+        spilledTo: closed.path,
+        note: toolOutputNotice(closed.path, closed.savedChars, closed.droppedChars),
+      });
     };
     const stop = (status: 'cancelled' | 'timed_out', error: string) => {
       if (settled) return;
-      finish({ status, exitCode: child.exitCode, stdout: cleanOutput(stdout), stderr: cleanOutput(stderr), error, truncated });
+      finish({ status, exitCode: child.exitCode, error });
       // An exited shell can leave inherited pipes open. Cancellation must not wait for its `close` event.
       //
       // The shell alone is not enough. A command routinely starts programs of its own, and killing
@@ -208,29 +263,23 @@ function runShell(command: string, cwd: string, signal?: AbortSignal): Promise<u
         : stop('cancelled', 'Command was stopped by the user.');
 
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout = append(stdout, chunk);
+      stdout = append(stdout, chunk, 'stdout');
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr = append(stderr, chunk);
+      stderr = append(stderr, chunk, 'stderr');
     });
     child.on('error', (error) =>
       finish({
         status: 'failed',
         exitCode: null,
-        stdout: cleanOutput(stdout),
-        stderr: cleanOutput(stderr),
         error: error.message,
-        truncated,
       }),
     );
     child.on('close', (code) =>
       finish({
         status: code === 0 ? 'completed' : 'failed',
         exitCode: code,
-        stdout: cleanOutput(stdout),
-        stderr: cleanOutput(stderr),
         error: null,
-        truncated,
       }),
     );
     signal?.addEventListener('abort', onAbort, { once: true });

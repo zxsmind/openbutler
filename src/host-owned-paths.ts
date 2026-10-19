@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolveFilePath } from './file-write-core.js';
 import { isMemoryDocumentPath, isMemoryIndexPath } from './memory-paths.js';
 import { getScratchRoot } from './paths.js';
+import { getToolOutputRoot } from './tool-output.js';
 import { getConfigPath, getSettingsPath } from './settings.js';
 import { classifyTrustedPath, samePhysicalPath } from './workspace-scope.js';
 
@@ -15,10 +16,12 @@ import { classifyTrustedPath, samePhysicalPath } from './workspace-scope.js';
  * in one place and gated in another, and the secret store cannot be reachable
  * through a tool the ban forgot. The pre-authorized set is deliberately
  * narrow: the agent's scratch tree, its memory documents, and Ranite's own
- * settings file. Everything else in the data directory (sessions, keys,
- * allowlists) still goes through the normal approval policy.
+ * settings file. Tool output the host spilled for the agent is readable for
+ * the same reason: Ranite wrote it, and re-reading it must never cost a prompt.
+ * Everything else in the data directory (sessions, keys, allowlists) still
+ * goes through the normal approval policy.
  */
-export type HostOwnedKind = 'scratch' | 'memory' | 'settings';
+export type HostOwnedKind = 'scratch' | 'memory' | 'settings' | 'tool-output';
 
 /**
  * Classifies a file tool source against the host-owned set. Accepts the same
@@ -44,6 +47,11 @@ export function classifyHostOwnedPath(source: string, workspaceRoot: string): Ho
   }
   try {
     if (classifyTrustedPath(absolute, [getScratchRoot()]) === 'workspace') return 'scratch';
+  } catch {
+    // An unclassifiable source is not host-owned.
+  }
+  try {
+    if (classifyTrustedPath(absolute, [getToolOutputRoot()]) === 'workspace') return 'tool-output';
   } catch {
     // An unclassifiable source is not host-owned.
   }

@@ -61,7 +61,10 @@ export function createEditTool(workspaceRoot = process.cwd(), memoryIndex?: Memo
     },
     hostPreAuthorized: (input, target) => {
       const source = target ?? (typeof input.path === 'string' ? input.path : '');
-      return classifyHostOwnedPath(source, workspaceRoot) !== null;
+      const kind = classifyHostOwnedPath(source, workspaceRoot);
+      // Spilled tool output is host-written generated data: readable, never a
+      // place for the agent to write.
+      return kind !== null && kind !== 'tool-output';
     },
     assess: (input, target) => {
       const path = target ?? (typeof input.path === 'string' ? input.path : workspaceRoot);

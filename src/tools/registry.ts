@@ -9,9 +9,11 @@ import type { ToolActionState } from '../activity-ledger.js';
 import type { ApprovalMode } from '../settings.js';
 import type { WorkspaceScope } from '../workspace-scope.js';
 import { runWithToolTimeout, toolTimeoutSeconds, ToolTimeoutError, TOOL_TIMEOUT_FIELD, withToolTimeoutSchema } from './timeout.js';
+import { TOOL_OUTPUT_INLINE_CHARS, spillToolOutput, toolOutputNotice } from '../tool-output.js';
 
 const MAX_INPUT_CHARS = 50_000;
-export const MAX_TOOL_RESULT_CHARS = 80_000;
+/** Default inline budget; a tool may lower it with maxResultChars. */
+export const MAX_TOOL_RESULT_CHARS = TOOL_OUTPUT_INLINE_CHARS;
 export const MAX_TOOL_INPUT_CHARS = 8_000_000;
 
 export interface ToolEffect {
@@ -76,6 +78,12 @@ export interface ToolDefinition {
   workspaceScope?: (input: Record<string, unknown>, target?: string) => WorkspaceScope;
   /** Stop this model stream after a successful call so its caller can rebuild available tools. */
   restartAfterExecute?: (result: unknown) => boolean;
+  /**
+   * Inline character budget for this tool's result before it is cut and spilled
+   * to disk. Tools that already page their own output (file_read, session_read)
+   * leave this alone: they lose nothing, so there is nothing to spill.
+   */
+  maxResultChars?: number;
   toModelOutput?: (output: unknown) => ToolResultOutput | PromiseLike<ToolResultOutput>;
   execute: (input: Record<string, unknown>, signal?: AbortSignal, context?: ToolExecutionContext) => Promise<unknown>;
 }
@@ -399,10 +407,11 @@ export class ToolRegistry {
           reportResult(null);
           return null;
         }
+        const inlineLimit = definition.maxResultChars ?? MAX_TOOL_RESULT_CHARS;
         const bounded =
-          serialized.length <= MAX_TOOL_RESULT_CHARS
+          serialized.length <= inlineLimit
             ? result
-            : { status: 'truncated', resultPreview: serialized.slice(0, MAX_TOOL_RESULT_CHARS), originalChars: serialized.length };
+            : truncatedResult(serialized, inlineLimit, options.sessionId, `${request.providerId}:${request.name}`);
         await options.onAction?.(request, toolOutcome(result), { result: bounded });
         resultRecorded = true;
         reportResult(bounded);
@@ -553,4 +562,30 @@ function toolOutcome(result: unknown): ToolActionState {
       return 'failed';
   }
   return 'completed';
+}
+
+/**
+ * Cuts a result to the tool's inline budget and keeps the complete redacted
+ * text on disk. The model gets a readable preview plus the path, so recovering
+ * the rest is one `file_read` instead of guessing at narrower commands.
+ */
+function truncatedResult(serialized: string, inlineLimit: number, sessionId: string | undefined, tool: string): Record<string, unknown> {
+  const preview = serialized.slice(0, inlineLimit);
+  try {
+    const spilled = spillToolOutput({ ...(sessionId === undefined ? {} : { sessionId }), tool, text: serialized });
+    return {
+      status: 'truncated',
+      resultPreview: preview,
+      originalChars: serialized.length,
+      spilledTo: spilled.path,
+      note: toolOutputNotice(spilled.path, serialized.length, spilled.droppedChars),
+    };
+  } catch (error) {
+    return {
+      status: 'truncated',
+      resultPreview: preview,
+      originalChars: serialized.length,
+      note: `The rest of this result could not be saved to disk (${error instanceof Error ? error.message : String(error)}). Narrow the request to see it.`,
+    };
+  }
 }
