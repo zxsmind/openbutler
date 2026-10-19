@@ -1,7 +1,7 @@
 import { confirm, input, password, search, select } from '@inquirer/prompts';
 import { getCatalogIndex, getProvider, listProviderSummaries } from '../provider/catalog.js';
 import { listToolCapableModels, listSupportedPackages } from '../provider/registry.js';
-import { loadSettings, saveSettings, type ProviderState, type SettingsStore, getSettingsPath } from '../settings.js';
+import { loadSettings, saveSettings, withProviderFields, type ProviderState, type SettingsStore, getSettingsPath } from '../settings.js';
 import { BACK_CHOICE, BACK_LABEL, createStepMachine } from './steps.js';
 import { defaultModelIsUsable, readiness, setDefaultModel } from './config-edit.js';
 import { getDataPath } from '../paths.js';
@@ -202,13 +202,11 @@ async function configureProvider(settings: SettingsStore, picked: { id: string; 
     ...(custom ? { validate: (value: string) => (value.trim().length > 0 ? true : 'A custom endpoint needs its URL.') } : {}),
   });
   const keys = await askKeys(existing?.keys ?? [], id);
-  settings.providers[id] = {
-    enabled: existing?.enabled ?? true,
+  settings.providers[id] = withProviderFields(existing, {
     keys,
-    ...(existing?.models ? { models: existing.models } : {}),
     ...(url.trim() ? { url: url.trim() } : {}),
     ...(npm ? { npm } : {}),
-  };
+  });
   if (!settings.providerOrder.includes(id)) settings.providerOrder.push(id);
 }
 

@@ -170,6 +170,35 @@ const KNOWN_KEYS = new Set([
 const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options', 'routing']);
 
 /**
+ * Rebuilds a provider state from an existing one plus a patch, carrying every
+ * field the schema knows about.
+ *
+ * Callers used to enumerate the fields by hand, and a field left out of that
+ * list was wiped the next time the provider was saved: a gateway's `routing`
+ * pin disappeared after re-entering a key, and the gateway silently went back
+ * to load-balancing across every upstream. Iterating the schema set instead
+ * means a new provider field is carried automatically, and adding it still
+ * requires touching this one set that also validates settings.yaml.
+ *
+ * `keys` is the exception: it is never taken from the existing state unless the
+ * patch omits it, so a caller cannot be tricked into resurrecting a removed key.
+ */
+export function withProviderFields(existing: ProviderState | undefined, patch: Partial<ProviderState> = {}): ProviderState {
+  const next: Record<string, unknown> = {
+    enabled: existing?.enabled ?? true,
+    keys: [...(patch.keys ?? existing?.keys ?? [])],
+  };
+  const previous = existing as unknown as Record<string, unknown> | undefined;
+  const incoming = patch as unknown as Record<string, unknown>;
+  for (const key of KNOWN_PROVIDER_KEYS) {
+    if (key === 'keys') continue;
+    const value = key in incoming ? incoming[key] : previous?.[key];
+    if (value !== undefined) next[key] = value;
+  }
+  return next as unknown as ProviderState;
+}
+
+/**
  * The secret half of the persisted configuration: provider API keys plus the
  * team bearer ticket, nothing else. The host reads this file directly; it is
  * never handed to the agent.

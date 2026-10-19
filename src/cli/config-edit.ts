@@ -1,4 +1,4 @@
-import { rememberProviderModel, saveSettings, type ProviderState, type SettingsStore } from '../settings.js';
+import { withProviderFields, rememberProviderModel, saveSettings, type ProviderState, type SettingsStore } from '../settings.js';
 import { listToolCapableModels } from '../provider/registry.js';
 import { isCatalogLoaded } from '../provider/catalog.js';
 import { providerIsConfigured } from '../provider/registry.js';
@@ -62,16 +62,9 @@ export function summarizeProviders(settings: SettingsStore): ProviderSummary[] {
 }
 
 export function upsertProvider(settings: SettingsStore, id: string, patch: Partial<ProviderState>): ProviderState {
-  const existing = settings.providers[id];
-  const next: ProviderState = {
-    enabled: existing?.enabled ?? true,
-    keys: existing?.keys ?? [],
-    ...(existing?.models ? { models: existing.models } : {}),
-    ...(existing?.url ? { url: existing.url } : {}),
-    ...(existing?.npm ? { npm: existing.npm } : {}),
-    ...(existing?.options ? { options: existing.options } : {}),
-    ...patch,
-  };
+  // The schema owns the field list; see withProviderFields for why the caller
+  // must not enumerate it here.
+  const next = withProviderFields(settings.providers[id], patch);
   settings.providers[id] = next;
   if (!settings.providerOrder.includes(id)) settings.providerOrder.push(id);
   return next;

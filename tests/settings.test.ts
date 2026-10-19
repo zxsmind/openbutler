@@ -338,6 +338,53 @@ describe('writing settings', () => {
     expect(reloaded.defaultModel).toBe('');
   });
 
+  it('carries every schema field when a provider is rebuilt from a patch', async () => {
+    // The trap that lost the DeepInfra pin: whoever rebuilds a provider must not
+    // enumerate the fields by hand, because a field missing from that list is
+    // erased on the next save.
+    const settings = await loadSettingsModule();
+    const existing = {
+      enabled: true,
+      keys: ['old'],
+      models: ['deepseek/deepseek-v4.1-flash-1017'],
+      url: 'https://api.example/v1',
+      npm: '@ai-sdk/gateway',
+      options: { region: 'eu' },
+      routing: { order: ['deepinfra'], only: ['deepinfra'] },
+    };
+    const rebuilt = settings.withProviderFields(existing, { enabled: true });
+    expect(rebuilt).toEqual(existing);
+    expect(rebuilt.routing).toEqual({ order: ['deepinfra'], only: ['deepinfra'] });
+    // A patch replaces only what it names.
+    expect(settings.withProviderFields(existing, { keys: ['new'] })).toEqual({ ...existing, keys: ['new'] });
+    // A provider seen for the first time still needs a valid shape.
+    expect(settings.withProviderFields(undefined, { keys: ['k'] })).toEqual({ enabled: true, keys: ['k'] });
+  });
+
+  it('keeps a gateway upstream pin when the provider is saved again', async () => {
+    // Re-entering a key or re-enabling a provider rebuilds its state from a
+    // whitelist. `routing` was missing from that list, so the pin silently
+    // vanished on the next save and the gateway went back to load-balancing
+    // across every upstream.
+    const settings = await loadSettingsModule();
+    const { upsertProvider, writeSettings } = await loadConfigEdit();
+    const store = settings.defaultSettings();
+    store.providers.vercel = {
+      enabled: true,
+      keys: ['key'],
+      models: ['deepseek/deepseek-v4.1-flash-1017'],
+      routing: { order: ['deepinfra'], only: ['deepinfra'] },
+    };
+    store.providerOrder = ['vercel'];
+
+    upsertProvider(store, 'vercel', { enabled: true, keys: ['new-key', 'key'] });
+    writeSettings(store);
+
+    const saved = settings.loadSettings();
+    expect(saved.providers.vercel?.routing).toEqual({ order: ['deepinfra'], only: ['deepinfra'] });
+    expect(saved.providers.vercel?.models).toEqual(['deepseek/deepseek-v4.1-flash-1017']);
+  });
+
   it('keeps the default provider and model as one pair', async () => {
     const settings = await loadSettingsModule();
     const { setDefaultModel } = await loadConfigEdit();
