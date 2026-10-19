@@ -127,6 +127,78 @@ export interface PrepareMemoryModelOptions {
   localFilesOnly?: boolean;
 }
 
+/**
+ * How long an idle search keeps the local model resident. The ONNX session
+ * holds ~50 MB of native memory that the JS heap never sees, so a single
+ * memory search would otherwise keep it for the whole process lifetime; a rare
+ * reload is the cheaper side of that trade.
+ */
+export const EMBEDDING_IDLE_UNLOAD_MS = 60_000;
+
+/**
+ * Refcounted lease with an idle release.
+ *
+ * Memory search is rare, and holding the ONNX session costs tens of megabytes
+ * of native memory that no GC can reclaim. This holds the lease only while a
+ * search is running plus `idleMs` afterwards, so a busy moment keeps the model
+ * warm and a quiet process gives it back. Acquiring clears a pending release,
+ * so a reload can never race a timer into unloading a session in use.
+ */
+export class EmbeddingIdleLease {
+  private held = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private acquiring = 0;
+
+  constructor(
+    private readonly lease: EmbeddingLease,
+    private readonly idleMs: number = EMBEDDING_IDLE_UNLOAD_MS,
+  ) {}
+
+  get isHeld(): boolean {
+    return this.held;
+  }
+
+  /** Counts a pending acquire, so an idle release cannot run underneath it. */
+  get isInUse(): boolean {
+    return this.acquiring > 0;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.acquiring += 1;
+    try {
+      await this.lease.acquire();
+      this.held = true;
+    } finally {
+      this.acquiring -= 1;
+    }
+  }
+
+  /** Restarts the idle clock; call after the work that needed the model. */
+  touch(): void {
+    if (!this.held) return;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.release();
+    }, this.idleMs);
+    this.timer.unref?.();
+  }
+
+  async release(): Promise<void> {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (!this.held) return;
+    this.held = false;
+    await this.lease.release();
+  }
+}
+
 /** A cheap startup check; the ONNX model itself remains unloaded until search. */
 export function isMemoryEmbeddingModelPrepared(): Promise<boolean> {
   return hasCompleteModelCache(memoryModelRevisionDirectory());
@@ -158,7 +230,7 @@ export class MemoryIndex {
   private readonly paths: ReturnType<typeof getMemoryPaths>;
   private readonly workspaceScope: MemoryScope;
   private database: DatabaseSync | undefined;
-  private readonly embeddingLease = createEmbeddingLease();
+  private readonly embedding = new EmbeddingIdleLease(createEmbeddingLease());
 
   constructor(workspaceRoot = process.cwd()) {
     migrateMemoryLayout(workspaceRoot);
@@ -167,7 +239,7 @@ export class MemoryIndex {
   }
 
   private async ensureEmbeddingRuntime(): Promise<void> {
-    await this.embeddingLease.acquire();
+    await this.embedding.acquire();
   }
 
   /**
@@ -221,6 +293,7 @@ export class MemoryIndex {
 
     await this.ensureEmbeddingRuntime();
     const queryEmbedding = (await embedTexts([normalizedQuery]))[0];
+    this.embedding.touch();
     if (!queryEmbedding) throw new Error('The local embedding model returned no query vector.');
     const limit = Math.max(1, Math.min(MAX_SEARCH_RESULTS, Math.floor(requestedLimit)));
     const terms = tokenizeTerms(normalizedQuery);
@@ -302,7 +375,7 @@ export class MemoryIndex {
   async close(): Promise<void> {
     this.database?.close();
     this.database = undefined;
-    await this.embeddingLease.release();
+    await this.embedding.release();
   }
 
   private getDatabase(): DatabaseSync {
@@ -399,6 +472,7 @@ export class MemoryIndex {
     const document = parseMemoryDocument(content, source.path, source.scope);
     await this.ensureEmbeddingRuntime();
     const embeddings = await embedTexts(document.chunks.map((chunk) => chunk.embeddingText));
+    this.embedding.touch();
     if (embeddings.length !== document.chunks.length) {
       throw new Error(`The local embedding model returned ${embeddings.length} vectors for ${document.chunks.length} memory chunks.`);
     }

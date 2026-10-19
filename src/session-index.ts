@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dirname, resolve } from 'node:path';
 import {
   createEmbeddingLease,
+  EmbeddingIdleLease,
   embedTexts,
   EMBEDDING_RUNTIME_KEY,
   encodeEmbedding,
@@ -115,7 +116,7 @@ interface CandidateRow {
 export class SessionIndex {
   private readonly workspaceRoot: string;
   private database: DatabaseSync | undefined;
-  private readonly embeddingLease = createEmbeddingLease();
+  private readonly embedding = new EmbeddingIdleLease(createEmbeddingLease());
 
   constructor(workspaceRoot = process.cwd()) {
     this.workspaceRoot = resolve(workspaceRoot);
@@ -280,8 +281,9 @@ export class SessionIndex {
     if (pending.length === 0) return 0;
     if (!(await isMemoryEmbeddingModelPrepared())) return 0;
     try {
-      await this.embeddingLease.acquire();
+      await this.embedding.acquire();
       const vectors = await embedTexts(pending.map((row) => row.text));
+      this.embedding.touch();
       const update = database.prepare('UPDATE session_entries SET embedding = ? WHERE session_id = ? AND entry = ? AND chunk = ?');
       const sessions = new Set<string>();
       pending.forEach((row, index) => {
@@ -334,15 +336,17 @@ export class SessionIndex {
   async close(): Promise<void> {
     this.database?.close();
     this.database = undefined;
-    await this.embeddingLease.release();
+    await this.embedding.release();
   }
 
   private async embedQuery(query: string): Promise<Float32Array | undefined> {
     const hasVectors = this.getDatabase().prepare('SELECT 1 AS present FROM session_entries WHERE embedding IS NOT NULL LIMIT 1').get();
     if (!hasVectors) return undefined;
     try {
-      await this.embeddingLease.acquire();
-      return (await embedTexts([query]))[0];
+      await this.embedding.acquire();
+      const vector = (await embedTexts([query]))[0];
+      this.embedding.touch();
+      return vector;
     } catch {
       return undefined;
     }
