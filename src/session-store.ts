@@ -39,7 +39,17 @@ export type NoticeTone = 'info' | 'warn' | 'error';
 export const USER_ENTRY_SOURCES = TURN_SOURCES;
 export type UserEntrySource = (typeof USER_ENTRY_SOURCES)[number];
 
-export type SessionEntry =
+/** Metadata every entry carries so a client can group and time the work. */
+export interface SessionEntryMeta {
+  /** Epoch milliseconds when the entry was first written. */
+  at?: number | undefined;
+  /** Id of the user message that opened the turn this entry belongs to. */
+  turnId?: string | undefined;
+}
+
+export type SessionEntry = SessionEntryBody & SessionEntryMeta;
+
+type SessionEntryBody =
   | {
       kind: 'user';
       text: string;
@@ -52,7 +62,17 @@ export type SessionEntry =
   | { kind: 'assistant'; text: string }
   | { kind: 'notice'; text: string; detail?: string; tone?: NoticeTone }
   | { kind: 'reasoning'; text: string; durationMs?: number }
-  | { kind: 'tool'; command: string; result: string; running?: boolean; preparing?: boolean; tool?: string; session?: string };
+  | {
+      kind: 'tool';
+      command: string;
+      result: string;
+      running?: boolean;
+      preparing?: boolean;
+      tool?: string;
+      session?: string;
+      durationMs?: number;
+      outcome?: string;
+    };
 
 export interface SessionFileInfo {
   id: string;

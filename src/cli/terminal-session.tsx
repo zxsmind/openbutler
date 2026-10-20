@@ -347,6 +347,19 @@ export function SessionScreen({
   const activeReasoningLabel = runtime.reasoningVariants.find((variant) => variant.id === reasoningVariantId)?.label ?? reasoningVariantId;
   const maxScrollTop = Math.max(0, layoutMetrics.contentHeight - layoutMetrics.viewportHeight);
   const scrollTop = Math.min(requestedScrollTop, maxScrollTop);
+  // Folding a block shortens the transcript under a reader who is not following
+  // the tail, so the clamp above quietly hides part of the requested offset.
+  // Keeping that unreachable offset meant unfolding later threw the view back
+  // down. Adopt the reachable position, but only when the content itself shrank:
+  // measurement can also move the maximum while a wheel burst is still arriving,
+  // and rewriting the request there would swallow notches.
+  const previousMaxScrollTop = useRef(maxScrollTop);
+  useEffect(() => {
+    const shrank = maxScrollTop < previousMaxScrollTop.current;
+    previousMaxScrollTop.current = maxScrollTop;
+    if (!shrank || followTail.current) return;
+    if (requestedScrollTop > maxScrollTop) setRequestedScrollTop(maxScrollTop);
+  }, [maxScrollTop, requestedScrollTop]);
   const scrollTopRef = useRef(scrollTop);
   scrollTopRef.current = scrollTop;
   const scrollBy = useCallback(

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { sessionFilePath } from './session-paths.js';
 import { RETRY_DELAYS_MS, type RetryEvent } from './provider/retry.js';
 import type { JSONValue, LanguageModel, ModelMessage } from 'ai';
@@ -11,6 +12,7 @@ import {
   sessionTitle,
   type SavedSession,
   type SessionEntry,
+  type SessionEntryMeta,
   type SessionSummary,
   type NoticeTone,
 } from './session-store.js';
@@ -190,6 +192,8 @@ export class AgentSessionController implements AgentSessionClient {
   private frozenSystem: { key: string; text: string } | null = null;
   private readonly listeners = new Set<() => void>();
   private readonly queuedMessages: QueuedTurn[] = [];
+  /** Id of the user message whose turn is currently producing entries. */
+  private activeTurnId: string | undefined;
   /**
    * Set by an Esc-style stop: queued messages are kept visible in the chat but
    * never start a run on their own. The next explicit send releases the hold
@@ -399,15 +403,25 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   addEntry(entry: SessionEntry): void {
-    this.session = { ...this.session, entries: [...this.session.entries, entry] };
+    // Stamp in place: tool and streaming bookkeeping look entries up by object
+    // identity, so replacing the object here would silently detach them.
+    const stamped = entry as SessionEntryMeta & SessionEntry;
+    if (stamped.at === undefined) stamped.at = Date.now();
+    if (stamped.turnId === undefined && this.activeTurnId !== undefined) stamped.turnId = this.activeTurnId;
+    this.session = { ...this.session, entries: [...this.session.entries, stamped] };
     this.publish();
   }
 
   private replaceEntry(previous: SessionEntry, next: SessionEntry): void {
     const index = this.session.entries.indexOf(previous);
     if (index < 0) return;
+    // A replacement keeps the entry's origin: grouping and timing must not move
+    // just because the row was rewritten (streaming text, tool result).
+    const stamped = next as SessionEntryMeta & SessionEntry;
+    if (stamped.at === undefined) stamped.at = previous.at;
+    if (stamped.turnId === undefined) stamped.turnId = previous.turnId;
     const entries = [...this.session.entries];
-    entries[index] = next;
+    entries[index] = stamped;
     this.session = { ...this.session, entries };
     this.publish();
   }
@@ -756,6 +770,7 @@ export class AgentSessionController implements AgentSessionClient {
         result: formatted.text || 'No output',
         running: false,
         tool,
+        ...(running.entry.at === undefined ? {} : { durationMs: Date.now() - running.entry.at }),
         ...(workerSession === undefined ? {} : { session: workerSession }),
       });
       return;
@@ -768,6 +783,7 @@ export class AgentSessionController implements AgentSessionClient {
         command: preview.entry.command,
         result: formatted.text || 'No output',
         tool,
+        ...(preview.entry.at === undefined ? {} : { durationMs: Date.now() - preview.entry.at }),
         ...(workerSession === undefined ? {} : { session: workerSession }),
       });
       return;
@@ -1105,6 +1121,7 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   private addUserEntry(message: QueuedMessage): void {
+    this.activeTurnId = randomUUID();
     this.addEntry({
       kind: 'user',
       text: message.text,
@@ -1593,6 +1610,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.activeTurnProgress = undefined;
       this.activeEventId = undefined;
       this.busy = false;
+      this.activeTurnId = undefined;
       // No run is active any more, so a late retry event must not write here.
       this.runtime.reportRetry?.(null);
       this.retryNotice = null;
@@ -1706,6 +1724,7 @@ export class AgentSessionController implements AgentSessionClient {
         );
     } finally {
       this.busy = false;
+      this.activeTurnId = undefined;
       this.runtime.reportRetry?.(null);
       this.retryNotice = null;
       reportSessionActivity(this.session.id, false);

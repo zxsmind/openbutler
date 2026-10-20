@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import * as ui from './ui.js';
 import type { Parsed } from './args.js';
 import { startDaemon } from '../daemon.js';
@@ -41,11 +42,33 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
     return;
   }
 
+  const pairUrl = server.pairUrl;
+  const pairFile = process.env.RANITE_WEB_PAIR_FILE;
+  if (pairFile) {
+    // Automation hook: a supervisor or a test can read the one-time link without
+    // scraping the terminal output.
+    try {
+      writeFileSync(pairFile, `${pairUrl}\n`, { mode: 0o600 });
+    } catch {
+      // A missing file is not a reason to refuse serving the browser client.
+    }
+  }
+
   ui.line();
   ui.success('Open this one-time link to pair your browser:');
-  ui.line(`  ${server.pairUrl}`);
+  ui.line(`  ${pairUrl}`);
   ui.line();
-  ui.info('The link works once and expires in 5 minutes. Press Ctrl+C to stop the server.');
+  ui.info('The link works once and expires in 5 minutes. Press Enter for a fresh link, Ctrl+C to stop.');
+
+  if (process.stdin.isTTY) {
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', () => {
+      ui.line();
+      ui.success('Fresh pairing link:');
+      ui.line(`  ${server?.newPairUrl() ?? ''}`);
+    });
+    process.stdin.resume();
+  }
 
   const shutdown = () => {
     void (async () => {

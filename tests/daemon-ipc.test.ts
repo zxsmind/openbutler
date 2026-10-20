@@ -354,7 +354,7 @@ describe('shared host and session IPC', () => {
     expect(shared.getSnapshot().session.entries).toContainEqual(
       expect.objectContaining({ kind: 'user', text: 'Preserve this session during restart.' }),
     );
-    expect(isolated.getSnapshot().session.entries).toContainEqual({ kind: 'assistant', text: 'Fixture response' });
+    expect(isolated.getSnapshot().session.entries).toContainEqual(expect.objectContaining({ kind: 'assistant', text: 'Fixture response' }));
   }, 10_000);
 
   it('restores the selected workspace session after restart with no TUI connected', async () => {
@@ -496,12 +496,12 @@ describe('shared host and session IPC', () => {
     await isolated.sendMessage({ text: 'Isolated fixture request', images: [] }, preferences);
     await vi.waitFor(() => {
       expect(isolated.getSnapshot().busy).toBe(false);
-      expect(isolated.getSnapshot().session.entries.find((entry) => entry.kind === 'assistant')).toEqual({
+      expect(isolated.getSnapshot().session.entries.find((entry) => entry.kind === 'assistant')).toMatchObject({
         kind: 'assistant',
         text: longAnswer,
       });
     });
-    expect(shared.getSnapshot().session.entries).toEqual([{ kind: 'notice', text: 'Shared fixture session' }]);
+    expect(shared.getSnapshot().session.entries).toMatchObject([{ kind: 'notice', text: 'Shared fixture session' }]);
     await shared.close();
     const reconnected = await client();
     expect(reconnected.getSnapshot().session.id).toBe(sharedId);

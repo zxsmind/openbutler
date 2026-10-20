@@ -486,7 +486,7 @@ describe('session streaming message boundaries', () => {
     // The block keeps its text and now reports how long the model thought.
     expect(reasoningEntries[0]).toMatchObject({ kind: 'reasoning', text: 'A simple greeting.' });
     expect((reasoningEntries[0] as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
-    expect(snapshot.session.entries.filter((entry) => entry.kind === 'assistant')).toEqual([
+    expect(snapshot.session.entries.filter((entry) => entry.kind === 'assistant')).toMatchObject([
       { kind: 'assistant', text: 'Hello! 👋 How can I help you today?' },
     ]);
     expect(snapshot.streamingAssistantEntry).toBeNull();
@@ -610,9 +610,9 @@ describe('session streaming message boundaries', () => {
 
     const entries = session.getSnapshot().session.entries;
     expect(entries.map((entry) => entry.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
-    expect(entries[1]).toEqual({ kind: 'assistant', text: 'Checking the result.' });
+    expect(entries[1]).toMatchObject({ kind: 'assistant', text: 'Checking the result.' });
     expect(entries[2]).toMatchObject({ kind: 'tool', running: false });
-    expect(entries[3]).toEqual({ kind: 'assistant', text: 'Completed successfully.' });
+    expect(entries[3]).toMatchObject({ kind: 'assistant', text: 'Completed successfully.' });
   });
 
   it('previews a tool call while its arguments stream, then shows the executed form', async () => {
@@ -668,7 +668,13 @@ describe('session streaming message boundaries', () => {
     try {
       await vi.waitFor(() => {
         const entry = session!.getSnapshot().session.entries.find((candidate) => candidate.kind === 'tool');
-        expect(entry).toEqual({ kind: 'tool', command: 'Write src/runtime.ts', result: '', preparing: true, tool: 'host:file_write' });
+        expect(entry).toMatchObject({
+          kind: 'tool',
+          command: 'Write src/runtime.ts',
+          result: '',
+          preparing: true,
+          tool: 'host:file_write',
+        });
       });
       expect(session.getSnapshot().session.entries.some((entry) => entry.kind === 'tool' && entry.result === 'Saved fixture file')).toBe(
         false,
@@ -679,7 +685,7 @@ describe('session streaming message boundaries', () => {
     await run;
 
     const toolEntries = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'tool');
-    expect(toolEntries).toEqual([
+    expect(toolEntries).toMatchObject([
       { kind: 'tool', command: 'Write src/runtime.ts', result: 'Wrote', running: false, tool: 'host:file_write' },
     ]);
   });
@@ -724,9 +730,9 @@ describe('session streaming message boundaries', () => {
 
     const entries = session.getSnapshot().session.entries;
     expect(entries.map((entry) => entry.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
-    expect(entries[1]).toEqual({ kind: 'assistant', text: 'I am updating the notes (including the details).' });
+    expect(entries[1]).toMatchObject({ kind: 'assistant', text: 'I am updating the notes (including the details).' });
     expect(entries[2]).toMatchObject({ kind: 'tool', running: false });
-    expect(entries[3]).toEqual({ kind: 'assistant', text: 'Done.' });
+    expect(entries[3]).toMatchObject({ kind: 'assistant', text: 'Done.' });
   });
 
   it('keeps a completed tool step in the session if the next provider step fails', async () => {
@@ -1095,7 +1101,7 @@ describe('session compaction persistence and continuation', () => {
         () => {
           const snapshot = session!.getSnapshot();
           expect(snapshot.busy).toBe(true);
-          expect(snapshot.streamingAssistantEntry).toEqual({ kind: 'assistant', text: 'Summary in progress.' });
+          expect(snapshot.streamingAssistantEntry).toMatchObject({ kind: 'assistant', text: 'Summary in progress.' });
           expect(snapshot.session.entries).toContainEqual(
             expect.objectContaining({ kind: 'reasoning', text: 'Preserving the current task.' }),
           );
@@ -1113,7 +1119,9 @@ describe('session compaction persistence and continuation', () => {
     const saved = loadSavedSession(id)!;
     expect(saved.conversationArchive).toEqual(source);
     expect(JSON.stringify(saved.conversation)).toContain('Summary in progress. The checkpoint is complete.');
-    expect(saved.entries).toContainEqual({ kind: 'assistant', text: 'Summary in progress. The checkpoint is complete.' });
+    expect(saved.entries).toContainEqual(
+      expect.objectContaining({ kind: 'assistant', text: 'Summary in progress. The checkpoint is complete.' }),
+    );
     expect(session.getSnapshot().streamingAssistantEntry).toBeNull();
     expect(model.doStreamCalls).toHaveLength(1);
   });
@@ -1356,7 +1364,9 @@ describe('session compaction persistence and continuation', () => {
     expect(saved.conversation).toEqual(source);
     expect(saved.conversationArchive).toBeUndefined();
     expect(saved.contextTokens).toBe(90_000);
-    expect(saved.entries).toContainEqual({ kind: 'assistant', text: 'Incomplete checkpoint must not be committed.' });
+    expect(saved.entries).toContainEqual(
+      expect.objectContaining({ kind: 'assistant', text: 'Incomplete checkpoint must not be committed.' }),
+    );
     expect(saved.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Compaction failed:'))).toBe(true);
     await session.sendMessage({ text: 'Continue.', images: [] }, preferences);
     const resumedPrompt = JSON.stringify(model.doStreamCalls[1]!.prompt);
@@ -1402,7 +1412,7 @@ describe('session questions', () => {
     expect(snapshot.pendingQuestion).toBeNull();
     const tool = snapshot.session.entries.find((entry) => entry.kind === 'tool') as { result: string } | undefined;
     expect(tool?.result).toBe('Staging');
-    expect(snapshot.session.entries.at(-1)).toEqual({ kind: 'assistant', text: 'Deploying to Staging.' });
+    expect(snapshot.session.entries.at(-1)).toMatchObject({ kind: 'assistant', text: 'Deploying to Staging.' });
   });
 
   it('resolves a dismissed question to null on stop', async () => {
@@ -1450,7 +1460,7 @@ describe('session questions', () => {
     expect(snapshot.pendingQuestion).toBeNull();
     const tool = snapshot.session.entries.find((entry) => entry.kind === 'tool') as { result: string } | undefined;
     expect(tool?.result).toContain('No interactive user is attached');
-    expect(snapshot.session.entries.at(-1)).toEqual({ kind: 'assistant', text: 'Included the question in the final answer.' });
+    expect(snapshot.session.entries.at(-1)).toMatchObject({ kind: 'assistant', text: 'Included the question in the final answer.' });
   });
 });
 

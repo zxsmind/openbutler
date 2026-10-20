@@ -1,7 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { extname, join, normalize, sep } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, extname, join, normalize, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { decodeBase64Image, MAX_IMAGE_BYTES } from '../image-data.js';
+import { loadSettings } from '../settings.js';
 import { connectDaemonSession } from '../daemon-client.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../agent-session.js';
 
@@ -20,6 +24,8 @@ const HEARTBEAT_MS = 25_000;
  */
 const WINDOW_ENTRIES = 100;
 const MAX_PAGE_ENTRIES = 200;
+/** Above this many changed entries in one publish, a full window is cheaper than a diff. */
+const MAX_ENTRY_UPDATES = 12;
 
 type Entry = AgentSessionSnapshot['session']['entries'][number];
 
@@ -45,6 +51,7 @@ export interface WebServer {
 interface SseClient {
   res: ServerResponse;
   lastEntries: Entry[] | null;
+  sessionId: string;
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -103,6 +110,8 @@ const log = document.getElementById('log');
 const state = document.getElementById('state');
 const title = document.getElementById('title');
 let windowStart = 0;
+let activeSessionId = '';
+
 function entryNode(entry) {
   const div = document.createElement('div');
   div.className = 'entry ' + (entry.kind || '');
@@ -114,7 +123,7 @@ function prependOlder() {
   const button = document.getElementById('older');
   if (button) button.remove();
   if (windowStart <= 0) return;
-  fetch('/api/entries?before=' + windowStart + '&limit=50')
+  fetch('/api/entries?before=' + windowStart + '&limit=50&sessionId=' + encodeURIComponent(activeSessionId))
     .then((r) => r.json())
     .then((page) => {
       const fragment = document.createDocumentFragment();
@@ -134,6 +143,7 @@ function addOlderButton() {
   log.insertBefore(button, log.firstChild);
 }
 function apply(payload) {
+  activeSessionId = payload.session.id;
   title.textContent = payload.session.title || 'Ranite';
   state.textContent = payload.busy ? 'working…' : 'idle';
   if (payload.reset) {
@@ -161,7 +171,7 @@ document.getElementById('send').onclick = async () => {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  await post('/api/message', { text });
+  await post('/api/message', { text, sessionId: activeSessionId });
 };
 document.getElementById('text').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('send').click(); });
 document.getElementById('stop').onclick = () => post('/api/stop', { holdQueue: true });
@@ -178,6 +188,23 @@ const CONTENT_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.woff2': 'font/woff2',
 };
+
+/**
+ * The browser bundle is built next to the compiled server (`dist/client`). The
+ * lookup walks up from this module so a dev run from `src/` and a packaged run
+ * from `dist/` both find the same folder.
+ */
+function defaultAssetsDir(): string | null {
+  let directory = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 6; depth += 1) {
+    const candidate = join(directory, 'dist', 'client');
+    if (existsSync(join(candidate, 'index.html'))) return candidate;
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return null;
+}
 
 function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -199,7 +226,8 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
 
 export async function startWebServer(options: WebServerOptions): Promise<WebServer> {
   const host = options.host ?? DEFAULT_WEB_HOST;
-  const port = options.port ?? DEFAULT_WEB_PORT;
+  let port = options.port ?? DEFAULT_WEB_PORT;
+  const assetsDir = options.assetsDir ?? defaultAssetsDir() ?? undefined;
   const startedAt = Date.now();
   const client: AgentSessionClient = await connectDaemonSession(options.workspaceRoot);
 
@@ -224,12 +252,25 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     return {
       reset,
       entries,
+      updated: [] as { index: number; entry: Entry }[],
       from,
       totalEntries: snapshot.session.entries.length,
       busy: snapshot.busy,
       queuedMessageCount: snapshot.queuedMessageCount,
       pendingApproval: snapshot.pendingApproval ?? null,
       pendingQuestion: snapshot.pendingQuestion ?? null,
+      contextTokens: (snapshot.session as { contextTokens?: number }).contextTokens ?? null,
+      runtime: {
+        modelName: client.runtime.modelName,
+        providerId: client.runtime.providerId,
+        modelId: client.runtime.modelId,
+        contextWindowTokens: client.runtime.contextWindowTokens,
+        approvalMode: client.runtime.approvalMode ?? null,
+        showReasoningDefault: client.runtime.showReasoningDefault,
+        reasoningVariants: client.runtime.reasoningVariants.map(({ id, label }) => ({ id, label })),
+        reasoningDefault: client.runtime.reasoningDefault,
+        workspaceRoot: client.runtime.workspaceRoot,
+      },
       session: { id: snapshot.session.id, title: snapshot.session.title },
     };
   };
@@ -244,29 +285,34 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     for (const target of clients) {
       const previous = target.lastEntries;
       let payload: ReturnType<typeof snapshotPayload>;
-      if (!previous) {
-        const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-        payload = snapshotPayload(entries.slice(from), true, from);
-      } else if (entries.length < previous.length) {
+      if (!previous || target.sessionId !== client.getSnapshot().session.id || entries.length < previous.length) {
         const from = Math.max(0, entries.length - WINDOW_ENTRIES);
         payload = snapshotPayload(entries.slice(from), true, from);
       } else {
-        let changed = false;
+        const updated: { index: number; entry: Entry }[] = [];
+        let resetNeeded = false;
         for (let index = 0; index < previous.length; index += 1) {
           if (entries[index] !== previous[index]) {
-            changed = true;
-            break;
+            updated.push({ index, entry: entries[index] });
+            if (updated.length > MAX_ENTRY_UPDATES) {
+              resetNeeded = true;
+              break;
+            }
           }
         }
         const appended = entries.length - previous.length;
-        if (changed || appended > WINDOW_ENTRIES) {
+        if (resetNeeded || appended > WINDOW_ENTRIES) {
           const from = Math.max(0, entries.length - WINDOW_ENTRIES);
           payload = snapshotPayload(entries.slice(from), true, from);
         } else {
-          payload = snapshotPayload(entries.slice(previous.length), false, previous.length);
+          payload = {
+            ...snapshotPayload(entries.slice(previous.length), false, previous.length),
+            updated,
+          };
         }
       }
       target.lastEntries = entries;
+      target.sessionId = client.getSnapshot().session.id;
       writeEvent(target, payload.reset ? 'snapshot' : 'patch', payload);
     }
   };
@@ -292,11 +338,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   };
 
   const serveStatic = async (res: ServerResponse, urlPath: string): Promise<boolean> => {
-    if (!options.assetsDir) return false;
+    if (!assetsDir) return false;
     const relative = normalize(urlPath === '/' ? 'index.html' : urlPath.slice(1));
     if (relative.startsWith('..') || relative.includes(`..${sep}`)) return false;
-    const target = join(options.assetsDir, relative);
-    if (!target.startsWith(options.assetsDir)) return false;
+    const target = join(assetsDir, relative);
+    if (!target.startsWith(assetsDir)) return false;
     try {
       const body = await readFile(target);
       res.writeHead(200, {
@@ -352,14 +398,90 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
     }
 
+    if (url.pathname === '/api/sessions' && req.method === 'GET') {
+      const sessions = await client.listSessions();
+      return sendJson(
+        res,
+        200,
+        sessions.map((session) => ({
+          id: session.id,
+          title: session.title,
+          updatedAt: session.updatedAt,
+          preview: session.preview ?? null,
+          workspaceRoot: session.workspaceRoot,
+        })),
+      );
+    }
+
+    if (url.pathname === '/api/models' && req.method === 'GET') {
+      const configured = Object.entries(loadSettings().providers).flatMap(([providerId, provider]) =>
+        provider.enabled
+          ? (provider.models ?? []).map((modelId) => ({ providerId, modelId, name: modelId.split('/').pop() ?? modelId }))
+          : [],
+      );
+      const current = { providerId: client.runtime.providerId, modelId: client.runtime.modelId, name: client.runtime.modelName };
+      return sendJson(res, 200, [
+        current,
+        ...configured.filter((model) => model.providerId !== current.providerId || model.modelId !== current.modelId),
+      ]);
+    }
+
+    if (url.pathname === '/api/session' && req.method === 'POST') {
+      const body: unknown = JSON.parse((await readBody(req)) || '{}');
+      if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'Invalid session action.' });
+      const { action, sessionId, currentSessionId } = body as { action?: unknown; sessionId?: unknown; currentSessionId?: unknown };
+      if (currentSessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
+      if (client.isBusy || client.getSnapshot().queuedMessageCount > 0)
+        return sendJson(res, 409, { error: 'Finish or stop the current run and clear the queue before switching chats.' });
+      if (action === 'new') {
+        await client.createNewSession();
+        if (client.getSnapshot().session.id === currentSessionId)
+          return sendJson(res, 409, { error: 'The host could not create a new chat. Try again.' });
+      } else if (action === 'load' && typeof sessionId === 'string' && sessionId.length <= 64) {
+        const sessions = await client.listSessions();
+        if (currentSessionId !== client.getSnapshot().session.id)
+          return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
+        if (!sessions.some((session) => session.id === sessionId))
+          return sendJson(res, 404, { error: 'Session not found in this workspace.' });
+        if (!(await client.loadSession(sessionId))) return sendJson(res, 404, { error: 'Session not found.' });
+      } else return sendJson(res, 400, { error: 'Invalid session action.' });
+      const entries = client.getSnapshot().session.entries;
+      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+    }
+
+    if (url.pathname === '/api/model' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { providerId?: unknown; modelId?: unknown; sessionId?: unknown };
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
+      if (client.isBusy || client.getSnapshot().queuedMessageCount > 0)
+        return sendJson(res, 409, { error: 'Wait for the current run before changing models.' });
+      if (typeof body.providerId !== 'string' || typeof body.modelId !== 'string')
+        return sendJson(res, 400, { error: 'Choose a configured model.' });
+      const provider = loadSettings().providers[body.providerId];
+      if (!provider?.enabled || !provider.models?.includes(body.modelId))
+        return sendJson(res, 400, { error: 'Choose a configured model.' });
+      await client.selectModel(body.providerId, body.modelId);
+      const entries = client.getSnapshot().session.entries;
+      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+    }
+
     if (url.pathname === '/api/entries' && req.method === 'GET') {
-      const entries = client.getSnapshot().session.entries as Entry[];
+      const snapshot = client.getSnapshot();
+      if (url.searchParams.get('sessionId') !== snapshot.session.id) return sendJson(res, 409, { error: 'The active chat changed.' });
+      const entries = snapshot.session.entries as Entry[];
       const beforeRaw = Number(url.searchParams.get('before') ?? entries.length);
       const limitRaw = Number(url.searchParams.get('limit') ?? 50);
       const before = Number.isFinite(beforeRaw) ? Math.max(0, Math.min(Math.floor(beforeRaw), entries.length)) : entries.length;
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(Math.floor(limitRaw), MAX_PAGE_ENTRIES)) : 50;
       const start = Math.max(0, before - limit);
-      return sendJson(res, 200, { from: start, to: before, total: entries.length, entries: entries.slice(start, before) });
+      return sendJson(res, 200, {
+        sessionId: client.getSnapshot().session.id,
+        from: start,
+        to: before,
+        total: entries.length,
+        entries: entries.slice(start, before),
+      });
     }
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
@@ -370,7 +492,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         'x-accel-buffering': 'no',
       });
       res.write(': connected\n\n');
-      const target: SseClient = { res, lastEntries: null };
+      const target: SseClient = { res, lastEntries: null, sessionId: client.getSnapshot().session.id };
       clients.add(target);
       const entries = client.getSnapshot().session.entries as Entry[];
       target.lastEntries = entries;
@@ -385,13 +507,36 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
 
     if (url.pathname === '/api/message' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}') as { text?: string };
+      const body = JSON.parse((await readBody(req, 30 * 1024 * 1024)) || '{}') as {
+        text?: unknown;
+        sessionId?: unknown;
+        images?: unknown;
+        reasoningVariantId?: unknown;
+      };
+      if (body.sessionId !== client.getSnapshot().session.id)
+        return sendJson(res, 409, { error: 'The active chat changed. Your message has not been sent.' });
+      if (typeof body.text !== 'string') return sendJson(res, 400, { error: 'Message must be text.' });
       const text = (body.text ?? '').trim();
-      if (!text) return sendJson(res, 400, { error: 'Empty message.' });
-      await client.sendMessage(
-        { text, images: [] },
-        { reasoningVariantId: client.runtime.reasoningDefault ?? 'default', showReasoning: client.runtime.showReasoningDefault },
-      );
+      if (Buffer.byteLength(text, 'utf8') > 1_000_000) return sendJson(res, 400, { error: 'Message is too long.' });
+      if (body.images !== undefined && (!Array.isArray(body.images) || body.images.length > 4))
+        return sendJson(res, 400, { error: 'Attach up to four images.' });
+      let images: Array<{ base64: string; mediaType: 'image/png' }>;
+      try {
+        images = (body.images ?? []) as Array<{ base64: string; mediaType: 'image/png' }>;
+        images = images.map((image) => {
+          if (!image || image.mediaType !== 'image/png' || typeof image.base64 !== 'string') throw new Error('Invalid image.');
+          const bytes = decodeBase64Image(image.base64, 'image/png', MAX_IMAGE_BYTES);
+          return { base64: bytes.toString('base64'), mediaType: 'image/png' as const };
+        });
+      } catch {
+        return sendJson(res, 400, { error: 'Attach a valid PNG image of at most 5 MB.' });
+      }
+      if (!text && !images.length) return sendJson(res, 400, { error: 'Empty message.' });
+      const reasoningVariantId =
+        typeof body.reasoningVariantId === 'string' ? body.reasoningVariantId : (client.runtime.reasoningDefault ?? 'default');
+      if (body.reasoningVariantId !== undefined && !client.runtime.reasoningVariants.some((variant) => variant.id === reasoningVariantId))
+        return sendJson(res, 400, { error: 'Choose a supported reasoning level.' });
+      await client.sendMessage({ text, images }, { reasoningVariantId, showReasoning: client.runtime.showReasoningDefault });
       return sendJson(res, 200, { ok: true });
     }
 
@@ -444,6 +589,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     });
   });
 
+  const address = server.address();
+  if (address && typeof address === 'object') port = address.port;
   const pairUrl = issuePairToken();
   options.onPairUrl?.(pairUrl);
 

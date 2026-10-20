@@ -3359,8 +3359,8 @@ function diffEntries(previous: readonly SessionEntry[], next: readonly SessionEn
  * replacing the entry.
  */
 function sameEntryExceptText(before: SessionEntry, after: SessionEntry): boolean {
-  const left = before as Record<string, unknown>;
-  const right = after as Record<string, unknown>;
+  const left = before as unknown as Record<string, unknown>;
+  const right = after as unknown as Record<string, unknown>;
   const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
   for (const key of keys) {
     if (key === 'text') continue;

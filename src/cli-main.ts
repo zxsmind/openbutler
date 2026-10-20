@@ -79,6 +79,7 @@ function usage(): void {
     ['ranite mcp', 'Manage global MCP servers.'],
     ['ranite schedule', 'List, add, run, and open scheduled wakeups.'],
     ['ranite telegram', 'Configure and pair the owner Telegram channel.'],
+    ['ranite web', 'Serve the browser client (--port, --hostname, --dir).'],
     ['ranite team <subcommand>', 'Form a closed team of ranites over the tailnet (init, invite, join, …).'],
     ['ranite events', 'Inspect the durable event ledger.'],
     ['ranite actions', 'Inspect the durable tool action ledger.'],
