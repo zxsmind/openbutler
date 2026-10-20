@@ -179,4 +179,10 @@ describe('browser session controls', () => {
     expect((await post('/api/model', { providerId: 'local', modelId: 'model-b', sessionId: 'session-a' })).status).toBe(200);
     expect(client.selectModel).toHaveBeenCalledWith('local', 'model-b');
   });
+  it('answers a request for a page it does not have with a 404 instead of a client of its own', async () => {
+    const response = await fetch(`${server.url}/`, { headers: { cookie } });
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toContain('text/plain');
+    expect(await response.text()).toBe('Not found.');
+  });
 });

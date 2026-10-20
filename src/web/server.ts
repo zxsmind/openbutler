@@ -30,7 +30,7 @@ const MAX_ENTRY_UPDATES = 12;
 type Entry = AgentSessionSnapshot['session']['entries'][number];
 
 export interface WebServerOptions {
-  /** Directory served as the static client shell. Missing files fall back to the built-in page. */
+  /** Directory served as the static client shell. When it is absent or a file is missing, the request 404s. */
   assetsDir?: string;
   port?: number;
   host?: string;
@@ -73,110 +73,6 @@ function parseCookies(header: string | undefined): Map<string, string> {
   }
   return out;
 }
-
-/**
- * The static shell is the only thing a browser needs to paint. Everything after
- * that arrives over one server-sent event stream, so the server never renders.
- */
-const FALLBACK_PAGE = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ranite</title>
-<style>
-  :root { color-scheme: dark; --line:#1f1f1f; --dim:#888; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:#000; color:#ededed; font:14px/1.55 ui-sans-serif,-apple-system,"Segoe UI",sans-serif; }
-  header { display:flex; gap:12px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#000; }
-  #title { font-weight:600; }
-  #state { color:var(--dim); font-size:12px; }
-  main { padding:20px; max-width:900px; margin:0 auto; display:flex; flex-direction:column; gap:10px; }
-  .entry { border-left:2px solid var(--line); padding-left:12px; white-space:pre-wrap; word-break:break-word; }
-  .entry.user { border-color:#4b7bec; }
-  .entry.assistant { border-color:#26de81; }
-  .entry.notice { border-color:#f7b731; color:#d8c48a; }
-  .entry.tool { border-color:#555; color:#bbb; font-family:ui-monospace,monospace; font-size:12.5px; }
-  footer { position:sticky; bottom:0; background:#000; border-top:1px solid var(--line); padding:12px 20px; display:flex; gap:8px; }
-  input { flex:1; background:#0a0a0a; border:1px solid var(--line); color:inherit; padding:10px 12px; border-radius:6px; font:inherit; }
-  button { background:#ededed; color:#000; border:0; padding:10px 16px; border-radius:6px; font:inherit; font-weight:600; cursor:pointer; }
-  button.ghost { background:transparent; color:#ededed; border:1px solid var(--line); }
-</style></head>
-<body>
-<header><span id="title">Ranite</span><span id="state">connecting…</span>
-  <span style="flex:1"></span>
-  <button class="ghost" id="stop" type="button">Stop</button></header>
-<main id="log"></main>
-<footer><input id="text" placeholder="Message Ranite…" autocomplete="off"><button id="send" type="button">Send</button></footer>
-<script>
-const log = document.getElementById('log');
-const state = document.getElementById('state');
-const title = document.getElementById('title');
-let windowStart = 0;
-let activeSessionId = '';
-
-function entryNode(entry) {
-  const div = document.createElement('div');
-  div.className = 'entry ' + (entry.kind || '');
-  div.textContent = entry.text || '';
-  return div;
-}
-function clearLog() { log.textContent = ''; }
-function prependOlder() {
-  const button = document.getElementById('older');
-  if (button) button.remove();
-  if (windowStart <= 0) return;
-  fetch('/api/entries?before=' + windowStart + '&limit=50&sessionId=' + encodeURIComponent(activeSessionId))
-    .then((r) => r.json())
-    .then((page) => {
-      const fragment = document.createDocumentFragment();
-      for (const entry of page.entries) fragment.appendChild(entryNode(entry));
-      log.insertBefore(fragment, log.firstChild);
-      windowStart = page.from;
-      addOlderButton();
-    });
-}
-function addOlderButton() {
-  if (windowStart <= 0) return;
-  const button = document.createElement('button');
-  button.id = 'older';
-  button.className = 'ghost';
-  button.textContent = 'Load older entries';
-  button.onclick = prependOlder;
-  log.insertBefore(button, log.firstChild);
-}
-function apply(payload) {
-  activeSessionId = payload.session.id;
-  title.textContent = payload.session.title || 'Ranite';
-  state.textContent = payload.busy ? 'working…' : 'idle';
-  if (payload.reset) {
-    clearLog();
-    const fragment = document.createDocumentFragment();
-    for (const entry of payload.entries) fragment.appendChild(entryNode(entry));
-    log.appendChild(fragment);
-    windowStart = payload.from;
-    addOlderButton();
-    window.scrollTo(0, document.body.scrollHeight);
-  } else {
-    for (const entry of payload.entries) log.appendChild(entryNode(entry));
-    window.scrollTo(0, document.body.scrollHeight);
-  }
-}
-const source = new EventSource('/api/events');
-source.addEventListener('snapshot', (e) => apply(JSON.parse(e.data)));
-source.addEventListener('patch', (e) => apply(JSON.parse(e.data)));
-source.onerror = () => { state.textContent = 'reconnecting…'; };
-async function post(path, body) {
-  await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-}
-document.getElementById('send').onclick = async () => {
-  const input = document.getElementById('text');
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  await post('/api/message', { text, sessionId: activeSessionId });
-};
-document.getElementById('text').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('send').click(); });
-document.getElementById('stop').onclick = () => post('/api/stop', { holdQueue: true });
-</script>
-</body></html>`;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -561,8 +457,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
     if (req.method === 'GET') {
       if (await serveStatic(res, url.pathname)) return;
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(FALLBACK_PAGE);
+      // No client bundle and no static file to serve: say so. The server does not
+      // carry a page of its own, so what a browser shows is the real client or a
+      // 404 that names the command that builds it.
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(
+        assetsDir === undefined
+          ? 'The browser client bundle is missing. Build it with `npm run build:web`, then restart `ranite web`.'
+          : 'Not found.',
+      );
       return;
     }
 
