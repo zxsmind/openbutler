@@ -364,7 +364,8 @@ export class SessionIndex {
     const rows: IndexedRow[] = [];
     let entryNumber = 0;
     for (const entry of session.entries) {
-      if (entry.kind === 'reasoning') continue;
+      // Reasoning and compaction are events about the run, not conversation text.
+      if (entry.kind === 'reasoning' || entry.kind === 'compaction') continue;
       entryNumber += 1;
       if (entry.kind === 'tool') {
         if (entry.command.trim()) rows.push(indexedRow(entryNumber, 0, 'command', entry.command));

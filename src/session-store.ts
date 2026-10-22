@@ -1,5 +1,6 @@
 import { TURN_SOURCES } from './communication.js';
 import type { FileAttachment } from './attachments.js';
+import type { SessionProject } from './projects/types.js';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -14,7 +15,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import type { ModelMessage } from 'ai';
 import {
   SESSION_ID,
@@ -45,6 +46,12 @@ export interface SessionEntryMeta {
   at?: number | undefined;
   /** Id of the user message that opened the turn this entry belongs to. */
   turnId?: string | undefined;
+  /**
+   * Provenance for text the machinery wrote rather than the conversation. A
+   * compaction checkpoint is stored so the record stays complete, but the reader
+   * is shown the compaction row instead of the raw summary.
+   */
+  internal?: 'compaction' | undefined;
 }
 
 export type SessionEntry = SessionEntryBody & SessionEntryMeta;
@@ -62,6 +69,15 @@ type SessionEntryBody =
   | { kind: 'assistant'; text: string }
   | { kind: 'notice'; text: string; detail?: string; tone?: NoticeTone }
   | { kind: 'reasoning'; text: string; durationMs?: number }
+  | {
+      // Compaction is a visible event in the transcript: it changes how much
+      // context the model can see, and a reader deserves to see when and how far.
+      kind: 'compaction';
+      status: 'running' | 'done' | 'failed';
+      beforeTokens?: number;
+      afterTokens?: number;
+      durationMs?: number;
+    }
   | {
       kind: 'tool';
       command: string;
@@ -82,6 +98,7 @@ export interface SessionFileInfo {
 }
 
 export interface SavedSession {
+  project?: SessionProject;
   version: 1;
   id: string;
   title: string;
@@ -96,6 +113,8 @@ export interface SavedSession {
   contextEstimateTokens?: number;
   contextWindowTokens?: number;
   contextGrowthTokens?: number;
+  /** Opaque provider/key-pool ids mapped to the last selected key position. */
+  keyPositions?: Record<string, number>;
   /**
    * Denormalised display fields, written so the picker never has to read `entries`.
    * Absent on sessions saved before this field existed; listing falls back to a full parse
@@ -119,6 +138,7 @@ export interface SavedSession {
 }
 
 export interface SessionSummary {
+  project?: SessionProject;
   id: string;
   title: string;
   preview: string;
@@ -133,6 +153,7 @@ export function createSession(providerId: string, modelId: string, contextWindow
   return {
     version: 1,
     id: randomUUID(),
+    keyPositions: {},
     title: 'New session',
     createdAt: now,
     updatedAt: now,
@@ -223,6 +244,7 @@ export function listSavedSessions(workspaceRoot?: string | null): SessionSummary
         providerId: session.providerId,
         modelId: session.modelId,
         ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
+        ...(session.project ? { project: session.project } : {}),
       });
     } catch {
       // Ignore an incomplete or unreadable file so one damaged session cannot block the picker.
@@ -250,6 +272,7 @@ export function listSavedSessions(workspaceRoot?: string | null): SessionSummary
  * session on every listing or context build.
  */
 export interface StoredSessionHeader {
+  project?: SessionProject;
   id: string;
   title: string;
   createdAt: string;
@@ -347,6 +370,7 @@ function fullSessionHeader(text: string): StoredSessionHeader | null {
     providerId: full.providerId,
     modelId: full.modelId,
     ...(full.workspaceRoot ? { workspaceRoot: full.workspaceRoot } : {}),
+    ...(full.project ? { project: full.project } : {}),
     hasUserMessage: full.hasUserMessage ?? full.entries.some((entry) => entry.kind === 'user'),
     preview: full.preview ?? sessionPreview(full.entries),
     firstUserMessage: full.firstUserMessage ?? firstUserMessageText(full.entries),
@@ -366,6 +390,7 @@ function tryParseHeader(text: string, id: string): StoredSessionHeader | null {
   if (typeof value.providerId !== 'string' || typeof value.modelId !== 'string') return null;
   // A session without both denormalised fields predates them, so it is read in full instead.
   if (value.hasUserMessage !== true || typeof value.preview !== 'string') return null;
+  if (value.project !== undefined && !isSessionProject(value.project)) return null;
   return {
     id,
     title: value.title,
@@ -374,6 +399,7 @@ function tryParseHeader(text: string, id: string): StoredSessionHeader | null {
     providerId: value.providerId,
     modelId: value.modelId,
     ...(typeof value.workspaceRoot === 'string' ? { workspaceRoot: value.workspaceRoot } : {}),
+    ...(isSessionProject(value.project) ? { project: value.project } : {}),
     hasUserMessage: true,
     preview: value.preview,
     firstUserMessage: typeof value.firstUserMessage === 'string' ? value.firstUserMessage : '',
@@ -437,12 +463,14 @@ export function saveSession(session: SavedSession, options: { allowEmpty?: boole
   const saved: SavedSession = {
     version: 1,
     id: session.id,
+    ...(session.keyPositions === undefined ? {} : { keyPositions: session.keyPositions }),
     title: session.title === 'New session' ? sessionTitle(session.entries) : session.title,
     createdAt: session.createdAt,
     updatedAt: new Date().toISOString(),
     providerId: session.providerId,
     modelId: session.modelId,
     ...(session.workspaceRoot === undefined ? {} : { workspaceRoot: session.workspaceRoot }),
+    ...(session.project === undefined ? {} : { project: session.project }),
     ...(session.contextTokens === undefined ? {} : { contextTokens: session.contextTokens }),
     ...(session.contextEstimateTokens === undefined ? {} : { contextEstimateTokens: session.contextEstimateTokens }),
     ...(session.contextWindowTokens === undefined ? {} : { contextWindowTokens: session.contextWindowTokens }),
@@ -474,6 +502,29 @@ function parseSession(text: string): SavedSession | null {
   return isSavedSession(value) ? value : null;
 }
 
+function isSessionProject(value: unknown): value is SessionProject {
+  if (
+    !isRecord(value) ||
+    typeof value.locked !== 'boolean' ||
+    typeof value.workspaceRoot !== 'string' ||
+    !isAbsolute(value.workspaceRoot) ||
+    !Array.isArray(value.folders)
+  )
+    return false;
+  if (value.id === null) return value.name === null && value.folders.length === 0;
+  return (
+    typeof value.id === 'string' &&
+    SESSION_ID.test(value.id) &&
+    typeof value.name === 'string' &&
+    value.name.trim().length > 0 &&
+    value.name.length <= 80 &&
+    value.folders.length > 0 &&
+    value.folders.length <= 16 &&
+    value.folders.every((folder) => typeof folder === 'string' && isAbsolute(folder)) &&
+    value.folders[0] === value.workspaceRoot
+  );
+}
+
 function isSavedSession(value: unknown): value is SavedSession {
   if (!isRecord(value)) return false;
   return (
@@ -485,7 +536,14 @@ function isSavedSession(value: unknown): value is SavedSession {
     typeof value.updatedAt === 'string' &&
     typeof value.providerId === 'string' &&
     typeof value.modelId === 'string' &&
+    (value.keyPositions === undefined ||
+      (isRecord(value.keyPositions) &&
+        Object.entries(value.keyPositions).every(
+          ([pool, position]) =>
+            /^[a-f0-9]{64}$/.test(pool) && typeof position === 'number' && Number.isSafeInteger(position) && position >= 0,
+        ))) &&
     (value.workspaceRoot === undefined || typeof value.workspaceRoot === 'string') &&
+    (value.project === undefined || isSessionProject(value.project)) &&
     (value.contextTokens === undefined ||
       (typeof value.contextTokens === 'number' && Number.isSafeInteger(value.contextTokens) && value.contextTokens >= 0)) &&
     (value.contextEstimateTokens === undefined ||
@@ -531,9 +589,18 @@ function isSessionEntry(value: unknown): value is SessionEntry {
       (value.imageCount === undefined ||
         (typeof value.imageCount === 'number' && Number.isSafeInteger(value.imageCount) && value.imageCount > 0))
     );
+  if (value.kind === 'compaction')
+    return (
+      ['running', 'done', 'failed'].includes(String(value.status)) &&
+      (value.beforeTokens === undefined ||
+        (typeof value.beforeTokens === 'number' && Number.isSafeInteger(value.beforeTokens) && value.beforeTokens >= 0)) &&
+      (value.afterTokens === undefined ||
+        (typeof value.afterTokens === 'number' && Number.isSafeInteger(value.afterTokens) && value.afterTokens >= 0))
+    );
   return (
     ['assistant', 'notice', 'reasoning'].includes(String(value.kind)) &&
     typeof value.text === 'string' &&
+    (value.internal === undefined || value.internal === 'compaction') &&
     // A reasoning entry may carry how long the model thought, so the transcript
     // can show "Thought for 13.2s" instead of an unlabelled block.
     (value.kind !== 'reasoning' ||

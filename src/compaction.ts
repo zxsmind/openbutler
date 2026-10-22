@@ -77,6 +77,9 @@ export interface CompactionResult {
   messages: ModelMessage[];
   inputTokens: number | null;
   outputTokens: number | null;
+  /** The active context the checkpoint replaced, and what it left behind. */
+  beforeTokens: number;
+  afterTokens: number;
 }
 
 export async function compactConversation(
@@ -239,6 +242,8 @@ export async function compactConversation(
     messages,
     inputTokens: usage.inputTokens ?? null,
     outputTokens: usage.outputTokens ?? null,
+    beforeTokens: Math.round(estimatedContextTokens),
+    afterTokens: Math.round(estimateContextTokens({ ...options, messages })),
   };
 }
 

@@ -1041,6 +1041,8 @@ describe('full-context LLM compaction', () => {
           ],
           inputTokens: 123,
           outputTokens: 20,
+          beforeTokens: 900_000,
+          afterTokens: 120_000,
         };
       },
       onCompactionComplete,

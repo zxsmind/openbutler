@@ -83,9 +83,54 @@ it('saves and reloads a session carrying every user-entry source, including team
     // Every source the type allows must survive the save validator; a source
     // added to one and forgotten in the other once made a session unsavable.
     const entries = USER_ENTRY_SOURCES.map((source) => ({ kind: 'user' as const, text: `from ${source}`, source }));
-    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries });
+    const keyPositions = { ['a'.repeat(64)]: 1 };
+    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries, keyPositions });
     const restored = loadSavedSession(saved.id)!;
     expect(restored.entries.map((entry) => (entry.kind === 'user' ? entry.source : null))).toEqual([...USER_ENTRY_SOURCES]);
+    expect(restored.keyPositions).toEqual(keyPositions);
+    expect(createSession('fixture', 'fixture').keyPositions ?? {}).toEqual({});
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('keeps a compaction row through save and load', async () => {
+  // A new entry kind that the validator does not know makes the whole session
+  // file unreadable, which is worse than the row itself going missing.
+  const root = mkdtempSync(join(tmpdir(), 'ranite-session-compaction-'));
+  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.resetModules();
+  try {
+    const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
+    const entries = [
+      { kind: 'user' as const, text: 'long task' },
+      { kind: 'compaction' as const, status: 'done' as const, beforeTokens: 784_400, afterTokens: 126_900 },
+    ];
+    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries });
+    const restored = loadSavedSession(saved.id)!;
+    expect(restored.entries[1]).toMatchObject({ kind: 'compaction', status: 'done', beforeTokens: 784_400, afterTokens: 126_900 });
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('keeps the compaction marker through save and load', async () => {
+  // The marker decides whether the reader sees the checkpoint prose, so dropping
+  // it on reload would put the whole summary back into the conversation.
+  const root = mkdtempSync(join(tmpdir(), 'ranite-session-internal-'));
+  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.resetModules();
+  try {
+    const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
+    const entries = [
+      { kind: 'user' as const, text: 'long task' },
+      { kind: 'assistant' as const, text: '## Objective and current request', internal: 'compaction' as const },
+    ];
+    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries });
+    const restored = loadSavedSession(saved.id)!;
+    expect(restored.entries[1]).toMatchObject({ kind: 'assistant', internal: 'compaction' });
   } finally {
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
