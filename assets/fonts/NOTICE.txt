@@ -1,0 +1,23 @@
+SF Pro (sf-pro.woff2, sf-pro-italic.woff2)
+==========================================
+
+Provenance
+  Apple San Francisco (SF Pro), variable woff2 builds.
+  Obtained from Apple's developer font distribution.
+
+License status
+  The Apple San Francisco Font is licensed by Apple Inc. under the
+  "License Agreement for the Apple San Francisco Font", which limits use to
+  mock-ups and to software running on Apple operating systems, prohibits
+  embedding the font in software products or website content, and does not
+  grant redistribution rights.
+
+  These files are therefore NOT open source and are not covered by this
+  repository's MIT license. They are included here at the repository owner's
+  discretion so the bundled client renders as designed. Anyone redistributing
+  or reusing this repository should replace them with a system font stack or
+  an open substitute.
+
+Usage in this project
+  Referenced from web/src/styles.css through @font-face. Vite copies them into
+  the built client as hashed assets.
