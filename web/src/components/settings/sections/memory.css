@@ -1,0 +1,53 @@
+/* A note is prose inside a settings page, so its headings stay subordinate. */
+.settings-memory__path {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--faint);
+  word-break: break-all;
+}
+
+.settings-memory__summary {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.settings-memory__body {
+  padding: 0.5rem 0 0.25rem;
+}
+
+.settings-memory__body .markdown {
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.settings-memory__body .markdown h1 {
+  font-size: 1.05rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.settings-memory__body .markdown h2 {
+  font-size: 0.95rem;
+  margin: 0.9rem 0 0.35rem;
+}
+
+.settings-memory__body .markdown h3,
+.settings-memory__body .markdown h4 {
+  font-size: 0.9rem;
+  margin: 0.75rem 0 0.3rem;
+}
+
+.settings-memory__body .markdown p,
+.settings-memory__body .markdown ul,
+.settings-memory__body .markdown ol {
+  margin: 0.4rem 0;
+}
+
+.settings-memory__body .markdown code {
+  font-size: 0.8rem;
+}
+
+.settings-memory__body .markdown > :first-child {
+  margin-top: 0;
+}

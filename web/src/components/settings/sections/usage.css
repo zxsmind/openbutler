@@ -1,0 +1,188 @@
+/* Usage: the calendar, the range switch and the table. */
+.settings-range {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.settings-range__option {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--settings-muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-range__option:hover {
+  color: #353639;
+}
+
+.settings-range__option.is-active {
+  color: #1764b2;
+}
+
+.settings-figures {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+  padding: 14px 0;
+  border: 1px solid var(--settings-border);
+  border-radius: 16px;
+}
+
+.settings-figures > div {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 12px;
+  text-align: center;
+}
+
+.settings-figures > div + div {
+  border-left: 1px solid var(--settings-border);
+}
+
+.settings-figures dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.settings-figures dt {
+  font-size: 12px;
+  color: var(--settings-muted);
+}
+
+.settings-calendar-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.settings-calendar {
+  width: min(100%, calc(var(--weeks) * 14px));
+  min-width: calc(var(--weeks) * 11px);
+}
+
+.settings-heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 1fr);
+  grid-template-columns: repeat(var(--weeks), minmax(0, 1fr));
+  gap: 3px;
+}
+
+.settings-heatmap__cell {
+  display: inline-block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: #f1f2f3;
+}
+
+.settings-heatmap__cell.level-1 {
+  background: #cde6ff;
+}
+
+.settings-heatmap__cell.level-2 {
+  background: #8dc6ff;
+}
+
+.settings-heatmap__cell.level-3 {
+  background: #369eff;
+}
+
+.settings-heatmap__cell.level-4 {
+  background: #0768bd;
+}
+
+.settings-heatmap__cell.is-outside {
+  visibility: hidden;
+}
+
+.settings-calendar__months {
+  display: grid;
+  grid-template-columns: repeat(var(--weeks), minmax(0, 1fr));
+  gap: 3px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #94969c;
+}
+
+.settings-calendar__months span {
+  white-space: nowrap;
+}
+
+.settings-calendar__legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #94969c;
+  font-size: 11px;
+}
+
+.settings-calendar__legend > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-calendar__legend .settings-heatmap__cell {
+  width: 10px;
+  height: 10px;
+}
+
+.settings-table-scroll {
+  overflow-x: auto;
+}
+
+.settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.settings-table th,
+.settings-table td {
+  padding: 10px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--settings-border);
+}
+
+.settings-table th:first-child,
+.settings-table td:first-child {
+  text-align: left;
+  padding-left: 0;
+}
+
+.settings-table th:last-child,
+.settings-table td:last-child {
+  padding-right: 0;
+}
+
+.settings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.settings-table th {
+  color: var(--settings-muted);
+  font-weight: 400;
+}
+
+@media (max-width: 760px) {
+  .settings-figures {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 18px;
+  }
+  .settings-figures > div:nth-child(4) {
+    border-left: 0;
+  }
+}

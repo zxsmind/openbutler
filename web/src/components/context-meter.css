@@ -1,0 +1,68 @@
+.context-meter {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.context-meter__trigger {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #909398;
+}
+@property --context-progress {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 0%;
+}
+.context-meter__ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: conic-gradient(currentColor var(--context-progress), #e2e3e5 0);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  transition: --context-progress 200ms ease;
+}
+.context-meter__tooltip {
+  position: absolute;
+  z-index: 25;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  max-width: 220px;
+  padding: 9px 16px;
+  border-radius: 18px;
+  background: #1b1c1e;
+  color: #fff;
+  box-shadow: 0 4px 16px #0002;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-50%);
+  transition:
+    opacity 140ms ease,
+    visibility 140ms;
+}
+.context-meter__tooltip[data-open] {
+  opacity: 1;
+  visibility: visible;
+}
+.context-meter__heading {
+  color: #b5b5b6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-meter__tooltip,
+  .context-meter__ring {
+    transition: none;
+  }
+}

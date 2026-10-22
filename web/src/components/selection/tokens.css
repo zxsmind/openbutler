@@ -1,0 +1,29 @@
+/* MindBox's compact selection surface tokens, scoped to the ported controls. */
+.dropdown-surface,
+.composer-model-selector__trigger {
+  --mb-color-canvas: #fff;
+  --mb-color-hover: #e5e8ed;
+  --mb-color-ink: #17191d;
+  --mb-color-ink-muted: color-mix(in srgb, var(--mb-color-ink) 62%, transparent);
+  --color-text-muted: var(--mb-color-ink-muted);
+  --color-text-soft: color-mix(in srgb, var(--mb-color-ink) 50%, var(--mb-color-canvas));
+  --color-border-soft: color-mix(in srgb, var(--mb-color-ink) 10%, var(--mb-color-canvas));
+  --color-selection-accent: #3b82f6;
+  --mb-shell-shadow: 0 1px 2px #17191d0d, 0 10px 30px #17191d1a;
+  --font-size-body: 0.8125rem;
+  --font-size-caption: 0.75rem;
+  --font-weight-regular: 400;
+  --line-height-body: 1.5;
+  --line-height-caption: 1.4;
+  --space-01: 0.25rem;
+  --space-02: 0.5rem;
+  --mb-overlay-anchor-gap: 0.25rem;
+  --mb-overlay-edge-inset: 0.5rem;
+  --mb-overlay-submenu-gap: 0.25rem;
+  --mb-overlay-content-gap: 0.125rem;
+  --mb-overlay-panel-min-width: 12rem;
+  --mb-overlay-panel-max-width: 18rem;
+  --mb-overlay-panel-max-height: 20rem;
+  --mb-overlay-text-fade-edge: 0.5rem;
+  --mb-overlay-marquee-duration: 8s;
+}

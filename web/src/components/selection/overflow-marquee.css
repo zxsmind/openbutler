@@ -1,0 +1,70 @@
+.overflow-marquee {
+  display: block;
+  width: max-content;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.overflow-marquee__track {
+  display: inline-block;
+  width: max-content;
+  min-width: 100%;
+  white-space: inherit;
+  transform: translateX(0);
+}
+
+.overflow-marquee[data-overflowing='true'] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--mb-overlay-text-fade-edge),
+    #000 calc(100% - var(--mb-overlay-text-fade-edge)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--mb-overlay-text-fade-edge),
+    #000 calc(100% - var(--mb-overlay-text-fade-edge)),
+    transparent 100%
+  );
+}
+
+.overflow-marquee[data-overflowing='true'][data-animate-on-interaction='true']:is(:hover, :focus-within, :active) .overflow-marquee__track,
+.overflow-marquee[data-overflowing='true'][data-active='true'] .overflow-marquee__track {
+  animation: overflow-marquee-scroll var(--mb-overlay-marquee-duration) ease-in-out infinite;
+}
+
+.dropdown__item:is(:hover, :focus-visible)
+  .overflow-marquee[data-overflowing='true'][data-animate-on-interaction='true']
+  .overflow-marquee__track,
+.select-field__trigger:is(:hover, :focus-visible)
+  .overflow-marquee[data-overflowing='true'][data-animate-on-interaction='true']
+  .overflow-marquee__track {
+  animation: overflow-marquee-scroll var(--mb-overlay-marquee-duration) ease-in-out infinite;
+}
+
+@keyframes overflow-marquee-scroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+
+  50%,
+  62% {
+    transform: translateX(var(--overflow-marquee-offset));
+  }
+
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overflow-marquee__track {
+    animation: none !important;
+    transform: none;
+  }
+}
