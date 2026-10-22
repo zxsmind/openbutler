@@ -1,13 +1,24 @@
 import { forwardRef, useLayoutEffect, useRef, useState } from 'react';
-import type { DraftImage, ModelChoice, RuntimeInfo } from '../types.js';
+import type { ApprovalMode, DraftImage, ModelChoice, RuntimeInfo } from '../types.js';
+import type { ReactNode } from 'react';
 import { readImage } from '../image-input.js';
 import { useDictation } from '../use-dictation.js';
 import { Brand, Button, Icon, IconButton } from './ui.js';
 import { Popover } from './popover.js';
+import { ModelSelector } from './model-selector.js';
+import { useModelSelection } from '../use-model-selection.js';
+import { ApprovalSelector } from './approval-selector.js';
+import { ContextMeter } from './context-meter.js';
+import { MessageQueue } from './message-queue.js';
 interface ComposerProps {
-  workspace: string;
+  projectName?: string;
+  context?: ReactNode;
+  queuedMessages?: import('../types.js').SessionPayload['queuedMessages'];
+  onQueueAction: (id: string, action: 'steer' | 'remove') => Promise<void>;
   runtime?: RuntimeInfo;
+  contextTokens?: number | null;
   models: ModelChoice[];
+  pendingModel: ModelChoice | null;
   draft: string;
   images: DraftImage[];
   onImages: (images: DraftImage[]) => void;
@@ -18,31 +29,27 @@ interface ComposerProps {
   onDraft: (text: string) => void;
   onSend: (text: string, images?: DraftImage[], reasoningVariantId?: string) => Promise<void>;
   onStop: () => void;
-  onModel: (model: ModelChoice) => void;
+  onModel: (model: ModelChoice) => Promise<boolean>;
+  onApprovalMode: (mode: ApprovalMode) => Promise<void>;
   onDetails: () => void;
 }
 export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function Composer(props, forwardedRef) {
   const input = useRef<HTMLTextAreaElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sending = useRef(false);
+  // Tracks the newest draft so a failed send only restores text the owner has
+  // not replaced in the meantime.
+  const latestDraft = useRef(props.draft);
+  latestDraft.current = props.draft;
   const [pending, setPending] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showModels, setShowModels] = useState(false);
-  const [reasoning, setReasoning] = useState<{ model: string; id: string } | null>(null);
-  const modelId = props.runtime?.modelId || '';
-  const variants = props.runtime?.reasoningVariants || [];
-  const selectedReasoning = reasoning?.model === modelId ? reasoning.id : props.runtime?.reasoningDefault;
-  const reasoningIndex = Math.max(
-    0,
-    variants.findIndex((variant) => variant.id === selectedReasoning),
-  );
-  const reasoningLabel = variants[reasoningIndex]?.label;
+  const modelSelection = useModelSelection(props.runtime, props.models, props.onModel);
   const dictation = useDictation((text) => props.onDraft([props.draft, text].filter(Boolean).join(' ')), setError);
   useLayoutEffect(() => {
     if (!input.current) return;
     input.current.style.height = 'auto';
-    input.current.style.height = `${Math.min(200, Math.max(26, input.current.scrollHeight))}px`;
+    input.current.style.height = `${Math.min(200, Math.max(42, input.current.scrollHeight))}px`;
   }, [props.draft]);
   const submit = async () => {
     const text = props.draft.trim();
@@ -51,12 +58,18 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
     setPending(true);
     setError(null);
     if (dictation.listening) dictation.toggle();
+    // The draft leaves the box before the round trip, not after it. The input
+    // stays enabled and keeps the caret, so the owner can start the next message
+    // while this one is on its way; a disabled field would lose focus here.
+    const images = props.images;
+    props.onDraft('');
+    props.onImages([]);
     try {
-      await props.onSend(text, props.images, variants[reasoningIndex]?.id);
-      props.onDraft('');
-      props.onImages([]);
+      await props.onSend(text, images, modelSelection.reasoningVariantId);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
+      // Give the words back unless the owner already started a new message.
+      if (!latestDraft.current) props.onDraft(text);
     } finally {
       sending.current = false;
       setPending(false);
@@ -66,7 +79,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   const addImages = async (files: FileList | null) => {
     if (!files?.length) return;
     if (props.images.length + files.length > 4) {
-      setError('En fazla dört görsel ekleyebilirsiniz.');
+      setError('You can attach at most four images.');
       return;
     }
     setReadingImages(true);
@@ -80,22 +93,31 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
       if (fileInput.current) fileInput.current.value = '';
     }
   };
-  const modelName = modelId.split('/').pop() || props.runtime?.modelName || 'Model';
+  const canSend = Boolean(props.draft.trim()) || props.images.length > 0;
   return (
     <div className={`composer-dock${props.empty ? ' composer-empty' : ''}`}>
       {props.empty ? (
         <div className="welcome">
           <Brand large />
           <h1>
-            <span>{props.workspace}</span> projesinde ne oluşturalım?
+            {props.projectName ? (
+              <>
+                <span>{props.projectName}</span> project: what should we build?
+              </>
+            ) : (
+              'What do you want to do?'
+            )}
           </h1>
         </div>
       ) : null}
       {error ? (
         <div className="notice error" role="alert">
-          {error}
+          <span>{error}</span>
+          <IconButton icon="x" label="Dismiss error" onClick={() => setError(null)} />
         </div>
       ) : null}
+      {props.context}
+      <MessageQueue messages={props.queuedMessages} disabled={props.disabled} onAction={props.onQueueAction} />
       <form
         className="composer"
         onDragOver={(event) => {
@@ -118,8 +140,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
               <div className="image-preview" key={image.id}>
                 <img src={image.dataUrl} alt={image.name} />
                 <IconButton
-                  icon="close"
-                  label={`${image.name} görselini kaldır`}
+                  icon="x"
+                  label={`Remove ${image.name} image`}
                   disabled={pending}
                   onClick={() => props.onImages(props.images.filter((item) => item.id !== image.id))}
                 />
@@ -134,9 +156,10 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
             else if (forwardedRef) forwardedRef.current = node;
           }}
           aria-label="Message Ranite"
-          placeholder="Bir şey sor veya ne yapmak istediğini anlat…"
+          placeholder="Tell me what to do"
           value={props.draft}
-          disabled={props.disabled || pending}
+          disabled={props.disabled}
+          aria-busy={pending}
           rows={1}
           onPaste={(event) => {
             if (event.clipboardData.files.length) {
@@ -144,7 +167,10 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
               if (!props.disabled && !pending && !readingImages) void addImages(event.clipboardData.files);
             }
           }}
-          onChange={(event) => props.onDraft(event.target.value)}
+          onChange={(event) => {
+            setError(null);
+            props.onDraft(event.target.value);
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -159,12 +185,12 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
             multiple
             accept="image/png,image/jpeg,image/webp"
             hidden
-            aria-label="Görsel ekle"
+            aria-label="Add image"
             onChange={(event) => void addImages(event.target.files)}
           />
           <Popover
             className="attachment-popover"
-            label="Ekle"
+            label="Add"
             disabled={props.disabled || pending || readingImages}
             trigger={<Icon name="plus" />}
           >
@@ -178,7 +204,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
                     close();
                   }}
                 >
-                  Görsel ekle
+                  Add image
                 </Button>
                 <Button
                   className="attachment-option"
@@ -188,119 +214,53 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
                     close();
                   }}
                 >
-                  Çalışma alanı
+                  Workspace
                 </Button>
               </>
             )}
           </Popover>
-          <Button className="permission-button" aria-label="View permissions" icon="shield" onClick={props.onDetails}>
-            {props.runtime?.approvalMode === 'full-access'
-              ? 'Tam erişim'
-              : props.runtime?.approvalMode === 'auto-review'
-                ? 'Otomatik inceleme'
-                : 'Onay iste'}
-          </Button>
+          <ApprovalSelector value={props.runtime?.approvalMode} disabled={props.disabled} onChange={props.onApprovalMode} />
           <span className="spacer" />
           {readingImages ? (
             <span className="upload-status" role="status">
-              Görsel hazırlanıyor…
+              Preparing image…
             </span>
           ) : null}
-          <Popover
-            className="model-popover"
-            label="Choose model"
-            disabled={props.disabled || props.busy || props.changing || pending}
-            trigger={
-              <>
-                <span className="model-label">
-                  {modelName} {reasoningLabel ? <span className="reasoning-label">{reasoningLabel}</span> : null}
-                </span>
-                <Icon name="chevron" />
-              </>
-            }
-          >
-            {(close) =>
-              showModels ? (
-                <>
-                  <div className="popover-heading">
-                    <Button onClick={() => setShowModels(false)}>Geri</Button>Modeller
-                  </div>
-                  <div className="model-list">
-                    {props.models.map((model) => {
-                      const selected = model.providerId === props.runtime?.providerId && model.modelId === modelId;
-                      return (
-                        <button
-                          type="button"
-                          className="model-option"
-                          key={`${model.providerId}/${model.modelId}`}
-                          aria-pressed={selected}
-                          onClick={() => {
-                            if (!selected) props.onModel(model);
-                            setShowModels(false);
-                            close();
-                          }}
-                        >
-                          <span>
-                            <strong>{model.name}</strong>
-                            <small>{model.providerId}</small>
-                          </span>
-                          {selected ? <Icon name="check" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              ) : (
-                <div className="reasoning-controls">
-                  <div className="reasoning-heading">
-                    <Icon name="spark" />
-                    <strong>{reasoningLabel || 'Varsayılan'}</strong>
-                    <IconButton icon="reset" label="Varsayılan düzeye dön" onClick={() => setReasoning(null)} />
-                  </div>
-                  <Button className="current-model-choice" onClick={() => setShowModels(true)}>
-                    {modelName}
-                    <Icon name="chevron" />
-                  </Button>
-                  {variants.length > 1 ? (
-                    <input
-                      className="reasoning-range"
-                      style={{
-                        background: `linear-gradient(to right, #4185f7 ${(reasoningIndex / (variants.length - 1)) * 100}%, #e9e9ec ${(reasoningIndex / (variants.length - 1)) * 100}%)`,
-                      }}
-                      aria-valuetext={reasoningLabel}
-                      aria-label="Akıl yürütme düzeyi"
-                      type="range"
-                      min={0}
-                      max={variants.length - 1}
-                      step={1}
-                      value={reasoningIndex}
-                      onChange={(event) => setReasoning({ model: modelId, id: variants[Number(event.target.value)].id })}
-                    />
-                  ) : (
-                    <p className="reasoning-note">
-                      {variants.length ? 'Bu modelin sabit düşünme düzeyi kullanılıyor.' : 'Bu model ek düşünme ayarı sunmuyor.'}
-                    </p>
-                  )}
-                </div>
-              )
-            }
-          </Popover>
+          <ContextMeter tokens={props.contextTokens} limit={props.runtime?.contextWindowTokens} />
+          <ModelSelector
+            {...modelSelection}
+            disabled={props.disabled || pending || modelSelection.pending}
+            pendingModel={props.pendingModel}
+          />
           <IconButton
             icon="mic"
             label={dictation.listening ? 'Dikteyi durdur' : 'Sesle yaz'}
             className={dictation.listening ? 'mic-button listening' : 'mic-button'}
             disabled={props.disabled || pending || !dictation.supported}
-            title={dictation.supported ? 'Sesle yaz' : 'Bu tarayıcı sesle yazmayı desteklemiyor'}
+            title={dictation.supported ? 'Dictate' : 'This browser does not support dictation'}
             onClick={dictation.toggle}
           />
-          {props.busy ? <IconButton icon="stop" label="Stop response" className="stop-button" onClick={props.onStop} /> : null}
-          <IconButton
-            type="submit"
-            icon="arrow"
-            label={props.busy ? 'Queue message' : 'Send message'}
-            className="send-button"
-            disabled={props.disabled || pending || readingImages || (!props.draft.trim() && !props.images.length)}
-          />
+          {canSend ? (
+            <IconButton
+              type="submit"
+              icon="arrow-up"
+              label={props.busy ? 'Queue message' : 'Send message'}
+              className="send-button"
+              disabled={props.disabled || pending || readingImages || !canSend}
+            />
+          ) : props.busy ? (
+            // One slot for the action that matters now: send when there is
+            // something to send, stop while a run is going and there is not.
+            <IconButton icon="square" label="Stop response" className="stop-button" onClick={props.onStop} />
+          ) : (
+            <IconButton
+              icon="audio-lines"
+              label={dictation.listening ? 'Stop dictation' : 'Start dictation'}
+              className={`send-button voice-button${dictation.listening ? ' listening' : ''}`}
+              disabled={props.disabled || pending || readingImages || !dictation.supported}
+              onClick={dictation.toggle}
+            />
+          )}
         </div>
       </form>
     </div>

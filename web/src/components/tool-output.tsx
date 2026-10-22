@@ -1,11 +1,6 @@
+import { isShellTool } from '../turns.js';
+import { ScrollArea } from './scroll-area.js';
 import type { Entry } from '../types.js';
-
-export function isShellTool(entry: Entry): boolean {
-  const tool = entry.tool || entry.command?.split(/\s/, 1)[0] || '';
-  return /(?:^|\/)(?:execute_command|exec_command|shell|bash|powershell|pwsh|cmd|cd|Get-[a-z]+|Select-[a-z]+|node|npm|npx|git|rg)$/i.test(
-    tool,
-  );
-}
 
 export function ToolOutput({ entry, running }: { entry: Entry; running: boolean }) {
   const shell = isShellTool(entry);
@@ -19,7 +14,7 @@ export function ToolOutput({ entry, running }: { entry: Entry; running: boolean 
   const title = shell ? 'Shell' : verb || entry.tool || 'Tool';
   const command = shell ? raw : target;
   return (
-    <div className="tool-output" role="region" aria-label={`${title} çıktısı`} tabIndex={0}>
+    <ScrollArea className="tool-output" role="region" aria-label={`${title} output`} tabIndex={0} follow={running}>
       <div className="tool-output-title">{title}</div>
       {command ? (
         <pre className="tool-output-command">
@@ -27,7 +22,7 @@ export function ToolOutput({ entry, running }: { entry: Entry; running: boolean 
           {command}
         </pre>
       ) : null}
-      <pre className="tool-output-result">{entry.result || (running ? 'Çalışıyor…' : 'Çıktı yok.')}</pre>
-    </div>
+      <pre className="tool-output-result">{entry.result || (running ? 'Running…' : 'No output.')}</pre>
+    </ScrollArea>
   );
 }

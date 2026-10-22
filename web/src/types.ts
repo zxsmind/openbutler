@@ -1,4 +1,7 @@
-export type EntryKind = 'user' | 'assistant' | 'reasoning' | 'tool' | 'notice' | 'error' | 'system';
+export type EntryKind = 'user' | 'assistant' | 'reasoning' | 'tool' | 'notice' | 'error' | 'system' | 'compaction';
+export type ApprovalMode = 'workspace' | 'auto-review' | 'full-access';
+export type { Project, ProjectCatalog } from '../../src/projects/types.js';
+import type { SessionProject } from '../../src/projects/types.js';
 
 export interface Entry {
   kind: EntryKind | string;
@@ -14,7 +17,46 @@ export interface Entry {
   turnId?: string;
   at?: number;
   imageCount?: number;
+  attachments?: Array<{ id: string; name: string; mediaType: string; sizeBytes: number }>;
   source?: string;
+  /**
+   * Provenance for text the machinery wrote, not the conversation: the model's
+   * checkpoint output is stored so the record stays complete, but the reader is
+   * shown the compaction row instead of the raw summary.
+   */
+  internal?: 'compaction';
+  /** Compaction rows carry their own state and the sizes they moved between. */
+  status?: 'running' | 'done' | 'failed';
+  beforeTokens?: number;
+  afterTokens?: number;
+}
+
+/** Modal control-plane state: whether this machine can provision GPU work. */
+export interface ModalInfo {
+  configured: boolean;
+  verified: boolean;
+  /** Apps visible to the token, when Modal answered. */
+  apps: number | null;
+  error: string | null;
+  /** The token id is shown back; the secret never is. */
+  tokenId: string | null;
+}
+
+/** A provider the catalog knows, with whether this machine already holds a key. */
+export interface ProviderCatalogRow {
+  providerId: string;
+  modelCount: number;
+  configured: boolean;
+  /** How many of this provider's models are active in the composer. */
+  activeModels: number;
+  /** A provider configured by hand: its models come from settings, not the catalog. */
+  custom: boolean;
+}
+
+/** A provider's models as the settings page sees them: catalog plus activation. */
+export interface ModelCatalogRow {
+  providerId: string;
+  models: Array<{ modelId: string; name: string; active: boolean }>;
 }
 
 export interface ApprovalRequest {
@@ -51,11 +93,14 @@ export interface SessionPayload {
   totalEntries: number;
   busy: boolean;
   queuedMessageCount: number;
+  queuedMessages?: Array<{ id?: string; text: string; imageCount: number; editable?: boolean }>;
   pendingApproval: ApprovalRequest | null;
   pendingQuestion: PendingQuestion | null;
   contextTokens?: number | null;
   runtime?: RuntimeInfo;
-  session: { id: string; title: string };
+  session: { id: string; title: string; project?: SessionProject; projectLocked?: boolean };
+  /** Changes when the server is serving a rebuilt browser bundle. */
+  buildId?: string | null;
 }
 
 export interface SessionInfo {
@@ -78,4 +123,133 @@ export interface DraftImage {
   dataUrl: string;
   base64: string;
   mediaType: 'image/png';
+}
+
+/** One local day of recorded model requests. */
+export interface UsageDay {
+  day: string;
+  requests: number;
+  freshInputTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  durationMs: number;
+  /** Tokens actually moved that day: fresh input, cache reads and output. */
+  tokens: number;
+}
+
+export interface UsageSummary {
+  days: number;
+  requests: number;
+  freshInputTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  busiest: UsageDay | null;
+  longestTaskMs: number;
+  streakDays: number;
+  pricedRows: number;
+  unpricedRows: number;
+}
+
+export interface UsageReport {
+  label: string;
+  summary: UsageSummary;
+  days: UsageDay[];
+}
+
+/** One local hour of recorded model requests. */
+export interface UsageHour {
+  hour: string;
+  requests: number;
+  freshInputTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  durationMs: number;
+}
+
+export interface UsageHoursReport {
+  label: string;
+  /** Tokens in the busiest hour of the window, so a bar can be scaled. */
+  peak: number;
+  days: Array<{
+    day: string;
+    requests: number;
+    tokens: number;
+    costUsd: number;
+    busiestHour: string | null;
+    hours: Array<{ hour: string; label: string; requests: number; tokens: number; costUsd: number }>;
+  }>;
+}
+
+export interface MemoryFileInfo {
+  /** Path relative to the memory root. */
+  name: string;
+  group: 'preferences' | 'profile' | 'topics' | 'areas' | 'workspace';
+  scope: string;
+  title: string;
+  description: string;
+  updated: string;
+  type: string;
+  bytes: number;
+  /** Markdown without frontmatter, meant to be rendered. */
+  body: string;
+  truncated: boolean;
+}
+
+export interface MemoryInfo {
+  root: string;
+  index: { name: string; present: boolean; bytes: number; lines: number };
+  files: MemoryFileInfo[];
+  omitted: number;
+}
+
+export interface LogRecord {
+  ts: string;
+  level: 'error' | 'warn' | 'info' | 'debug';
+  event: string;
+  [field: string]: unknown;
+}
+
+export interface AboutInfo {
+  version: string;
+  /** Which browser bundle this server is serving. */
+  buildId: string | null;
+  workspace: string;
+  dataDir: string;
+  logPath: string;
+  uptimeMs: number;
+  providerId: string;
+  modelId: string;
+  contextWindowTokens: number | null;
+}
+
+export interface TelegramInfo {
+  enabled: boolean;
+  state: 'disabled' | 'connecting' | 'polling' | 'error' | 'stopped';
+  paired: boolean;
+  username: string | null;
+  error: string | null;
+}
+
+export interface ApprovalsInfo {
+  mode: ApprovalMode;
+  remembered: number;
+  supported: ApprovalMode[];
+  /** Exact calls the owner allowed once and kept, newest first. */
+  permissions: Array<{ id: string; label: string; at: number }>;
+  /** Who reviews risky calls in auto-review mode; null means the conversation model. */
+  autoReview: { providerId: string | null; modelId: string | null; timeoutSeconds: number | null };
+  /** Active models the reviewer may be set to. */
+  models: Array<{ providerId: string; modelId: string }>;
 }

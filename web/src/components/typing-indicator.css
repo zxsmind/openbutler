@@ -1,0 +1,41 @@
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 800px;
+  height: 46px;
+  margin: 0 auto;
+  padding: 0 28px 22px;
+  /* Pinned to the transcript's bottom edge. Without this the dot slides down
+     with every row that arrives and back up as the view follows, which reads as
+     a tremble exactly when a message is sent. */
+  position: sticky;
+  bottom: 0;
+}
+.typing-indicator__dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #000;
+  animation: typing-pulse 2.4s ease-in-out infinite;
+}
+@keyframes typing-pulse {
+  0%,
+  100% {
+    transform: scale(0.8);
+  }
+  50% {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-indicator__dot {
+    animation: none;
+  }
+}
+@media (max-width: 760px) {
+  .typing-indicator {
+    padding-inline: 20px;
+  }
+}

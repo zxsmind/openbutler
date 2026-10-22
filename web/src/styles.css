@@ -1,10 +1,24 @@
+@font-face {
+  font-family: 'SF Pro';
+  src: url('@assets/fonts/sf-pro.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 1 1000;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'SF Pro';
+  src: url('@assets/fonts/sf-pro-italic.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 1 1000;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
-  font-family:
-    'Segoe UI',
-    -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
+  --font-body: 'SF Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-body);
+  font-optical-sizing: auto;
   color: #292a2e;
   background: #eef1f6;
   --text: #292a2e;
@@ -24,6 +38,10 @@ body,
   width: 100%;
   height: 100%;
   margin: 0;
+  /* The shell owns every scroll area. A page that can scroll is a page a phone
+     will shift sideways when the keyboard opens and an input needs to be shown. */
+  max-width: 100%;
+  overflow: hidden;
 }
 body {
   font-size: 14px;
@@ -43,34 +61,58 @@ button {
 button:disabled {
   cursor: default;
 }
+/* No focus rings anywhere: the owner asked for them removed, and every control
+   already carries a hover and pressed state. */
 button:focus-visible,
 input:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid #98baf3;
-  outline-offset: 2px;
+textarea:focus-visible,
+summary:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
 }
+
 ::selection {
   background: #dce8ff;
 }
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-thumb {
-  border-radius: 6px;
-  background: #dcdfe4;
+  border-radius: 999px;
+  background: #cbd0d8;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ba3ae;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Native scrollbar-width/color override the pixel-sized, arrow-free scrollbar
+   in Chromium. Use them only where the WebKit scrollbar selectors are absent. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd0d8 transparent;
+  }
 }
 .spacer {
   flex: 1;
 }
 .icon {
   display: block;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
+  width: var(--icon-size, 18px);
+  height: var(--icon-size, 18px);
+  flex: none;
 }
 .button {
   display: inline-flex;
@@ -147,41 +189,23 @@ textarea:focus-visible {
   animation: breathe 1.5s ease-in-out infinite;
 }
 
-/* Shell: navigation, conversations, and one continuous workspace surface. */
+/* Shell: conversations and one continuous workspace surface. */
 .app {
   --sidebar-width: 0px;
   display: grid;
-  grid-template-columns: 48px var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   height: 100dvh;
-  padding: 8px 4px 4px 0;
+  padding: 8px 4px 4px 8px;
   overflow: hidden;
   transition: grid-template-columns 240ms var(--ease);
 }
 .app.sidebar-visible {
   --sidebar-width: 252px;
 }
-.nav-strip {
-  grid-column: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0 14px;
-}
-.nav-strip .active {
-  color: #303640;
-  background: #e1e6ed;
-}
-.nav-divider {
-  width: 24px;
-  height: 1px;
-  margin: 2px 0;
-  background: #dce1e8;
-}
 .workspace-surface {
   position: relative;
   z-index: 1;
-  grid-column: 3;
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -247,7 +271,7 @@ textarea:focus-visible {
 /* Conversations: row buttons share their geometry and remain real navigation. */
 .sidebar {
   position: relative;
-  grid-column: 2;
+  grid-column: 1;
   width: 252px;
   min-height: 0;
   display: flex;
@@ -289,6 +313,15 @@ textarea:focus-visible {
   width: 16px;
   height: 16px;
   flex-basis: 16px;
+}
+
+.sidebar-footer {
+  padding: 8px 8px 10px;
+  border-top: 1px solid #e1e3e7;
+}
+.sidebar-settings {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .sidebar-scroll {
@@ -352,19 +385,10 @@ textarea:focus-visible {
   color: #969aa3;
 }
 
-.brand-button {
-  padding: 0;
-  min-height: 30px;
+.sidebar-brand {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.4px;
-  gap: 5px;
-}
-.brand-button .icon {
-  width: 12px;
-  height: 12px;
-  flex-basis: 12px;
-  color: #93979e;
 }
 .sidebar-heading .icon-button {
   width: 26px;
@@ -503,10 +527,28 @@ textarea:focus-visible {
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable both-edges;
+  overflow-anchor: none;
+  /* Breathing room under the last message: it used to end flush against the
+     composer, which read as if the answer were cut off by the input box. */
+  padding-bottom: 120px;
 }
-.scroller:focus-visible {
-  outline: 2px solid #dce7fa;
-  outline-offset: -2px;
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.message-images a {
+  display: block;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.message-images img {
+  display: block;
+  width: 180px;
+  height: 130px;
+  max-width: 100%;
+  object-fit: cover;
 }
 .rows {
   position: relative;
@@ -552,7 +594,10 @@ textarea:focus-visible {
   line-height: 1.75;
 }
 .answer {
-  margin: 18px 0 0;
+  margin: 12px 0 0;
+}
+.answer + .answer {
+  margin-top: 6px;
 }
 .answer-label {
   display: none;
@@ -566,7 +611,7 @@ textarea:focus-visible {
 }
 .answer .body {
   font-size: 14px;
-  line-height: 1.75;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 .tool-group {
@@ -590,6 +635,16 @@ textarea:focus-visible {
 }
 .turn-toggle:hover {
   color: #5f636a;
+}
+.group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A sentence lifted from the thought in progress reads as a quote, not a label. */
+.group-label.snippet {
+  font-style: italic;
 }
 .group-icon,
 .step-status {
@@ -627,13 +682,50 @@ textarea:focus-visible {
   height: 12px;
   flex-basis: 12px;
   transform: rotate(-90deg);
-  transition: transform 160ms var(--ease);
+  transition: transform 220ms var(--ease);
 }
 .step-chevron.expanded .icon {
   transform: rotate(0);
 }
+@property --scroll-fade-top {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-bottom {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+.scroll-area {
+  overflow-anchor: none;
+  border-radius: 14px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--scroll-fade-top),
+    #000 calc(100% - var(--scroll-fade-bottom)),
+    transparent
+  );
+  transition:
+    --scroll-fade-top 160ms ease,
+    --scroll-fade-bottom 160ms ease;
+}
+.scroll-area[data-fade-top='true'] {
+  --scroll-fade-top: 12px;
+}
+.scroll-area[data-fade-bottom='true'] {
+  --scroll-fade-bottom: 12px;
+}
+.scroll-area-content {
+  min-width: 0;
+}
 .steps {
-  padding: 0;
+  max-height: min(280px, 40dvh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  padding: 4px 2px;
 }
 .step-line {
   display: flex;
@@ -667,12 +759,6 @@ textarea:focus-visible {
   white-space: nowrap;
   font-weight: 400;
 }
-.step-time {
-  flex: none;
-  color: #a1a4aa;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
 .step-line > .step-chevron {
   opacity: 0;
 }
@@ -681,9 +767,25 @@ textarea:focus-visible {
 .step.open > .step-line > .step-chevron {
   opacity: 1;
 }
+.step-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 180ms var(--ease),
+    opacity 180ms var(--ease);
+}
+.step-collapse[data-state='open'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition-duration: 220ms;
+}
+.step-collapse-content {
+  min-height: 0;
+  overflow: hidden;
+}
 .step-body {
   padding: 5px 0 10px;
-  animation: enter 180ms var(--ease);
 }
 .step.open > .step-line {
   width: fit-content;
@@ -693,19 +795,14 @@ textarea:focus-visible {
   flex: 0 1 auto;
 }
 .tool-output {
-  max-height: 200px;
+  max-height: min(180px, 30dvh);
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior-y: contain;
   border: 1px solid #d9dcdf;
-  border-radius: 10px;
+  border-radius: 14px;
   background: #f2f3f3;
   color: #62666c;
-  scrollbar-width: thin;
-  scrollbar-color: #d7dadd transparent;
-}
-.tool-output:focus-visible {
-  outline: 2px solid #c8d8ef;
-  outline-offset: 2px;
 }
 .tool-output-title {
   padding: 4px 8px 0;
@@ -734,14 +831,74 @@ textarea:focus-visible {
   color: #969ba1;
 }
 .step-body .prose {
+  padding: 6px 8px;
   font-size: 12px;
   line-height: 1.7;
+}
+.step-body .reasoning-text {
+  max-height: min(180px, 30dvh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  white-space: normal;
+  line-height: 1.55;
+}
+.reasoning-text p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.reasoning-text p + p {
+  margin-top: 6px;
 }
 .message-attachments {
   display: block;
   margin-top: 6px;
   font-size: 11px;
   color: #8698ad;
+}
+
+/* A compaction changed what the model can see, so it gets its own row rather
+   than hiding inside the work it interrupted. */
+.compaction {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px 0;
+  padding: 4px 12px 4px 9px;
+  border: 1px solid #e3e6ec;
+  border-radius: 999px;
+  background: #fbfcfd;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.compaction__icon {
+  display: inline-flex;
+  color: #9aa1ab;
+}
+
+.compaction__label {
+  white-space: nowrap;
+}
+
+.compaction__sizes {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #9aa1ab;
+}
+
+.compaction--running {
+  border-color: #dbe6f5;
+  color: #3b6ea5;
+}
+
+.compaction--failed {
+  border-color: #f0d9d9;
+  background: #fdf7f7;
+  color: #a33b3b;
 }
 .turn-work-duration {
   margin: 0 0 16px;
@@ -793,24 +950,24 @@ textarea:focus-visible {
     box-shadow 150ms ease;
 }
 .composer:focus-within {
-  border-color: #c9d4e6;
+  border-color: #e0e2e5;
   box-shadow: 0 4px 20px #20314c07;
 }
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 26px;
+  min-height: 42px;
   max-height: 200px;
   border: 0;
   outline: none;
   padding: 0 4px;
   resize: none;
   background: transparent;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.7;
 }
 .composer textarea::placeholder {
-  color: #989da6;
+  color: #c5c6c9;
 }
 .composer textarea:disabled {
   opacity: 0.6;
@@ -818,9 +975,24 @@ textarea:focus-visible {
 .composer-toolbar {
   display: flex;
   align-items: center;
+  /* The row never wraps: the model name is the only flexible thing on it, and a
+     send button pushed onto its own line is what a narrow phone got before. */
+  flex-wrap: nowrap;
   gap: 5px;
   margin-top: 6px;
   min-height: 28px;
+}
+/* Fixed controls keep their size; a shrinkable one collapses its own hit area. */
+.composer-toolbar > * {
+  flex: 0 0 auto;
+}
+.composer-toolbar > .spacer {
+  flex: 1 1 auto;
+}
+/* Only the model name gives way, and it is the second dropdown on the row. */
+.composer-toolbar > .dropdown__root ~ .dropdown__root {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .permission-button {
   font-size: 11px;
@@ -831,6 +1003,12 @@ textarea:focus-visible {
   width: 14px;
   height: 14px;
   flex-basis: 14px;
+}
+.composer-toolbar > .send-button,
+.composer-toolbar > .stop-button {
+  /* The action slot stays at the right edge of its line even after the
+     toolbar wraps on a narrow screen. */
+  margin-left: auto;
 }
 .send-button {
   border-radius: 50%;
@@ -898,13 +1076,6 @@ textarea:focus-visible {
   height: 13px;
   flex-basis: 13px;
 }
-.model-label {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 .popover-panel {
   position: absolute;
   z-index: 20;
@@ -916,57 +1087,8 @@ textarea:focus-visible {
   padding: 5px;
   background: white;
   box-shadow: 0 12px 40px #233b5d18;
-  transform-origin: bottom right;
   animation: popover-in 180ms var(--ease);
 }
-.popover-heading {
-  padding: 8px 10px;
-  font-size: 11px;
-  color: #939aa6;
-}
-.model-list {
-  max-height: 280px;
-  overflow-y: auto;
-}
-.model-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  text-align: left;
-}
-.model-option:hover {
-  background: #f2f5f9;
-}
-.model-option[aria-pressed='true'] {
-  background: #f0f4fa;
-}
-.model-option > span {
-  min-width: 0;
-}
-.model-option strong {
-  display: block;
-  font-size: 12px;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}
-.model-option small {
-  display: block;
-  font-size: 10px;
-  color: #929ba8;
-}
-.model-option > .icon {
-  width: 15px;
-  height: 15px;
-  flex-basis: 15px;
-  color: #6985b0;
-}
-
 .composer-toolbar .icon-button {
   width: 28px;
   height: 28px;
@@ -1004,94 +1126,6 @@ textarea:focus-visible {
 .attachment-option {
   width: 100%;
   justify-content: flex-start;
-}
-.model-popover {
-  min-width: 0;
-  max-width: 270px;
-}
-.model-popover .popover-trigger {
-  min-height: 28px;
-  height: 28px;
-  max-width: 100%;
-  padding: 4px 5px;
-}
-.model-popover .popover-panel {
-  width: 256px;
-  padding: 4px;
-}
-.reasoning-label {
-  color: #969ba4;
-  margin-left: 3px;
-}
-.reasoning-controls {
-  padding: 3px 6px 7px;
-}
-.reasoning-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #8f949d;
-}
-.reasoning-heading .icon-button {
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-}
-.reasoning-heading > .icon {
-  width: 14px;
-  height: 14px;
-  flex-basis: 14px;
-}
-.reasoning-heading strong {
-  color: #4385f7;
-  font-weight: 500;
-  font-size: 14px;
-}
-.current-model-choice {
-  display: flex;
-  margin: -4px auto 5px;
-  min-height: 20px;
-  font-size: 11px;
-  color: #878d98;
-}
-.current-model-choice .icon {
-  width: 11px;
-  height: 11px;
-  flex-basis: 11px;
-  transform: rotate(-90deg);
-}
-.reasoning-range {
-  appearance: none;
-  width: 100%;
-  height: 23px;
-  border-radius: 20px;
-  background: #e9e9ec;
-  margin: 4px 0 0;
-  cursor: pointer;
-}
-.reasoning-range::-webkit-slider-thumb {
-  appearance: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: white;
-  border: 1px solid #e4e6eb;
-  box-shadow: 0 1px 3px #172a4b15;
-}
-.reasoning-range::-moz-range-thumb {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 1px solid #e4e6eb;
-  background: white;
-}
-.reasoning-range::-moz-range-progress {
-  background: #4385f7;
-}
-.reasoning-note {
-  margin: 8px 0;
-  color: #a2a8b2;
-  font-size: 11px;
 }
 .mic-button.listening {
   color: #e76957;
@@ -1141,12 +1175,13 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 0;
-  padding: 9px 12px;
+  margin: 4px 0;
+  padding: 4px 10px;
   border: 1px solid #e5e8ee;
   border-radius: 10px;
   background: #f8f9fb;
   font-size: 12px;
+  line-height: 1.45;
   color: #788291;
   overflow-wrap: anywhere;
 }
@@ -1273,84 +1308,6 @@ textarea:focus-visible {
   background: #a7b7ce;
 }
 
-/* Markdown is styled within messages only. Model-supplied HTML stays escaped. */
-.markdown p {
-  margin: 0 0 16px;
-}
-.markdown > :last-child {
-  margin-bottom: 0;
-}
-.markdown h1,
-.markdown h2,
-.markdown h3,
-.markdown h4 {
-  line-height: 1.4;
-  margin: 24px 0 12px;
-  font-weight: 600;
-  letter-spacing: -0.3px;
-}
-.markdown h1 {
-  font-size: 24px;
-}
-.markdown h2 {
-  font-size: 20px;
-}
-.markdown h3,
-.markdown h4 {
-  font-size: 17px;
-}
-.markdown ul,
-.markdown ol {
-  padding-left: 23px;
-  margin: 12px 0 20px;
-}
-.markdown li {
-  padding-left: 3px;
-  margin: 6px 0;
-}
-.markdown li p {
-  margin-bottom: 6px;
-}
-.markdown code:not(pre code) {
-  padding: 2px 5px;
-  border-radius: 5px;
-  background: #f0f2f6;
-  font: 0.85em var(--mono);
-}
-.markdown a {
-  color: #4e7ebc;
-  text-underline-offset: 3px;
-}
-.markdown blockquote {
-  border-left: 3px solid #d7dfe9;
-  margin: 18px 0;
-  padding-left: 18px;
-  color: #778596;
-}
-.markdown hr {
-  border: 0;
-  border-top: 1px solid #e9edf3;
-  margin: 24px 0;
-}
-.table-scroll {
-  overflow-x: auto;
-  margin: 16px 0;
-}
-.markdown table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 13px;
-}
-.markdown th,
-.markdown td {
-  border-bottom: 1px solid #e9edf3;
-  padding: 10px 12px;
-  text-align: left;
-}
-.markdown th {
-  font-weight: 600;
-  background: #f8f9fb;
-}
 @keyframes breathe {
   50% {
     opacity: 0.35;
@@ -1359,31 +1316,32 @@ textarea:focus-visible {
 @keyframes enter {
   from {
     opacity: 0;
-    transform: translateY(-5px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 @keyframes popover-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 @media (max-width: 760px) {
+  /* iOS zooms the whole page into an input whose text is under 16px, which reads
+     as the shell overflowing the screen the moment the keyboard opens. */
+  input,
+  textarea,
+  .composer textarea,
+  .composer input {
+    font-size: 16px;
+  }
   .app,
   .app.sidebar-visible {
     grid-template-columns: minmax(0, 1fr);
     padding: 0;
-  }
-  .nav-strip {
-    display: none;
   }
   .workspace-surface,
   .sidebar-visible .workspace-surface {
