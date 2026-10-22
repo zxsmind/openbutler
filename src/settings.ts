@@ -211,9 +211,16 @@ export interface SecretsStore {
   providers: Record<string, ProviderSecrets>;
   /** Raw team bearer ticket; absent when this machine is not a joined member. */
   teamTicket?: string;
+  /** Modal control-plane credentials, used to provision GPU work on the owner's behalf. */
+  modal?: ModalCredentials;
 }
 
-const KNOWN_SECRET_KEYS = new Set(['providers', 'teamTicket']);
+export interface ModalCredentials {
+  tokenId: string;
+  tokenSecret: string;
+}
+
+const KNOWN_SECRET_KEYS = new Set(['providers', 'teamTicket', 'modal']);
 const KNOWN_PROVIDER_SECRET_KEYS = new Set(['keys']);
 
 function isEnvironmentName(value: string): boolean {
@@ -606,7 +613,21 @@ export function loadSecrets(): SecretsStore {
       throw new Error('config teamTicket must be a non-empty string under 512 characters.');
     secrets.teamTicket = parsed.teamTicket;
   }
+  if (parsed.modal !== undefined) secrets.modal = parseModalSecrets(parsed.modal);
   return secrets;
+}
+
+function parseModalSecrets(raw: unknown): ModalCredentials {
+  if (!isRecord(raw)) throw new Error('config modal must be a mapping');
+  for (const key of Object.keys(raw)) {
+    if (key !== 'tokenId' && key !== 'tokenSecret') throw new Error(`config modal.${key} is not a secret ranite knows`);
+  }
+  const tokenId = raw.tokenId;
+  const tokenSecret = raw.tokenSecret;
+  if (typeof tokenId !== 'string' || !tokenId || tokenId.length > 256) throw new Error('config modal.tokenId must be a non-empty string.');
+  if (typeof tokenSecret !== 'string' || !tokenSecret || tokenSecret.length > 512)
+    throw new Error('config modal.tokenSecret must be a non-empty string.');
+  return { tokenId, tokenSecret };
 }
 
 function parseProviderSecrets(raw: unknown, id: string): ProviderSecrets {
@@ -642,7 +663,30 @@ function atomicWriteYaml(path: string, document: unknown): void {
 export function saveSecrets(secrets: SecretsStore): void {
   const providers: Record<string, ProviderSecrets> = {};
   for (const [id, secret] of Object.entries(secrets.providers)) providers[id] = { keys: [...secret.keys] };
-  atomicWriteYaml(CONFIG_FILE, { providers, ...(secrets.teamTicket ? { teamTicket: secrets.teamTicket } : {}) });
+  atomicWriteYaml(CONFIG_FILE, {
+    providers,
+    ...(secrets.teamTicket ? { teamTicket: secrets.teamTicket } : {}),
+    ...(secrets.modal ? { modal: { tokenId: secrets.modal.tokenId, tokenSecret: secrets.modal.tokenSecret } } : {}),
+  });
+}
+
+/** Modal credentials, or null when this machine has none. */
+export function loadModalCredentials(): ModalCredentials | null {
+  return loadSecrets().modal ?? null;
+}
+
+/** Stores Modal credentials, keeping provider keys and the team ticket intact. */
+export function saveModalCredentials(credentials: ModalCredentials): void {
+  const secrets = loadSecrets();
+  secrets.modal = { tokenId: credentials.tokenId, tokenSecret: credentials.tokenSecret };
+  saveSecrets(secrets);
+}
+
+/** Removes Modal credentials. */
+export function clearModalCredentials(): void {
+  const secrets = loadSecrets();
+  delete secrets.modal;
+  saveSecrets(secrets);
 }
 
 /**
@@ -685,12 +729,20 @@ export function saveSettings(settings: SettingsStore): void {
   // saveSettings rewrites the secret file wholesale, so it carries the team
   // ticket through: a settings save must never log the machine out of its team.
   let teamTicket: string | undefined;
+  let modal: ModalCredentials | undefined;
   try {
-    teamTicket = loadSecrets().teamTicket;
+    const secrets = loadSecrets();
+    teamTicket = secrets.teamTicket;
+    modal = secrets.modal;
   } catch {
     teamTicket = undefined;
+    modal = undefined;
   }
-  atomicWriteYaml(CONFIG_FILE, { providers: secretProviders, ...(teamTicket ? { teamTicket } : {}) });
+  atomicWriteYaml(CONFIG_FILE, {
+    providers: secretProviders,
+    ...(teamTicket ? { teamTicket } : {}),
+    ...(modal ? { modal: { tokenId: modal.tokenId, tokenSecret: modal.tokenSecret } } : {}),
+  });
 }
 
 export function parseScheduleState(raw: unknown): ScheduleState {

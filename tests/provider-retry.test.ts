@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createRotatingModel, isAuthError, isRetryableError, RETRY_DELAYS_MS, type V3LanguageModel } from '../src/provider/retry.js';
+import {
+  bindSessionKeyRotation,
+  createRotatingModel,
+  isAuthError,
+  isRetryableError,
+  RETRY_DELAYS_MS,
+  type V3LanguageModel,
+} from '../src/provider/retry.js';
 
 /** A minimal v3 model whose doStream either succeeds or fails with a scripted error. */
 function model(script: Array<unknown | { ok: true }>): V3LanguageModel & { calls: number } {
@@ -53,6 +60,52 @@ describe('retry classification', () => {
 });
 
 describe('createRotatingModel', () => {
+  it('keeps the session on B, retries B, and starts a separate session at A', async () => {
+    const first = model([apiError(429)]);
+    const second = model([{ ok: true }, apiError(429), { ok: true }]);
+    const waits: number[] = [];
+    const shared = createRotatingModel([first, second], {
+      delaysMs: [1, 2],
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    const positions: Record<string, number> = {};
+    const bind = (state: Record<string, number>) => bindSessionKeyRotation(shared, state) as V3LanguageModel;
+    await bind(positions).doStream({} as never);
+    expect(first.calls).toBe(3);
+    expect(second.calls).toBe(1);
+    await bind(positions).doGenerate({} as never);
+    expect(first.calls).toBe(3);
+    expect(second.calls).toBe(3);
+    expect(waits).toEqual([1, 2, 1]);
+    // Reopening the persisted session must keep B; a new session must try A.
+    await bind(JSON.parse(JSON.stringify(positions))).doStream({} as never);
+    expect(first.calls).toBe(3);
+    await bind({}).doStream({} as never);
+    expect(first.calls).toBe(6);
+  });
+
+  it('does not wrap to A after every key fails, or rotate after cancellation', async () => {
+    const first = model([apiError(429)]);
+    const second = model([apiError(429)]);
+    const rotating = createRotatingModel([first, second], { delaysMs: [], sleep: noSleep });
+    await expect(rotating.doStream({} as never)).rejects.toThrow('HTTP 429');
+    await expect(rotating.doStream({} as never)).rejects.toThrow('HTTP 429');
+    expect(first.calls).toBe(1);
+    expect(second.calls).toBe(2);
+    const controller = new AbortController();
+    const cancelled = createRotatingModel([first, second], {
+      delaysMs: [1],
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await expect(cancelled.doStream({ abortSignal: controller.signal } as never)).rejects.toThrow('Run cancelled');
+    expect(first.calls).toBe(2);
+    expect(second.calls).toBe(2);
+  });
+
   it('retries the same key through the backoff then succeeds', async () => {
     const waits: number[] = [];
     const first = model([apiError(429), apiError(500), { ok: true }]);
