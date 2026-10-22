@@ -63,8 +63,9 @@ export class TelegramApiError extends Error {
   constructor(
     message: string,
     readonly retryAfterSeconds: number | null = null,
+    options?: { cause?: unknown },
   ) {
-    super(message);
+    super(message, options);
   }
 }
 
@@ -569,8 +570,14 @@ export class TelegramAdapter {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(parameters),
       signal,
-    }).catch(() => {
-      throw new TelegramApiError(`Telegram ${method}: connection failed.`, null);
+    }).catch((error: unknown) => {
+      // Keep the cause: "connection failed" alone cannot tell a timeout from a
+      // refused connection, and the log is the only place it can be seen later.
+      // Only the kind of failure, never the message: a transport error quotes the
+      // request URL, and that URL carries the bot token.
+      const code = (error as { code?: unknown } | null)?.code;
+      const reason = `${error instanceof Error ? error.name : 'Error'}${typeof code === 'string' ? ` ${code}` : ''}`;
+      throw new TelegramApiError(`Telegram ${method}: connection failed (${reason}).`, null, { cause: error });
     });
     return this.parseApiResponse(method, response);
   }
