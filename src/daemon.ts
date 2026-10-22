@@ -18,6 +18,7 @@ import { createConnection, createServer, type Server } from 'node:net';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { createDaemonHost } from './daemon-host.js';
+import { createLogger, fileSink } from './logging.js';
 import { DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, type DaemonStatus } from './daemon-protocol.js';
 import { getDataDir, getDataPath } from './paths.js';
 
@@ -173,12 +174,15 @@ export async function stopDaemon(restarting = false): Promise<boolean> {
   // A reconnecting client may already have started the replacement host.
   if (await waitForProcessExit(active.pid, 30_000)) return true;
   const record = readDaemonPidRecord();
-  if (
-    !record?.identity ||
-    record.pid !== active.pid ||
-    record.startedAt !== active.startedAt ||
-    (await readProcessIdentity(active.pid)) !== record.identity
-  ) {
+  const liveIdentity = await readProcessIdentity(active.pid);
+  const liveCommand = await readProcessCommandLine(active.pid);
+  const recordMatches =
+    Boolean(record?.identity) && record?.pid === active.pid && record.startedAt === active.startedAt && liveIdentity === record?.identity;
+  // A pid file can only describe one host, and a restart that raced a slow
+  // shutdown leaves several alive. The process itself is the authority: a live
+  // ranite host is safe to terminate even when the file talks about its sibling.
+  const isRaniteHost = Boolean(liveCommand && /daemon\s+run/.test(liveCommand) && /cli\.(?:js|ts)/.test(liveCommand));
+  if (!recordMatches && !isRaniteHost) {
     throw new Error(`Ranite host process ${active.pid} did not stop. Its process identity cannot be verified, so it was not terminated.`);
   }
   console.error(
@@ -219,6 +223,7 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
   const stopRequested = new Promise<void>((resolvePromise) => {
     resolveStop = resolvePromise;
   });
+  const logger = createLogger({ sink: fileSink(), context: { pid: process.pid, process: 'host' } });
   const host = createDaemonHost({
     startedAt,
     requestStop: (restarting = false) => {
@@ -228,7 +233,9 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
       resolveStop();
       void host.close().catch((error: unknown) => console.error(error instanceof Error ? error.message : String(error)));
     },
-    log: (message) => console.error(message),
+    // Structured records go to their own rotating file; the spawn redirect keeps
+    // raw stderr for crashes and native noise.
+    log: (message) => logger.info('host.log', { message }),
   });
   const server = createServer((socket) => host.handleConnection(socket));
   const endpoint = getDaemonEndpoint();
@@ -544,6 +551,29 @@ async function readProcessIdentity(pid: number): Promise<string | null> {
     );
     const identity = stdout.trim();
     return identity ? createHash('sha256').update(identity).digest('hex') : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The live command line of a pid, or null when the process is gone. */
+async function readProcessCommandLine(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      process.platform === 'win32' ? 'powershell.exe' : 'ps',
+      process.platform === 'win32'
+        ? [
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$hostProcess = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($null -eq $hostProcess) { exit 1 }; $hostProcess.CommandLine`,
+          ]
+        : ['-p', String(pid), '-o', 'args='],
+      { windowsHide: true, timeout: 3_000, maxBuffer: 16_384, env: { ...process.env, LC_ALL: 'C' } },
+    );
+    const line = stdout.trim();
+    return line ? line : null;
   } catch {
     return null;
   }
