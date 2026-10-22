@@ -1,0 +1,65 @@
+.message-queue__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 128px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.message-queue__row + .message-queue__row {
+  border-top: 1px solid #f0f0f0;
+}
+.message-queue__marker {
+  color: #a1a1a4;
+  flex: none;
+}
+.message-queue__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-queue__row .button {
+  min-height: 24px;
+  height: 24px;
+  padding: 3px;
+  color: #969699;
+  background: transparent;
+  flex: none;
+}
+.message-queue__row .button:hover:not(:disabled) {
+  color: #353537;
+  background: #f1f1f1;
+}
+.message-queue__row .icon-button {
+  width: 22px;
+}
+.message-queue__row .icon {
+  width: 13px;
+  height: 13px;
+  flex-basis: 13px;
+}
+.message-queue__row .message-queue__steer {
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.message-queue__images {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #969699;
+  font-size: 11px;
+}
+.message-queue__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  color: #b23e3e;
+  font-size: 12px;
+}
+.message-queue__error span {
+  flex: 1;
+}

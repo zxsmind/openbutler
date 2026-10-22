@@ -63,19 +63,19 @@ export function SearchDialog({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <IconButton icon="close" label="Aramayı kapat" onClick={onClose} />
+          <IconButton icon="x" label="Close search" onClick={onClose} />
         </div>
         <div className="search-results">
           {results.slice(0, 50).map((session) => (
             <button className="search-result" key={session.id} disabled={disabled} onClick={() => onSelect(session.id)}>
-              <Icon name="chat" />
+              <Icon name="message-square" />
               <span>
                 <strong>{session.title}</strong>
                 <small>{session.preview}</small>
               </span>
             </button>
           ))}
-          {!results.length ? <p className="sidebar-message">Sohbet bulunamadı.</p> : null}
+          {!results.length ? <p className="sidebar-message">No chat found.</p> : null}
         </div>
       </div>
     </div>

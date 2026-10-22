@@ -43,14 +43,14 @@ export function useDictation(onText: (text: string) => void, onError: (error: st
       );
     instance.onerror = (event) => {
       setListening(false);
-      onError(event.error === 'not-allowed' ? 'Mikrofon erişimine izin verilmedi.' : 'Ses metne çevrilemedi. Tekrar deneyin.');
+      onError(event.error === 'not-allowed' ? 'Microphone access was denied.' : 'Speech could not be transcribed. Try again.');
     };
     instance.onend = () => setListening(false);
     try {
       instance.start();
       setListening(true);
     } catch {
-      onError('Mikrofon başlatılamadı.');
+      onError('The microphone could not start.');
     }
   };
   return { supported: !!constructor, listening, toggle };

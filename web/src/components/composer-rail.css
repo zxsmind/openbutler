@@ -1,0 +1,25 @@
+.composer-rail {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  margin: 0 14px -16px;
+  padding: 0 10px 16px;
+  border: 1px solid #ededee;
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  background: #fdfdfd;
+  color: #27282a;
+}
+.composer-rail--muted {
+  padding: 5px 8px 21px;
+  border: 0;
+  background: #f5f5f5;
+}
+.composer-rail__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  min-width: 0;
+  font-size: 13px;
+}

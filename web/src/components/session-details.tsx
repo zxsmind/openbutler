@@ -12,7 +12,7 @@ export function SessionDetails({ payload, onClose }: { payload: SessionPayload |
     <aside className="session-details" aria-label="Session details">
       <div className="details-heading">
         <strong>Session details</strong>
-        <IconButton label="Close details" icon="close" onClick={onClose} />
+        <IconButton label="Close details" icon="x" onClick={onClose} />
       </div>
       <dl>
         <dt>Model</dt>
