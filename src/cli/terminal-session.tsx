@@ -2790,6 +2790,17 @@ function noticeMark(tone: NoticeTone | undefined, tokens: UiTokens): { glyph: st
   return { glyph: glyphs.dot };
 }
 
+/** A compaction row has no text of its own: its state and sizes are the message. */
+function compactionLabel(entry: { status?: 'running' | 'done' | 'failed'; beforeTokens?: number; afterTokens?: number }): string {
+  const label =
+    entry.status === 'done' ? 'Context compacted' : entry.status === 'failed' ? 'Compaction interrupted' : 'Compacting context…';
+  const size = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value));
+  if (entry.beforeTokens !== undefined && entry.afterTokens !== undefined) {
+    return `${label} (${size(entry.beforeTokens)} → ${size(entry.afterTokens)})`;
+  }
+  return label;
+}
+
 /**
  * Shared frame for every centered popup: one width rule, roomy padding, and a
  * blank row between the title block, the content, and the hint footer, so
@@ -2944,11 +2955,12 @@ export function estimateTranscriptEntryHeight(
       1
     );
   }
+  const noticeText = entry.kind === 'compaction' ? compactionLabel(entry) : entry.text;
   if (entry.kind === 'notice' && entry.detail) {
     const showDetail = expandedNotice || !mouseSupported;
-    return wrappedRows(clipped(entry.text, 1_200), width - 2) + (showDetail ? wrappedRows(entry.detail, width - 4) : 0) + 1;
+    return wrappedRows(clipped(noticeText, 1_200), width - 2) + (showDetail ? wrappedRows(entry.detail, width - 4) : 0) + 1;
   }
-  return wrappedRows(clipped(entry.text, 1_200), width - 2) + 1;
+  return wrappedRows(clipped(noticeText, 1_200), width - 2) + 1;
 }
 
 function renderToolResultText(tool: string | undefined, text: string, dimmed: boolean, tokens: UiTokens): ReactNode {
@@ -3137,7 +3149,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({
     <Box width="100%" marginBottom={1}>
       <Text dimColor={dimmed} {...(mark.color ? { color: mark.color } : {})}>
         {`${mark.glyph} `}
-        {clipped(entry.text, 1_200)}
+        {clipped(entry.kind === 'compaction' ? compactionLabel(entry) : entry.text, 1_200)}
       </Text>
     </Box>
   );
