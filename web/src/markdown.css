@@ -1,0 +1,438 @@
+.markdown {
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.markdown p {
+  margin: 0 0 18px;
+}
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 30px 0 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.018em;
+  text-wrap: pretty;
+}
+.markdown h1 {
+  font-size: 28px;
+}
+.markdown h2 {
+  font-size: 24px;
+}
+.markdown h3 {
+  font-size: 20px;
+}
+.markdown h4 {
+  font-size: 18px;
+}
+.markdown h5 {
+  font-size: 16px;
+}
+.markdown h6 {
+  font-size: 14px;
+}
+.markdown :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 16px;
+}
+.markdown strong {
+  font-weight: 600;
+}
+.markdown em {
+  font-style: italic;
+}
+.markdown del {
+  text-decoration-thickness: 1px;
+}
+.markdown :is(ul, ol) {
+  margin: 0 0 18px;
+  padding-inline-start: 1.8em;
+}
+.markdown li {
+  padding-inline-start: 0.2em;
+  margin: 0.25em 0;
+}
+.markdown li::marker {
+  color: #37383b;
+  font-variant-numeric: tabular-nums;
+}
+.markdown li > :is(ul, ol) {
+  margin-block: 0.45em;
+}
+.markdown li > p {
+  margin-block: 0.5em;
+}
+.markdown li > p:first-child {
+  margin-top: 0;
+}
+.markdown .contains-task-list {
+  padding-inline-start: 0;
+  list-style: none;
+}
+.markdown .task-list-item {
+  display: block;
+  position: relative;
+  list-style: none;
+  padding-inline-start: 28px;
+  min-height: 22px;
+}
+.markdown .task-list-item > input {
+  appearance: none;
+  position: absolute;
+  left: 0;
+  top: 3px;
+  width: 19px;
+  height: 19px;
+  border: 1px solid #d1d2d4;
+  border-radius: 50%;
+  background: white;
+  margin: 0;
+  opacity: 1;
+}
+.markdown .task-list-item > input:checked {
+  background: #232426;
+  border-color: #232426;
+}
+.markdown .task-list-item > input:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 3px;
+  width: 5px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.markdown :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #f3f3f3;
+  color: #242529;
+  font: 0.88em/1.6 var(--mono);
+  white-space: break-spaces;
+}
+.markdown kbd {
+  padding: 2px 5px;
+  border: 1px solid #ddd;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font: 0.85em var(--mono);
+}
+.markdown mark {
+  background: #fff2b8;
+  color: inherit;
+  padding: 0 2px;
+}
+.markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.markdown a:hover {
+  text-decoration-thickness: 2px;
+}
+.markdown a[href^='http']::after {
+  content: '↗';
+  display: inline-block;
+  font-size: 0.75em;
+  margin-left: 4px;
+  text-decoration: none;
+}
+.markdown a[data-footnote-ref] {
+  text-decoration: none;
+}
+.markdown blockquote {
+  margin: 18px 0;
+  padding: 0 0 0 13px;
+  border-left: 4px solid #ececee;
+  color: inherit;
+}
+.markdown blockquote p {
+  margin-bottom: 4px;
+}
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+.markdown blockquote :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+.markdown blockquote blockquote {
+  margin-block: 6px;
+}
+.markdown hr {
+  margin: 30px 0;
+  border: 0;
+  border-top: 1px solid #ececee;
+}
+.markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 16px 0;
+  border-radius: 8px;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown details {
+  margin: 18px 0;
+}
+.markdown summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.markdown .footnotes {
+  margin-top: 28px;
+  font-size: 12px;
+  color: #60636a;
+}
+.markdown .footnotes ol {
+  padding-inline-start: 1.5em;
+}
+
+.markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 18px 0 24px;
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.markdown :is(th, td) {
+  padding: 9px 12px;
+  border-bottom: 1px solid #efeff0;
+  vertical-align: top;
+  min-width: 90px;
+}
+.markdown :is(th, td):first-child {
+  padding-left: 0;
+}
+.markdown :is(th, td):last-child {
+  padding-right: 0;
+}
+.markdown th {
+  font-weight: 500;
+}
+.markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+.markdown td code {
+  white-space: nowrap;
+}
+
+.markdown-code {
+  margin: 26px 0;
+  overflow: hidden;
+  border: 1px solid #e6e6e8;
+  border-radius: 20px;
+  background: #f3f3f4;
+  color: #22252b;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.markdown-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 46px;
+  padding: 9px 17px 5px 20px;
+}
+.markdown-code-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.markdown-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.markdown-block-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px;
+  background: transparent;
+  color: #71757b;
+}
+.markdown-block-action:hover {
+  color: #272a2f;
+  background: #e6e7e9;
+}
+.markdown-code-scroll {
+  max-height: 440px;
+  overflow: auto;
+  border-radius: 0 0 20px 20px;
+}
+.markdown-code[data-expanded='true'] .markdown-code-scroll {
+  max-height: none;
+}
+.markdown-code pre {
+  margin: 0;
+  padding: 14px 20px 21px;
+  font: 12px/1.8 var(--mono);
+  white-space: pre;
+  overflow-wrap: normal;
+  tab-size: 2;
+}
+.markdown-code pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #20242c;
+  font: inherit;
+  white-space: inherit;
+}
+.markdown-code .hljs-comment,
+.markdown-code .hljs-quote {
+  color: #85878d;
+}
+.markdown-code .hljs-keyword,
+.markdown-code .hljs-selector-tag {
+  color: #c52b7d;
+}
+.markdown-code .hljs-string,
+.markdown-code .hljs-regexp,
+.markdown-code .hljs-addition {
+  color: #25842b;
+}
+.markdown-code .hljs-title,
+.markdown-code .hljs-section,
+.markdown-code .hljs-title.function_ {
+  color: #5536dc;
+}
+.markdown-code .hljs-number,
+.markdown-code .hljs-literal,
+.markdown-code .hljs-symbol {
+  color: #cf6018;
+}
+.markdown-code .hljs-attr,
+.markdown-code .hljs-attribute,
+.markdown-code .hljs-property {
+  color: #20242c;
+}
+.markdown-code .hljs-type,
+.markdown-code .hljs-built_in {
+  color: #5536dc;
+}
+.markdown-code .hljs-deletion {
+  color: #db2929;
+}
+.markdown-code .hljs-emphasis {
+  font-style: italic;
+}
+.markdown-code .hljs-strong {
+  font-weight: 700;
+}
+
+.markdown-diagram {
+  position: relative;
+  margin: 24px 0;
+}
+.markdown-diagram-actions {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  right: 4px;
+  top: 4px;
+  z-index: 1;
+  padding: 4px;
+  border-radius: 20px;
+  background: #fffffff0;
+  opacity: 0;
+}
+.markdown-diagram:hover .markdown-diagram-actions,
+.markdown-diagram:focus-within .markdown-diagram-actions {
+  opacity: 1;
+}
+.markdown-diagram-scroll {
+  max-width: 100%;
+  overflow: auto;
+}
+.markdown-diagram-canvas svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.markdown-diagram[data-expanded='true'] .markdown-diagram-canvas svg {
+  max-width: none;
+}
+.markdown-diagram-pending {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  color: #83868c;
+  font-size: 13px;
+}
+.markdown-diagram-fallback > p {
+  margin-bottom: 10px;
+  color: #797c83;
+  font-size: 12px;
+}
+.markdown-diagram-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: #606670;
+  padding: 0;
+  font-size: 12px;
+}
+.markdown .katex {
+  font-size: 1.12em;
+  overflow-wrap: normal;
+}
+.markdown .katex-display {
+  margin: 24px 0;
+  padding: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown .katex-error {
+  color: inherit;
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+@media (hover: none) {
+  .markdown-diagram-actions {
+    opacity: 1;
+  }
+}
+@media (max-width: 760px) {
+  .markdown h1 {
+    font-size: 25px;
+  }
+  .markdown h2 {
+    font-size: 22px;
+  }
+  .markdown :is(th, td) {
+    padding: 8px 10px;
+    min-width: 80px;
+  }
+  .markdown-code pre {
+    padding: 12px 16px 18px;
+  }
+  .markdown-code-header {
+    padding-inline: 16px 12px;
+  }
+}

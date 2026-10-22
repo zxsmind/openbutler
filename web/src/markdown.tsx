@@ -1,106 +1,116 @@
-import { Fragment, createElement, useMemo, type ReactNode } from 'react';
-import { marked, type Token, type Tokens } from 'marked';
+import { createContext, memo, useContext, useId, useMemo, type ComponentProps } from 'react';
+import type { Root } from 'hast';
+import { visit } from 'unist-util-visit';
+import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import rehypeKatex from 'rehype-katex';
+import { CodeBlock } from './markdown-code.js';
+import MarkdownDiagram from './markdown-diagram.js';
+import 'katex/dist/katex.min.css';
+import './markdown.css';
 
-// Render tokens as React nodes: model-supplied HTML is always escaped.
-function renderTokens(tokens: Token[]): ReactNode {
-  return tokens.map((token, index) => {
-    const children = 'tokens' in token && token.tokens ? renderTokens(token.tokens) : 'text' in token ? token.text : null;
-    let content: ReactNode;
-    switch (token.type) {
-      case 'space':
-      case 'def':
-        return null;
-      case 'heading':
-        content = createElement(`h${token.depth}`, null, children);
-        break;
-      case 'paragraph':
-        content = <p>{children}</p>;
-        break;
-      case 'strong':
-        content = <strong>{children}</strong>;
-        break;
-      case 'em':
-        content = <em>{children}</em>;
-        break;
-      case 'del':
-        content = <del>{children}</del>;
-        break;
-      case 'codespan':
-        content = <code>{token.text}</code>;
-        break;
-      case 'code':
-        content = (
-          <pre className="code">
-            <code>{token.text}</code>
-          </pre>
-        );
-        break;
-      case 'blockquote':
-        content = <blockquote>{children}</blockquote>;
-        break;
-      case 'br':
-        content = <br />;
-        break;
-      case 'hr':
-        content = <hr />;
-        break;
-      case 'link':
-        content = /^(https?:|mailto:)/i.test(token.href) ? (
-          <a href={token.href} target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        ) : (
-          <span>{children}</span>
-        );
-        break;
-      case 'image':
-        content = <span>{token.text || 'Image'}</span>;
-        break;
-      case 'list': {
-        const list = token as Tokens.List;
-        const items = list.items.map((item, i) => (
-          <li key={i}>
-            {item.task ? <input type="checkbox" checked={!!item.checked} disabled /> : null}
-            {renderTokens(item.tokens)}
-          </li>
-        ));
-        content = list.ordered ? <ol start={Number(list.start) || 1}>{items}</ol> : <ul>{items}</ul>;
-        break;
+const MarkdownSource = createContext('');
+const remarkPlugins = [remarkGfm, remarkMath];
+const schema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), 'u', 'mark', 'sub', 'sup', 'kbd'],
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [['className', /^language-./, 'math-inline', 'math-display']],
+  },
+};
+function localAnchors({ prefix }: { prefix: string }) {
+  return (tree: Root) => {
+    const ids = new Map<string, string>();
+    visit(tree, 'element', (node) => {
+      if (typeof node.properties.id === 'string') {
+        const original = node.properties.id;
+        node.properties.id = prefix + original;
+        ids.set(original, node.properties.id);
       }
-      case 'table': {
-        const table = token as Tokens.Table;
-        content = (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  {table.header.map((cell, i) => (
-                    <th key={i}>{renderTokens(cell.tokens)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {table.rows.map((row, i) => (
-                  <tr key={i}>
-                    {row.map((cell, j) => (
-                      <td key={j}>{renderTokens(cell.tokens)}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-        break;
+    });
+    const target = (id: string) => ids.get(id) ?? ids.get(`${defaultSchema.clobberPrefix}${id}`);
+    visit(tree, 'element', (node) => {
+      const href = node.properties.href;
+      if (typeof href === 'string' && href.startsWith('#')) {
+        try {
+          const id = target(decodeURIComponent(href.slice(1)));
+          if (id) node.properties.href = `#${id}`;
+        } catch {
+          /* An invalid fragment remains an ordinary link. */
+        }
       }
-      default:
-        content = children ?? token.raw;
-    }
-    return <Fragment key={index}>{content}</Fragment>;
-  });
+      const describedBy = node.properties.ariaDescribedBy;
+      if (Array.isArray(describedBy)) node.properties.ariaDescribedBy = describedBy.map((id) => target(String(id)) ?? id);
+    });
+  };
 }
 
-export function Markdown({ text }: { text: string }) {
-  const tokens = useMemo(() => marked.lexer(text), [text]);
-  return <div className="markdown">{renderTokens(tokens)}</div>;
+const basePlugins: NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']> = [rehypeRaw, [rehypeSanitize, schema]];
+
+function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
+  const markdown = useContext(MarkdownSource);
+  const code = node?.children[0];
+  if (code?.type !== 'element' || code.tagName !== 'code' || code.children.some((child) => child.type !== 'text'))
+    return <pre {...props}>{children}</pre>;
+  const source = code.children
+    .map((child) => (child.type === 'text' ? child.value : ''))
+    .join('')
+    .replace(/\n$/, '');
+  const classes = Array.isArray(code.properties.className) ? code.properties.className : [];
+  const language = String(classes.find((name) => String(name).startsWith('language-')) ?? '')
+    .replace(/^language-/, '')
+    .toLowerCase();
+  const raw = markdown.slice(node?.position?.start.offset ?? 0, node?.position?.end.offset ?? 0);
+  const fence = /^ {0,3}(`{3,}|~{3,})/.exec(raw)?.[1];
+  const complete = !fence || new RegExp(`\\n {0,3}${fence[0]}{${fence.length},}[\\t ]*(?:\\r?\\n)*$`).test(raw);
+  return language === 'mermaid' ? (
+    <MarkdownDiagram source={source} complete={complete} />
+  ) : (
+    <CodeBlock source={source} language={language} complete={complete} />
+  );
 }
+
+// Stable component identities preserve code controls while the message streams.
+const components: Components = {
+  pre: MarkdownPre,
+  table: ({ node: _node, ...props }) => (
+    <div className="markdown-table-scroll" role="region" aria-label="Table" tabIndex={0} data-scroll-viewport>
+      <table {...props} />
+    </div>
+  ),
+  a: ({ node: _node, href, ...props }) => (
+    <a
+      {...props}
+      href={href}
+      target={href?.startsWith('#') ? undefined : '_blank'}
+      data-scroll-preserve={href?.startsWith('#') || undefined}
+      rel="noreferrer"
+    />
+  ),
+  img: ({ node: _node, ...props }) => <img {...props} loading="lazy" decoding="async" referrerPolicy="no-referrer" />,
+};
+
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
+  const id = useId();
+  const rehypePlugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']>>(
+    () => [
+      ...basePlugins,
+      [localAnchors, { prefix: `md-${id.replace(/[^a-zA-Z0-9_-]/g, '')}-` }],
+      [rehypeKatex, { strict: 'ignore', trust: false }],
+    ],
+    [id],
+  );
+  return (
+    <MarkdownSource.Provider value={text}>
+      <div className="markdown">
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components}>
+          {text}
+        </ReactMarkdown>
+      </div>
+    </MarkdownSource.Provider>
+  );
+});
