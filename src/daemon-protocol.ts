@@ -50,7 +50,7 @@ export type SessionPatchData = {
   pendingQuestion: AgentSessionSnapshot['pendingQuestion'];
   queuedMessageCount: number;
   firstQueuedMessage: { text: string; imageCount: number } | null;
-  queuedMessages: { text: string; imageCount: number }[];
+  queuedMessages: AgentSessionSnapshot['queuedMessages'];
   sessionSaveError: string | null;
   streamingAssistantIndex: number | null;
   runtime: RuntimeViewData;

@@ -74,6 +74,8 @@ function usage(): void {
       'Choose the tool approval mode; --review-timeout <seconds> tunes auto-review.',
     ],
     ['ranite daemon', 'Start, inspect, stop, or toggle automatic startup of the background host.'],
+    ['ranite usage', 'Show recorded token use and cost: --days, --session, --model, --json.'],
+    ['ranite logs', 'Read the machine log: --lines, --level, --event, --json.'],
     ['ranite stop', 'Stop the background host.'],
     ['ranite restart', 'Restart the background host and reconnect open sessions.'],
     ['ranite mcp', 'Manage global MCP servers.'],
@@ -1671,6 +1673,16 @@ async function main(): Promise<void> {
       const status = await restartDaemon();
       ui.success(`Background host restarted (pid ${status.pid}).`);
       ui.info('Open sessions reconnect automatically.');
+      return;
+    }
+    case 'logs': {
+      const { runLogs } = await import('./cli/logs.js');
+      await runLogs(parsed);
+      return;
+    }
+    case 'usage': {
+      const { runUsage } = await import('./cli/usage.js');
+      await runUsage(parsed);
       return;
     }
     case 'schedule': {

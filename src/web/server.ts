@@ -1,22 +1,65 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeBase64Image, MAX_IMAGE_BYTES } from '../image-data.js';
-import { loadSettings } from '../settings.js';
+import { getDataPath } from '../paths.js';
+import { clearModalCredentials, loadModalCredentials, loadSettings, saveModalCredentials, saveSettings } from '../settings.js';
+import { verifyModalCredentials } from '../modal.js';
+import { getProvider, listProviderSummaries } from '../provider/catalog.js';
+import { addProviderKeys } from '../provider/keys.js';
+import { verifyAttachmentPath } from '../attachments.js';
 import { connectDaemonSession } from '../daemon-client.js';
+import { getDaemonStatus } from '../daemon.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../agent-session.js';
+import { ActivityLedger } from '../activity-ledger.js';
+import { createLogger, fileSink } from '../logging.js';
+import { getRaniteVersion } from '../version.js';
+import { forgetRememberedPermission, listRememberedPermissions } from '../tool-permissions.js';
+import { bucketUsage, bucketUsageByHour, groupHoursByDay, summarizeUsage } from '../usage/report.js';
+import { readMemorySnapshot } from '../memory-view.js';
+import { readLogRecords } from '../cli/logs.js';
+import { createProject, listProjects, projectFolder, ProjectInputError, resolveProjectSelection } from '../projects/store.js';
+import { pickProjectFolder } from './folder-picker.js';
 
 /** Outside the Windows ephemeral range so the port stays free between runs. */
+/**
+ * Every model a configured provider offers, with the flag that decides whether it
+ * is offered in the composer. The catalog is the source, but a model the operator
+ * added by hand survives even when the catalog does not know it: dropping it from
+ * the list would silently disable a working configuration.
+ */
+export interface ModelCatalogRow {
+  providerId: string;
+  models: Array<{ modelId: string; name: string; active: boolean }>;
+}
+
+export function modelCatalogRows(): ModelCatalogRow[] {
+  const settings = loadSettings();
+  return Object.entries(settings.providers)
+    .filter(([, provider]) => provider.enabled)
+    .map(([providerId, provider]) => {
+      const active = new Set(provider.models ?? []);
+      const known = Object.keys(getProvider(providerId)?.models ?? {});
+      const ids = [...new Set([...known, ...active])].sort();
+      return {
+        providerId,
+        models: ids.map((modelId) => ({ modelId, name: modelId.split('/').pop() ?? modelId, active: active.has(modelId) })),
+      };
+    })
+    .sort((left, right) => left.providerId.localeCompare(right.providerId));
+}
+
 export const DEFAULT_WEB_PORT = 45278;
+
 export const DEFAULT_WEB_HOST = '127.0.0.1';
 
 const PAIR_TTL_MS = 5 * 60 * 1000;
 const SESSION_COOKIE = 'ranite_web';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const HEARTBEAT_MS = 25_000;
+const HEARTBEAT_MS = 15_000;
 /**
  * The transcript can hold thousands of entries, so the initial paint carries a
  * window instead of the whole history. Older entries are fetched on demand;
@@ -24,8 +67,6 @@ const HEARTBEAT_MS = 25_000;
  */
 const WINDOW_ENTRIES = 100;
 const MAX_PAGE_ENTRIES = 200;
-/** Above this many changed entries in one publish, a full window is cheaper than a diff. */
-const MAX_ENTRY_UPDATES = 12;
 
 type Entry = AgentSessionSnapshot['session']['entries'][number];
 
@@ -52,6 +93,8 @@ interface SseClient {
   res: ServerResponse;
   lastEntries: Entry[] | null;
   sessionId: string;
+  /** When this stream last carried a byte, so a close can say how silent it was. */
+  lastWriteAt: number;
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -102,6 +145,22 @@ function defaultAssetsDir(): string | null {
   return null;
 }
 
+/**
+ * Identifies the bundle being served. Asset names are content-hashed, so the
+ * index file's own digest changes exactly when a rebuild does.
+ */
+function readBuildId(assetsDir: string | undefined): string | null {
+  if (!assetsDir) return null;
+  try {
+    return createHash('sha256')
+      .update(readFileSync(join(assetsDir, 'index.html')))
+      .digest('hex')
+      .slice(0, 12);
+  } catch {
+    return null;
+  }
+}
+
 function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -120,21 +179,49 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   });
 }
 
+/**
+ * The cookie that marks a browser as paired with this machine. Kept on disk so
+ * the owner's devices survive a restart of the host or of this server; a token
+ * minted per run would silently unpair them every time.
+ */
+function persistentSessionToken(): string {
+  const file = getDataPath('web-session-token');
+  try {
+    const existing = readFileSync(file, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch {
+    // Missing or unreadable: mint one below.
+  }
+  const token = randomBytes(32).toString('base64url');
+  try {
+    writeFileSync(file, token, { mode: 0o600 });
+  } catch {
+    // A read-only data directory still works, it just forgets pairings.
+  }
+  return token;
+}
+
 export async function startWebServer(options: WebServerOptions): Promise<WebServer> {
   const host = options.host ?? DEFAULT_WEB_HOST;
   let port = options.port ?? DEFAULT_WEB_PORT;
   const assetsDir = options.assetsDir ?? defaultAssetsDir() ?? undefined;
+  // An open tab keeps the bundle it loaded, so a rebuild would only reach the
+  // reader after a manual reload. The build id lets the client notice and reload
+  // itself once it is idle.
+  const buildId = readBuildId(assetsDir);
   const startedAt = Date.now();
   const client: AgentSessionClient = await connectDaemonSession(options.workspaceRoot);
 
-  const sessionToken = randomBytes(32).toString('base64url');
+  // A paired browser must stay paired across restarts: the owner's phone and
+  // desktop should not have to re-pair every time the host or this server comes
+  // back. The token lives in the data directory, readable only by this user.
+  const sessionToken = persistentSessionToken();
   let pairToken = randomBytes(32).toString('base64url');
   let pairExpiresAt = Date.now() + PAIR_TTL_MS;
   let pairUsed = false;
 
+  const logger = createLogger({ sink: fileSink(join(getDataPath('logs'), 'web.log')), context: { process: 'web' } });
   const clients = new Set<SseClient>();
-  const allowedOrigins = new Set<string>();
-  let originChecked = false;
 
   const issuePairToken = (): string => {
     pairToken = randomBytes(32).toString('base64url');
@@ -150,9 +237,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       entries,
       updated: [] as { index: number; entry: Entry }[],
       from,
-      totalEntries: snapshot.session.entries.length,
+      totalEntries: client.getServerEntries().length,
       busy: snapshot.busy,
       queuedMessageCount: snapshot.queuedMessageCount,
+      queuedMessages: snapshot.queuedMessages,
       pendingApproval: snapshot.pendingApproval ?? null,
       pendingQuestion: snapshot.pendingQuestion ?? null,
       contextTokens: (snapshot.session as { contextTokens?: number }).contextTokens ?? null,
@@ -167,37 +255,62 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         reasoningDefault: client.runtime.reasoningDefault,
         workspaceRoot: client.runtime.workspaceRoot,
       },
-      session: { id: snapshot.session.id, title: snapshot.session.title },
+      session: {
+        id: snapshot.session.id,
+        title: snapshot.session.title,
+        ...(snapshot.session.project ? { project: snapshot.session.project } : {}),
+        projectLocked: snapshot.session.project?.locked === true || snapshot.session.hasUserMessage === true,
+      },
+      buildId,
     };
   };
 
   const writeEvent = (client_: SseClient, event: string, data: unknown) => {
-    client_.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // One dead socket must never break the broadcast for the other clients, so a
+    // failed write drops that stream instead of throwing through the loop.
+    if (client_.res.writableEnded || client_.res.destroyed) {
+      clients.delete(client_);
+      return;
+    }
+    try {
+      client_.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      client_.lastWriteAt = Date.now();
+    } catch (problem) {
+      clients.delete(client_);
+      logger.warn('web.stream.write-failed', {
+        event,
+        error: problem instanceof Error ? problem.message : String(problem),
+      });
+    }
   };
 
   const broadcast = () => {
     if (clients.size === 0) return;
-    const entries = client.getSnapshot().session.entries as Entry[];
+    const entries = client.getServerEntries() as Entry[];
     for (const target of clients) {
       const previous = target.lastEntries;
+      const sessionChanged = target.sessionId !== client.getSnapshot().session.id;
       let payload: ReturnType<typeof snapshotPayload>;
-      if (!previous || target.sessionId !== client.getSnapshot().session.id || entries.length < previous.length) {
+      let resetReason: string | null = null;
+      if (!previous || sessionChanged || entries.length < previous.length) {
+        resetReason = !previous ? 'first' : sessionChanged ? 'session' : 'shrunk';
         const from = Math.max(0, entries.length - WINDOW_ENTRIES);
         payload = snapshotPayload(entries.slice(from), true, from);
       } else {
         const updated: { index: number; entry: Entry }[] = [];
-        let resetNeeded = false;
         for (let index = 0; index < previous.length; index += 1) {
-          if (entries[index] !== previous[index]) {
-            updated.push({ index, entry: entries[index] });
-            if (updated.length > MAX_ENTRY_UPDATES) {
-              resetNeeded = true;
-              break;
-            }
-          }
+          if (entries[index] !== previous[index]) updated.push({ index, entry: entries[index] });
         }
-        const appended = entries.length - previous.length;
-        if (resetNeeded || appended > WINDOW_ENTRIES) {
+        // A reset is not a cheaper patch: it replaces the reader's list with the
+        // newest window, so every group is rebuilt and the reader loses the place
+        // they were reading. A tool batch stamps several entries at once, which
+        // used to trip a size threshold and reset a busy run every few seconds.
+        // It stays only for the case a patch cannot express — a rewrite so broad
+        // that the list the reader holds is no longer this conversation — and only
+        // when the list is longer than the window, because otherwise the reset
+        // sends back what the reader already has.
+        if (updated.length * 2 > entries.length && entries.length > WINDOW_ENTRIES) {
+          resetReason = 'rewritten';
           const from = Math.max(0, entries.length - WINDOW_ENTRIES);
           payload = snapshotPayload(entries.slice(from), true, from);
         } else {
@@ -207,6 +320,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           };
         }
       }
+      // A reset is the only event that can move the reader's list under them, so
+      // the reason is recorded; a stream that resets often is a real defect.
+      if (resetReason)
+        logger.info('web.stream.reset', {
+          reason: resetReason,
+          from: payload.from,
+          total: entries.length,
+          previous: previous?.length ?? null,
+        });
       target.lastEntries = entries;
       target.sessionId = client.getSnapshot().session.id;
       writeEvent(target, payload.reset ? 'snapshot' : 'patch', payload);
@@ -224,11 +346,30 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   const originAllowed = (req: IncomingMessage): boolean => {
     const origin = req.headers.origin;
     if (!origin) return true;
-    return allowedOrigins.has(origin);
+    // The request is same-origin when its Origin names the host it was sent to.
+    // Comparing against the request's own Host covers every way in — localhost,
+    // a LAN address, a tailnet name behind an HTTPS proxy — without listing them,
+    // and still refuses a page served from somewhere else.
+    try {
+      return new URL(origin).host === req.headers.host;
+    } catch {
+      return false;
+    }
   };
 
   const sendJson = (res: ServerResponse, status: number, body: unknown) => {
     const payload = JSON.stringify(body);
+    // A refused request is the one a reader asks about later, so failures carry
+    // their reason into the log; successful responses would only be noise.
+    if (status >= 400) {
+      const error = (body as { error?: unknown } | null)?.error;
+      logger.warn('web.request.refused', {
+        method: res.req?.method ?? null,
+        path: res.req?.url ?? null,
+        status,
+        ...(typeof error === 'string' ? { error } : {}),
+      });
+    }
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(payload);
   };
@@ -254,12 +395,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${host}:${port}`);
-    if (!originChecked) {
-      for (const candidate of [host, '127.0.0.1', 'localhost']) {
-        allowedOrigins.add(`http://${candidate}:${port}`);
-      }
-      originChecked = true;
-    }
 
     if (url.pathname === '/auth/pair' && req.method === 'GET') {
       const supplied = url.searchParams.get('t') ?? '';
@@ -281,15 +416,54 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     const protectedPath = url.pathname.startsWith('/api/');
     if (protectedPath) {
       if (!originAllowed(req)) return sendJson(res, 403, { error: 'Cross-origin request refused.' });
-      if (!isAuthorized(req)) return sendJson(res, 401, { error: 'Pair this browser first: run `ranite web`.' });
+      if (!isAuthorized(req)) {
+        // Whether the browser sent a cookie at all is the difference between a
+        // stale pairing and a proxy that dropped the header.
+        logger.warn('web.auth.refused', {
+          path: url.pathname,
+          cookieLength: req.headers.cookie?.length ?? 0,
+          host: req.headers.host ?? null,
+        });
+        return sendJson(res, 401, { error: 'Pair this browser first: run `ranite web`.' });
+      }
     }
 
     if (url.pathname === '/api/health') {
       return sendJson(res, 200, { ok: true, clients: clients.size, uptimeMs: Date.now() - startedAt });
     }
 
+    if (url.pathname === '/api/projects' && req.method === 'GET') {
+      return sendJson(res, 200, { projects: listProjects(), supportsSelection: client.runtime.supportsProjects === true });
+    }
+    if (url.pathname === '/api/projects' && req.method === 'POST') {
+      return sendJson(res, 201, createProject(JSON.parse(await readBody(req, 65536))));
+    }
+    if (url.pathname === '/api/project-folders' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req, 65536)) as { path?: unknown };
+      return sendJson(res, 200, { path: projectFolder(body.path) });
+    }
+    if (url.pathname === '/api/project-folder-picker' && req.method === 'POST') {
+      return sendJson(res, 200, { path: await pickProjectFolder() });
+    }
+    if (url.pathname === '/api/session-project' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req, 4096)) as { sessionId?: unknown; projectId?: unknown };
+      if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'Invalid project selection.' });
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
+      const current = client.getSnapshot();
+      if (current.session.project?.locked || current.session.hasUserMessage)
+        return sendJson(res, 409, { error: "This chat's project is fixed. Start a new chat." });
+      if (current.busy || current.queuedMessageCount > 0) return sendJson(res, 409, { error: 'Wait for the running task to finish.' });
+      if (!client.runtime.supportsProjects || !client.selectProject)
+        return sendJson(res, 409, { error: 'Restart the Ranite server to apply the project scope.' });
+      resolveProjectSelection(body.projectId);
+      await client.selectProject(body.projectId as string | null, body.sessionId as string);
+      const entries = client.getServerEntries() as Entry[];
+      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+    }
+
     if (url.pathname === '/api/snapshot' && req.method === 'GET') {
-      const entries = client.getSnapshot().session.entries as Entry[];
+      const entries = client.getServerEntries() as Entry[];
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
     }
@@ -305,8 +479,151 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           updatedAt: session.updatedAt,
           preview: session.preview ?? null,
           workspaceRoot: session.workspaceRoot,
+          ...(session.project ? { project: session.project } : {}),
         })),
       );
+    }
+
+    if (url.pathname === '/api/approvals' && req.method === 'GET') {
+      let remembered: Array<{ id: string; label: string; at: number }> = [];
+      try {
+        remembered = listRememberedPermissions().map((entry) => ({ id: entry.hash, label: entry.label, at: entry.at }));
+      } catch {
+        remembered = [];
+      }
+      const settings = loadSettings();
+      return sendJson(res, 200, {
+        mode: client.runtime.approvalMode ?? 'workspace',
+        remembered: remembered.length,
+        permissions: remembered,
+        supported: ['workspace', 'auto-review', 'full-access'],
+        // A reviewer that is not named falls back to the conversation's own model.
+        autoReview: {
+          providerId: settings.autoReviewProvider ?? null,
+          modelId: settings.autoReviewModel ?? null,
+          timeoutSeconds: settings.autoReviewTimeoutSeconds ?? null,
+        },
+        models: Object.entries(settings.providers)
+          .filter(([, provider]) => provider.enabled)
+          .flatMap(([providerId, provider]) => (provider.models ?? []).map((modelId) => ({ providerId, modelId }))),
+      });
+    }
+
+    if (url.pathname === '/api/approvals/auto-review' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as {
+        providerId?: unknown;
+        modelId?: unknown;
+        timeoutSeconds?: unknown;
+      };
+      const settings = loadSettings();
+      if (body.providerId === null || body.modelId === null) {
+        delete settings.autoReviewProvider;
+        delete settings.autoReviewModel;
+      } else {
+        if (typeof body.providerId !== 'string' || typeof body.modelId !== 'string')
+          return sendJson(res, 400, { error: 'Choose a reviewer model, or clear it to use the conversation model.' });
+        const provider = settings.providers[body.providerId];
+        if (!provider?.enabled || !provider.models?.includes(body.modelId))
+          return sendJson(res, 400, { error: 'Choose an active model for the reviewer.' });
+        settings.autoReviewProvider = body.providerId;
+        settings.autoReviewModel = body.modelId;
+      }
+      if (body.timeoutSeconds === null) delete settings.autoReviewTimeoutSeconds;
+      else if (body.timeoutSeconds !== undefined) {
+        if (
+          typeof body.timeoutSeconds !== 'number' ||
+          !Number.isFinite(body.timeoutSeconds) ||
+          body.timeoutSeconds < 5 ||
+          body.timeoutSeconds > 600
+        )
+          return sendJson(res, 400, { error: 'The review timeout must be between 5 and 600 seconds.' });
+        settings.autoReviewTimeoutSeconds = Math.round(body.timeoutSeconds);
+      }
+      saveSettings(settings);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/approvals/forget' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { id?: unknown };
+      if (typeof body.id !== 'string') return sendJson(res, 400, { error: 'Choose a remembered permission.' });
+      const removed = forgetRememberedPermission(body.id);
+      return sendJson(res, removed ? 200 : 404, { removed });
+    }
+
+    if (url.pathname === '/api/telegram' && req.method === 'GET') {
+      const status = await getDaemonStatus().catch(() => null);
+      const telegram = status?.telegram ?? null;
+      return sendJson(res, 200, {
+        enabled: loadSettings().telegram?.enabled === true,
+        state: telegram?.state ?? 'disabled',
+        paired: telegram?.paired ?? false,
+        username: telegram?.username ?? null,
+        error: telegram?.error ?? null,
+      });
+    }
+
+    if (url.pathname === '/api/about' && req.method === 'GET') {
+      return sendJson(res, 200, {
+        version: getRaniteVersion(),
+        workspace: options.workspaceRoot,
+        dataDir: getDataPath(),
+        logPath: getDataPath(join('logs', 'ranite.log')),
+        uptimeMs: Date.now() - startedAt,
+        buildId,
+        providerId: client.runtime.providerId,
+        modelId: client.runtime.modelId,
+        contextWindowTokens: client.runtime.contextWindowTokens ?? null,
+      });
+    }
+
+    if (url.pathname === '/api/logs' && req.method === 'GET') {
+      const lines = Number(url.searchParams.get('lines') ?? 200);
+      const level = (url.searchParams.get('level') ?? 'info') as 'error' | 'warn' | 'info' | 'debug';
+      const event = url.searchParams.get('event');
+      const order = { error: 0, warn: 1, info: 2, debug: 3 } as const;
+      if (!(level in order)) return sendJson(res, 400, { error: 'level must be error, warn, info, or debug.' });
+      const records = readLogRecords(getDataPath(join('logs', 'ranite.log')))
+        .filter((record) => order[record.level] <= order[level])
+        .filter((record) => !event || record.event.includes(event));
+      return sendJson(res, 200, { records: records.slice(-Math.min(5000, Math.max(1, Math.floor(lines)))) });
+    }
+
+    if (url.pathname === '/api/usage' && req.method === 'GET') {
+      const days = Number(url.searchParams.get('days') ?? 30);
+      const window = Number.isFinite(days) ? Math.min(3650, Math.max(1, Math.floor(days))) : 30;
+      const sessionId = url.searchParams.get('session');
+      const ledger = new ActivityLedger(undefined, { readOnly: true });
+      try {
+        const rows = ledger.usageRows({
+          sinceMs: Date.now() - window * 24 * 60 * 60 * 1000,
+          ...(sessionId ? { sessionId } : {}),
+        });
+        const buckets = bucketUsage(rows);
+        return sendJson(res, 200, {
+          label: `last ${window} days`,
+          summary: summarizeUsage(buckets, rows),
+          days: buckets,
+        });
+      } finally {
+        ledger.close();
+      }
+    }
+
+    if (url.pathname === '/api/usage/hours' && req.method === 'GET') {
+      const hours = Number(url.searchParams.get('hours') ?? 48);
+      const window = Number.isFinite(hours) ? Math.min(24 * 31, Math.max(1, Math.floor(hours))) : 48;
+      const ledger = new ActivityLedger(undefined, { readOnly: true });
+      try {
+        const rows = ledger.usageRows({ sinceMs: Date.now() - window * 60 * 60 * 1000 });
+        const { peak, days } = groupHoursByDay(bucketUsageByHour(rows));
+        return sendJson(res, 200, { label: `last ${window} hours`, peak, days });
+      } finally {
+        ledger.close();
+      }
+    }
+
+    if (url.pathname === '/api/memory' && req.method === 'GET') {
+      return sendJson(res, 200, readMemorySnapshot(options.workspaceRoot));
     }
 
     if (url.pathname === '/api/models' && req.method === 'GET') {
@@ -315,22 +632,194 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           ? (provider.models ?? []).map((modelId) => ({ providerId, modelId, name: modelId.split('/').pop() ?? modelId }))
           : [],
       );
-      const current = { providerId: client.runtime.providerId, modelId: client.runtime.modelId, name: client.runtime.modelName };
+      // runtime.modelName may identify the provider; model rows must identify the model.
+      const current = {
+        providerId: client.runtime.providerId,
+        modelId: client.runtime.modelId,
+        name: client.runtime.modelId.split('/').pop() ?? client.runtime.modelId,
+      };
       return sendJson(res, 200, [
         current,
         ...configured.filter((model) => model.providerId !== current.providerId || model.modelId !== current.modelId),
       ]);
     }
 
+    if (url.pathname === '/api/models/catalog' && req.method === 'GET') {
+      return sendJson(res, 200, modelCatalogRows());
+    }
+
+    if (url.pathname === '/api/models/active' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as {
+        providerId?: unknown;
+        modelId?: unknown;
+        active?: unknown;
+        all?: unknown;
+      };
+      if (typeof body.providerId !== 'string' || typeof body.active !== 'boolean')
+        return sendJson(res, 400, { error: 'Choose a provider and whether its models are active.' });
+      const settings = loadSettings();
+      const provider = settings.providers[body.providerId];
+      if (!provider?.enabled) return sendJson(res, 400, { error: 'That provider is not configured.' });
+      const known = provider.models ?? [];
+      const catalog = Object.keys(getProvider(body.providerId)?.models ?? {});
+      let models: string[];
+      if (body.all === true) {
+        // One request for a provider, not one per model: the page has no reason to
+        // write the settings file forty times to switch a list on.
+        models = body.active ? catalog : [];
+      } else {
+        if (typeof body.modelId !== 'string') return sendJson(res, 400, { error: 'Choose a model.' });
+        // A custom provider declares its own models: the catalog cannot be the
+        // authority for an endpoint it has never seen.
+        const custom = Boolean(provider.npm);
+        if (body.active && !custom && !catalog.includes(body.modelId) && !known.includes(body.modelId))
+          return sendJson(res, 400, { error: 'That model is not in the catalog.' });
+        models = body.active ? [...new Set([...known, body.modelId])] : known.filter((modelId) => modelId !== body.modelId);
+      }
+      settings.providers[body.providerId] = { ...provider, models };
+      saveSettings(settings);
+      return sendJson(res, 200, modelCatalogRows());
+    }
+
+    if (url.pathname === '/api/providers' && req.method === 'GET') {
+      const settings = loadSettings();
+      // The catalog is the list, but a provider configured by hand (a custom
+      // endpoint the catalog has never heard of) still belongs in it.
+      const rows = new Map(
+        listProviderSummaries().map((entry) => [
+          entry.id,
+          {
+            providerId: entry.id,
+            modelCount: entry.modelCount,
+            configured: entry.id in settings.providers,
+            activeModels: settings.providers[entry.id]?.models?.length ?? 0,
+            custom: false,
+          },
+        ]),
+      );
+      for (const [providerId, provider] of Object.entries(settings.providers)) {
+        rows.set(providerId, {
+          providerId,
+          modelCount: rows.get(providerId)?.modelCount ?? provider.models?.length ?? 0,
+          configured: true,
+          activeModels: provider.models?.length ?? 0,
+          custom: Boolean(provider.npm),
+        });
+      }
+      return sendJson(
+        res,
+        200,
+        [...rows.values()].sort((left, right) => left.providerId.localeCompare(right.providerId)),
+      );
+    }
+
+    if (url.pathname === '/api/providers' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as {
+        providerId?: unknown;
+        apiKey?: unknown;
+        npm?: unknown;
+        url?: unknown;
+        model?: unknown;
+      };
+      if (typeof body.providerId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(body.providerId))
+        return sendJson(res, 400, { error: 'Choose a provider id using letters, digits, dots, dashes or underscores.' });
+      const settings = loadSettings();
+      const catalogued = listProviderSummaries().some((entry) => entry.id === body.providerId);
+      const npm = typeof body.npm === 'string' && body.npm.trim() ? body.npm.trim() : undefined;
+      const url = typeof body.url === 'string' && body.url.trim() ? body.url.trim() : undefined;
+      const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+      if (!catalogued && !(body.providerId in settings.providers) && !npm)
+        return sendJson(res, 400, {
+          error: 'The catalog does not know this provider: name the AI SDK package (npm) that speaks it.',
+        });
+      if (!catalogued && !(body.providerId in settings.providers) && !url)
+        return sendJson(res, 400, { error: 'A custom provider needs the base URL of its API.' });
+      if (apiKey) addProviderKeys(settings, body.providerId, [apiKey]);
+      const entry = settings.providers[body.providerId] ?? { enabled: true, keys: [] };
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined;
+      const models = model === undefined ? entry.models : [...new Set([...(entry.models ?? []), model])];
+      settings.providers[body.providerId] = {
+        ...entry,
+        // Adding a provider is a statement that it should be usable: an entry saved
+        // as disabled would look configured in settings and fail at run time.
+        enabled: true,
+        ...(models === undefined ? {} : { models }),
+        ...(npm === undefined ? {} : { npm }),
+        ...(url === undefined ? {} : { url }),
+      };
+      if (!settings.providerOrder.includes(body.providerId)) settings.providerOrder.push(body.providerId);
+      saveSettings(settings);
+      // The key never travels back: the response carries ids and counts only.
+      return sendJson(res, 200, modelCatalogRows());
+    }
+
+    if (url.pathname === '/api/providers/remove' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { providerId?: unknown };
+      if (typeof body.providerId !== 'string') return sendJson(res, 400, { error: 'Choose a provider.' });
+      const settings = loadSettings();
+      if (!(body.providerId in settings.providers)) return sendJson(res, 404, { error: 'That provider is not configured.' });
+      if (settings.defaultProvider === body.providerId)
+        return sendJson(res, 409, {
+          error: 'This provider answers the conversation. Choose another model in the composer before removing it.',
+        });
+      delete settings.providers[body.providerId];
+      settings.providerOrder = settings.providerOrder.filter((id) => id !== body.providerId);
+      saveSettings(settings);
+      return sendJson(res, 200, modelCatalogRows());
+    }
+
+    if (url.pathname === '/api/modal' && req.method === 'GET') {
+      const credentials = loadModalCredentials();
+      if (!credentials) return sendJson(res, 200, { configured: false, verified: false, apps: null, error: null, tokenId: null });
+      // The id is not a secret and is safe to show; the secret never leaves the machine.
+      const check = await verifyModalCredentials(credentials);
+      return sendJson(res, 200, {
+        configured: true,
+        verified: check.ok,
+        apps: check.apps,
+        error: check.error,
+        tokenId: credentials.tokenId,
+      });
+    }
+
+    if (url.pathname === '/api/modal' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { tokenId?: unknown; tokenSecret?: unknown };
+      if (typeof body.tokenId !== 'string' || typeof body.tokenSecret !== 'string' || !body.tokenId.trim() || !body.tokenSecret.trim())
+        return sendJson(res, 400, { error: 'Enter both the token id and the token secret.' });
+      const credentials = { tokenId: body.tokenId.trim(), tokenSecret: body.tokenSecret.trim() };
+      const check = await verifyModalCredentials(credentials);
+      if (!check.ok) return sendJson(res, 400, { error: check.error ?? 'Modal rejected these credentials.' });
+      saveModalCredentials(credentials);
+      return sendJson(res, 200, {
+        configured: true,
+        verified: true,
+        apps: check.apps,
+        error: null,
+        tokenId: credentials.tokenId,
+      });
+    }
+
+    if (url.pathname === '/api/modal/clear' && req.method === 'POST') {
+      clearModalCredentials();
+      return sendJson(res, 200, { configured: false, verified: false, apps: null, error: null, tokenId: null });
+    }
+
     if (url.pathname === '/api/session' && req.method === 'POST') {
       const body: unknown = JSON.parse((await readBody(req)) || '{}');
       if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'Invalid session action.' });
-      const { action, sessionId, currentSessionId } = body as { action?: unknown; sessionId?: unknown; currentSessionId?: unknown };
+      const { action, sessionId, currentSessionId, projectId } = body as {
+        action?: unknown;
+        sessionId?: unknown;
+        currentSessionId?: unknown;
+        projectId?: unknown;
+      };
       if (currentSessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
       if (client.isBusy || client.getSnapshot().queuedMessageCount > 0)
         return sendJson(res, 409, { error: 'Finish or stop the current run and clear the queue before switching chats.' });
       if (action === 'new') {
-        await client.createNewSession();
+        if (projectId !== undefined && projectId !== null && typeof projectId !== 'string')
+          return sendJson(res, 400, { error: 'Invalid project.' });
+        await client.createNewSession(projectId === undefined ? null : (projectId as string | null));
         if (client.getSnapshot().session.id === currentSessionId)
           return sendJson(res, 409, { error: 'The host could not create a new chat. Try again.' });
       } else if (action === 'load' && typeof sessionId === 'string' && sessionId.length <= 64) {
@@ -341,7 +830,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           return sendJson(res, 404, { error: 'Session not found in this workspace.' });
         if (!(await client.loadSession(sessionId))) return sendJson(res, 404, { error: 'Session not found.' });
       } else return sendJson(res, 400, { error: 'Invalid session action.' });
-      const entries = client.getSnapshot().session.entries;
+      const entries = client.getServerEntries();
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
     }
@@ -357,15 +846,50 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       if (!provider?.enabled || !provider.models?.includes(body.modelId))
         return sendJson(res, 400, { error: 'Choose a configured model.' });
       await client.selectModel(body.providerId, body.modelId);
-      const entries = client.getSnapshot().session.entries;
+      const entries = client.getServerEntries();
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+    }
+
+    if (url.pathname === '/api/approval-mode' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { mode?: unknown; sessionId?: unknown };
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
+      if (body.mode !== 'workspace' && body.mode !== 'auto-review' && body.mode !== 'full-access')
+        return sendJson(res, 400, { error: 'Choose a supported approval mode.' });
+      await client.setApprovalMode(body.mode);
+      const entries = client.getServerEntries();
+      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+    }
+
+    if (url.pathname === '/api/attachment' && req.method === 'GET') {
+      const snapshot = client.getSnapshot();
+      if (url.searchParams.get('sessionId') !== snapshot.session.id) return sendJson(res, 404, { error: 'Image unavailable.' });
+      const id = url.searchParams.get('id');
+      const attachment = snapshot.session.entries
+        .flatMap((entry) => (entry.kind === 'user' ? (entry.attachments ?? []) : []))
+        .find((file) => file.id === id && ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.mediaType));
+      if (!attachment) return sendJson(res, 404, { error: 'Image unavailable.' });
+      try {
+        verifyAttachmentPath(attachment.path);
+        const bytes = await readFile(attachment.path);
+        res.writeHead(200, {
+          'content-type': attachment.mediaType,
+          'content-length': bytes.length,
+          'cache-control': 'private, max-age=3600',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(bytes);
+      } catch {
+        sendJson(res, 404, { error: 'Image unavailable.' });
+      }
+      return;
     }
 
     if (url.pathname === '/api/entries' && req.method === 'GET') {
       const snapshot = client.getSnapshot();
       if (url.searchParams.get('sessionId') !== snapshot.session.id) return sendJson(res, 409, { error: 'The active chat changed.' });
-      const entries = snapshot.session.entries as Entry[];
+      const entries = client.getServerEntries() as Entry[];
       const beforeRaw = Number(url.searchParams.get('before') ?? entries.length);
       const limitRaw = Number(url.searchParams.get('limit') ?? 50);
       const before = Number.isFinite(beforeRaw) ? Math.max(0, Math.min(Math.floor(beforeRaw), entries.length)) : entries.length;
@@ -388,22 +912,59 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         'x-accel-buffering': 'no',
       });
       res.write(': connected\n\n');
-      const target: SseClient = { res, lastEntries: null, sessionId: client.getSnapshot().session.id };
+      let socketError: string | null = null;
+      // A socket error is the one signal that separates "the browser went away"
+      // from "this machine could not write any more".
+      res.on('error', (problem: Error) => {
+        socketError = problem.name;
+      });
+      req.socket.on('error', (problem: Error) => {
+        socketError = problem.name;
+      });
+      const target: SseClient = { res, lastEntries: null, sessionId: client.getSnapshot().session.id, lastWriteAt: Date.now() };
       clients.add(target);
-      const entries = client.getSnapshot().session.entries as Entry[];
+      const entries = client.getServerEntries() as Entry[];
       target.lastEntries = entries;
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
       writeEvent(target, 'snapshot', snapshotPayload(entries.slice(from), true, from));
-      const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
+      const heartbeat = setInterval(() => {
+        if (res.writableEnded || res.destroyed) return;
+        try {
+          // A named event, not a comment: the browser must be able to see that
+          // the stream is alive, or it cannot tell a healthy stream from a dead one.
+          res.write('event: ping\ndata: {}\n\n');
+          target.lastWriteAt = Date.now();
+        } catch {
+          /* The close handler removes the stream. */
+        }
+      }, HEARTBEAT_MS);
+      const openedAt = Date.now();
+      const agent = req.headers['user-agent'] ?? 'unknown';
+      const device = /iphone|ipad|android/i.test(agent) ? 'mobile' : 'desktop';
+      logger.info('web.stream.open', { device, port: req.socket.remotePort ?? null, agent: agent.slice(0, 80), clients: clients.size });
       req.on('close', () => {
         clearInterval(heartbeat);
         clients.delete(target);
+        // Who ended the stream is the question a "keeps dropping" report asks:
+        // a socket error, a server that could no longer write, and a browser that
+        // simply went away look identical from the outside.
+        logger.info('web.stream.close', {
+          device,
+          port: req.socket.remotePort ?? null,
+          seconds: Math.round((Date.now() - openedAt) / 1000),
+          silentMs: Date.now() - target.lastWriteAt,
+          socketError: socketError ?? null,
+          writableEnded: res.writableEnded,
+          destroyed: res.destroyed,
+          clients: clients.size,
+        });
       });
       return;
     }
 
     if (url.pathname === '/api/message' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req, 30 * 1024 * 1024)) || '{}') as {
+        projectId?: unknown;
         text?: unknown;
         sessionId?: unknown;
         images?: unknown;
@@ -411,6 +972,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       };
       if (body.sessionId !== client.getSnapshot().session.id)
         return sendJson(res, 409, { error: 'The active chat changed. Your message has not been sent.' });
+      if ('projectId' in body) return sendJson(res, 400, { error: 'The project cannot be changed from the message body.' });
       if (typeof body.text !== 'string') return sendJson(res, 400, { error: 'Message must be text.' });
       const text = (body.text ?? '').trim();
       if (Buffer.byteLength(text, 'utf8') > 1_000_000) return sendJson(res, 400, { error: 'Message is too long.' });
@@ -428,11 +990,53 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         return sendJson(res, 400, { error: 'Attach a valid PNG image of at most 5 MB.' });
       }
       if (!text && !images.length) return sendJson(res, 400, { error: 'Empty message.' });
+      const currentSession = client.getSnapshot().session;
+      if (!currentSession.project && !currentSession.hasUserMessage && client.selectProject && client.runtime.supportsProjects)
+        await client.selectProject(null, currentSession.id);
       const reasoningVariantId =
         typeof body.reasoningVariantId === 'string' ? body.reasoningVariantId : (client.runtime.reasoningDefault ?? 'default');
       if (body.reasoningVariantId !== undefined && !client.runtime.reasoningVariants.some((variant) => variant.id === reasoningVariantId))
         return sendJson(res, 400, { error: 'Choose a supported reasoning level.' });
-      await client.sendMessage({ text, images }, { reasoningVariantId, showReasoning: client.runtime.showReasoningDefault });
+      // The run outlives this request. Waiting for it here made a phone browser
+      // abandon the request with a network error on any long turn, so the message
+      // is handed over and the answer returns at once; progress arrives over SSE.
+      void client
+        .sendMessage({ text, images }, { reasoningVariantId, showReasoning: client.runtime.showReasoningDefault })
+        .catch((problem: unknown) => {
+          logger.warn('web.message.failed', { error: problem instanceof Error ? problem.message : String(problem) });
+        });
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/queue' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { sessionId?: unknown; messageId?: unknown; action?: unknown };
+      if (typeof body.sessionId !== 'string' || typeof body.messageId !== 'string' || (body.action !== 'steer' && body.action !== 'remove'))
+        return sendJson(res, 400, { error: 'Invalid queue action.' });
+      const snapshot = client.getSnapshot();
+      if (
+        snapshot.session.id !== body.sessionId ||
+        !snapshot.queuedMessages.some((message) => message.id === body.messageId && message.editable)
+      )
+        return sendJson(res, 409, { error: 'This message is no longer queued in the active session.' });
+      if (!client.manageQueuedMessage) return sendJson(res, 409, { error: 'Queue actions require an updated host.' });
+      await client.manageQueuedMessage(body.messageId, body.action, body.sessionId);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (url.pathname === '/api/client-report' && req.method === 'POST') {
+      // The browser cannot write the machine log, so it reports what only it can
+      // see: a patch that arrived with a hole, and a stream it had to rebuild.
+      const body = JSON.parse((await readBody(req, 8 * 1024)) || '{}') as { event?: unknown; [field: string]: unknown };
+      const name = typeof body.event === 'string' ? body.event.slice(0, 64) : 'unknown';
+      const fields: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(body)) {
+        // `event` names the record's own kind, so the reported name travels as
+        // `client`; a field called `event` would overwrite the record's event.
+        if (key === 'event') continue;
+        if (typeof value === 'string') fields[key] = value.slice(0, 200);
+        else if (typeof value === 'number' || typeof value === 'boolean') fields[key] = value;
+      }
+      logger.warn('web.client.report', { client: name, ...fields });
       return sendJson(res, 200, { ok: true });
     }
 
@@ -479,7 +1083,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         res.end();
         return;
       }
-      res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+      res.writeHead(error instanceof ProjectInputError || error instanceof SyntaxError ? 400 : 500, {
+        'content-type': 'application/json; charset=utf-8',
+      });
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     });
   });

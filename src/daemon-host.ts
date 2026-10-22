@@ -14,6 +14,7 @@ import {
   type QueuedMessage,
 } from './agent-session.js';
 import { createAgentRuntime } from './agent-runtime.js';
+import { recordUsage as recordUsageRow } from './usage/recorder.js';
 import {
   DAEMON_PROTOCOL_VERSION,
   MAX_DAEMON_FRAME_BYTES,
@@ -961,6 +962,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       workspaceRoot: root,
       onMcpError: (serverId, message) => options.log(`MCP server ${serverId}: ${message}`),
       onMcpConnected: (serverId, toolCount) => options.log(`MCP server ${serverId} connected (${toolCount} tools).`),
+      // Accounting lives with the ledger, which this host owns: one writer, every request.
+      recordUsage: (input, id) => void recordUsageRow(ledger, input, id),
       backgroundManage: executeBackground,
       inbox: (request, sessionId) => agentInbox.execute(request, sessionId),
       ownerMessageSend: executeOwnerMessage,
@@ -1029,6 +1032,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         workspaceRoot: scopeRoot,
         onMcpError: (serverId, message) => options.log(`MCP server ${serverId}: ${message}`),
         onMcpConnected: (serverId, toolCount) => options.log(`MCP server ${serverId} connected (${toolCount} tools).`),
+        // Accounting lives with the ledger, which this host owns: one writer, every request.
+        recordUsage: (input, id) => void recordUsageRow(ledger, input, id),
         backgroundManage: executeBackground,
         inbox: (request, sessionId) => agentInbox.execute(request, sessionId),
         ownerMessageSend: executeOwnerMessage,
@@ -1534,6 +1539,10 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
     let file: FileAttachment | undefined;
     let recipientSessionId: string | undefined;
+    // A message with neither words nor an attachment carries nothing to act on.
+    // Recording it produced an inbox item that could never be answered, so every
+    // later start woke the agent with an empty "you have a notification" turn.
+    if (!text.trim() && !attachment?.image && !attachment?.attachmentError) return;
     if (attachment?.image) {
       const workspace = await getCustodianWorkspace(custodianWorkspace?.runtime.workspaceRoot ?? settings.workspaceRoot);
       recipientSessionId = workspace.controller.getSnapshot().session.id;
@@ -1560,6 +1569,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
 
   function enqueueOwnerInboxWake(inbox: ObservedEventRow): void {
     if (inbox.source !== 'owner-inbox' || ledger.getState(`owner-inbox:reply:${inbox.id}`)) return;
+    // Already handed to the agent: a wake can only repeat a notification it has
+    // read, once per start, forever. A message nobody has read still wakes.
+    if (inbox.status === 'delivered' || parseOwnerInboxReadIds().includes(inbox.id)) return;
+    // Nothing to deliver: no words and no attachment is not a message at all.
+    if (!String(inbox.payload.text ?? '').trim() && !Array.isArray(inbox.payload.attachments)) return;
     const workspaceRoot = inbox.workspaceRoot ?? loadSettings().telegram?.workspaceRoot;
     if (!workspaceRoot) return;
     const currentId = ledger.getState(`owner-inbox:wakeup:${inbox.id}`);
@@ -3161,6 +3175,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           writeResponse(socket, request.id, true, { accepted: true });
           return;
         }
+        case 'session.queue': {
+          const sessionId = requireString(request.sessionId, 'sessionId', 64);
+          const messageId = requireString(request.messageId, 'messageId', 64);
+          if (request.queueAction !== 'steer' && request.queueAction !== 'remove') throw new Error('Invalid queue action.');
+          controller.manageQueuedMessage(messageId, request.queueAction, sessionId);
+          writeResponse(socket, request.id, true, { accepted: true });
+          return;
+        }
         case 'session.stop':
           stopPersistentRun(controller, {
             ...(request.keepQueue === true ? { keepQueue: true as const } : {}),
@@ -3226,9 +3248,18 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           writeResponse(socket, request.id, true, session ? stripConversation(session) : null);
           return;
         }
+        case 'session.select-project': {
+          if (!attachment.custodian) throw new Error('Project selection requires the machine custodian.');
+          if (request.projectId !== null && typeof request.projectId !== 'string') throw new Error('Invalid project ID.');
+          controller.selectProject(request.projectId as string | null, requireString(request.sessionId, 'sessionId', 64));
+          writeResponse(socket, request.id, true, { accepted: true });
+          return;
+        }
         case 'session.new':
           if (controller.isBusy) throw new Error('Wait for the current run before creating a new session.');
-          await controller.createNewSession();
+          if (request.projectId !== undefined && request.projectId !== null && typeof request.projectId !== 'string')
+            throw new Error('Invalid project ID.');
+          await controller.createNewSession(request.projectId as string | null | undefined);
           writeResponse(socket, request.id, true, { accepted: true });
           return;
         case 'session.add-entry':
@@ -3404,6 +3435,7 @@ function stripConversation(
 
 function toRuntimeView(runtime: AgentEnvironment, workspaceRoot = runtime.workspaceRoot): RuntimeViewData {
   return {
+    supportsProjects: Boolean(runtime.selectWorkspaceRoot),
     workspaceRoot,
     modelName: runtime.modelName,
     providerId: runtime.providerId,

@@ -63,6 +63,9 @@ class DaemonSessionClient implements AgentSessionClient {
   private readonly pending = new Map<string, PendingRequest>();
   private readonly listeners = new Set<() => void>();
   private snapshot: AgentSessionSnapshot | null = null;
+  // Host patches address this array. The rendered snapshot also contains local
+  // notices, whose expiry/eviction must never change the host's index space.
+  private serverEntries: SessionEntry[] = [];
   private closed = false;
   private connectionFailureReported = false;
   private reconnecting = false;
@@ -130,6 +133,16 @@ class DaemonSessionClient implements AgentSessionClient {
     return this.snapshot;
   };
 
+  /**
+   * The host's entries only. The merged snapshot also carries the notices this
+   * client added on its own, and those sit inside the array, so a consumer that
+   * addresses entries by index has to read this instead.
+   */
+  getServerEntries = (): readonly SessionEntry[] => {
+    if (!this.snapshot) throw new Error('The Ranite host session has not attached yet.');
+    return this.serverEntries;
+  };
+
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -153,6 +166,7 @@ class DaemonSessionClient implements AgentSessionClient {
     this.applyRuntime(result.runtime);
     this.savedSessions = result.savedSessions;
     const fresh = snapshotFromData(result.snapshot);
+    this.serverEntries = fresh.session.entries;
     this.snapshot = { ...fresh, session: { ...fresh.session, entries: this.withLocalNotices(fresh.session.entries) } };
     this.publish();
   }
@@ -191,7 +205,24 @@ class DaemonSessionClient implements AgentSessionClient {
   }
 
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void> {
-    return this.submit('session.send', { message, preferences });
+    return this.request('session.send', { message, preferences }).then(
+      () => undefined,
+      (error: unknown) => {
+        const text = error instanceof Error ? error.message : String(error);
+        // A view-only attachment cannot submit turns. That is a fact about the
+        // attachment rather than a failed request, so the reader is told and the
+        // exception does not escape into the UI.
+        if (/view-only/i.test(text)) {
+          this.addLocalNotice(text, 'info');
+          return undefined;
+        }
+        throw error;
+      },
+    );
+  }
+
+  manageQueuedMessage(id: string, action: 'steer' | 'remove', sessionId: string): Promise<void> {
+    return this.request('session.queue', { messageId: id, queueAction: action, sessionId }).then(() => undefined);
   }
 
   compact(preferences: AgentTurnPreferences, recovery = false): Promise<void> {
@@ -202,6 +233,10 @@ class DaemonSessionClient implements AgentSessionClient {
     return this.request('session.select-model', { providerId, modelId }).then(() => undefined);
   }
 
+  setApprovalMode(mode: ApprovalMode): Promise<void> {
+    return this.request('runtime.save-approval-mode', { mode }).then(() => undefined);
+  }
+
   listSessions(): Promise<SessionSummary[]> {
     return this.request<SessionSummary[]>('session.list');
   }
@@ -210,8 +245,12 @@ class DaemonSessionClient implements AgentSessionClient {
     return this.request<AgentSessionView | null>('session.load', { sessionId: id });
   }
 
-  createNewSession(): Promise<void> {
-    return this.submit('session.new');
+  createNewSession(projectId?: string | null): Promise<void> {
+    return this.request('session.new', projectId === undefined ? {} : { projectId }).then(() => undefined);
+  }
+
+  selectProject(projectId: string | null, sessionId: string): Promise<void> {
+    return this.request('session.select-project', { projectId, sessionId }).then(() => undefined);
   }
 
   removeReasoningEntries(): void {
@@ -334,18 +373,15 @@ class DaemonSessionClient implements AgentSessionClient {
     }
     if (event.event === 'snapshot') {
       const fresh = snapshotFromData(event.snapshot);
+      this.serverEntries = fresh.session.entries;
       this.snapshot = { ...fresh, session: { ...fresh.session, entries: this.withLocalNotices(fresh.session.entries) } };
       this.applyRuntime(event.runtime);
       this.publish();
       return;
     }
     if (!this.snapshot) return;
-    const current = this.snapshot;
-    const serverEntries = this.withoutLocalNotices(current.session.entries);
-    // The patch addresses server entries by index, so it is applied before the
-    // client-local notices are merged back in; otherwise a notice arriving
-    // mid-run would shift the streaming entry the host is pointing at.
-    const patchedEntries = applyEntriesPatch(serverEntries, event.patch.entriesPatch);
+    const patchedEntries = applyEntriesPatch(this.serverEntries, event.patch.entriesPatch);
+    this.serverEntries = patchedEntries;
     const session = { ...event.patch.session, entries: this.withLocalNotices(patchedEntries) };
     const streamingIndex = event.patch.streamingAssistantIndex;
     this.snapshot = {
@@ -375,11 +411,10 @@ class DaemonSessionClient implements AgentSessionClient {
     if (!this.snapshot || this.closed) return;
     const text = error instanceof Error ? error.message : String(error);
     const notice: SessionEntry = tone === 'info' ? { kind: 'notice', text } : { kind: 'notice', text, tone };
-    const serverEntries = this.withoutLocalNotices(this.snapshot.session.entries);
-    this.localNotices.add(notice, serverEntries.length);
+    this.localNotices.add(notice, this.serverEntries.length);
     this.scheduleLocalNoticeExpiry();
     const current = this.snapshot;
-    this.snapshot = { ...current, session: { ...current.session, entries: this.localNotices.merge(serverEntries) } };
+    this.snapshot = { ...current, session: { ...current.session, entries: this.localNotices.merge(this.serverEntries) } };
     this.publish();
   }
 
@@ -390,22 +425,15 @@ class DaemonSessionClient implements AgentSessionClient {
       this.localNoticeTimer = null;
       if (this.closed || !this.snapshot) return;
       if (this.localNotices.prune()) {
-        const serverEntries = this.withoutLocalNotices(this.snapshot.session.entries);
         this.snapshot = {
           ...this.snapshot,
-          session: { ...this.snapshot.session, entries: this.localNotices.merge(serverEntries) },
+          session: { ...this.snapshot.session, entries: this.localNotices.merge(this.serverEntries) },
         };
         this.publish();
       }
       if (this.localNotices.length > 0) this.scheduleLocalNoticeExpiry();
     }, LOCAL_NOTICE_TTL_MS + 50);
     this.localNoticeTimer.unref?.();
-  }
-
-  /** Server entries only: the view minus the client-local notices merged into it. */
-  private withoutLocalNotices(entries: SessionEntry[]): SessionEntry[] {
-    const own = this.localNotices.ownEntries();
-    return own.size === 0 ? entries : entries.filter((entry) => !own.has(entry));
   }
 
   /** Merged view: server entries with the live client-local notices in their place. */
@@ -467,6 +495,7 @@ class DaemonSessionClient implements AgentSessionClient {
         ) {
           const restored = await this.loadSession(previousSessionId);
           if (restored && this.snapshot) {
+            this.serverEntries = restored.entries;
             this.snapshot = { ...this.snapshot, session: { ...restored, entries: this.withLocalNotices(restored.entries) } };
             this.publish();
           }
