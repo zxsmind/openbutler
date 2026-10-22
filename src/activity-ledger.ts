@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+﻿import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -103,6 +103,45 @@ export interface LedgerPruneCounts {
   transitions: number;
 }
 
+/** One model request, recorded whether it succeeded, failed, or was stopped. */
+export interface UsageRow {
+  id: string;
+  atMs: number;
+  endedMs?: number;
+  durationMs?: number;
+  tzOffsetMin: number;
+  sessionId: string;
+  turnId?: string;
+  eventId?: string;
+  runKind: 'chat' | 'compaction' | 'worker' | 'schedule' | 'summary';
+  workspaceRoot?: string;
+  providerId: string;
+  modelId: string;
+  attempt: number;
+  status: 'ok' | 'error' | 'aborted' | 'timeout';
+  inputTokens?: number;
+  noCacheTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  outputTokens?: number;
+  textTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  usageSource: 'provider' | 'estimated' | 'absent';
+  contextTokens?: number;
+  priceInput?: number;
+  priceOutput?: number;
+  priceReasoning?: number;
+  priceCacheRead?: number;
+  priceCacheWrite?: number;
+  priceVersion?: string;
+  costUsd?: number;
+  /** Who stated the cost: the provider itself, or a catalog estimate. */
+  costSource?: 'provider-inline' | 'provider-lookup' | 'catalog-estimate' | 'none';
+  upstreamProvider?: string;
+  generationId?: string;
+}
+
 const TERMINAL_ACTION_STATES = new Set<ToolActionState>(['completed', 'failed', 'cancelled', 'denied']);
 const MAX_STORED_JSON_CHARS = 32_000;
 
@@ -151,6 +190,45 @@ const LEDGER_SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS ranite_action_transitions_request_idx ON ranite_action_transitions(request_id, id);
   CREATE TABLE IF NOT EXISTS ranite_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS ranite_usage (
+    id TEXT PRIMARY KEY,
+    at_ms INTEGER NOT NULL,
+    ended_ms INTEGER,
+    duration_ms INTEGER,
+    tz_offset_min INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    turn_id TEXT,
+    event_id TEXT,
+    run_kind TEXT NOT NULL,
+    workspace_root TEXT,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL,
+    input_tokens INTEGER,
+    no_cache_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    output_tokens INTEGER,
+    text_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    total_tokens INTEGER,
+    usage_source TEXT NOT NULL,
+    context_tokens INTEGER,
+    price_input REAL,
+    price_output REAL,
+    price_reasoning REAL,
+    price_cache_read REAL,
+    price_cache_write REAL,
+    price_version TEXT,
+    cost_usd REAL,
+    cost_source TEXT,
+    upstream_provider TEXT,
+    generation_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS ranite_usage_at_idx ON ranite_usage(at_ms);
+  CREATE INDEX IF NOT EXISTS ranite_usage_session_at_idx ON ranite_usage(session_id, at_ms);
+  CREATE INDEX IF NOT EXISTS ranite_usage_model_at_idx ON ranite_usage(provider_id, model_id, at_ms);
 `;
 
 /**
@@ -436,6 +514,87 @@ export class ActivityLedger {
     return rows.map(eventFromRow);
   }
 
+  /** Recorded requests in a window, oldest first: the reader for reports. */
+  usageRows(filter: { sinceMs?: number; sessionId?: string; providerId?: string; modelId?: string } = {}): UsageRow[] {
+    this.assertOpen();
+    const where: string[] = [];
+    const args: Array<string | number> = [];
+    if (filter.sinceMs !== undefined) {
+      where.push('at_ms >= ?');
+      args.push(filter.sinceMs);
+    }
+    if (filter.sessionId) {
+      where.push('session_id = ?');
+      args.push(filter.sessionId);
+    }
+    if (filter.providerId) {
+      where.push('provider_id = ?');
+      args.push(filter.providerId);
+    }
+    if (filter.modelId) {
+      where.push('model_id = ?');
+      args.push(filter.modelId);
+    }
+    const sql = `SELECT * FROM ranite_usage${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY at_ms`;
+    const rows = this.database.prepare(sql).all(...args) as unknown as Array<Record<string, unknown>>;
+    return rows.map(usageFromRow);
+  }
+
+  /**
+   * One row per model request. Written by the host, read by everything else.
+   * The price columns are a snapshot: when a catalog price changes, rows already
+   * written keep the numbers they were billed with.
+   */
+  recordUsage(row: UsageRow): void {
+    this.assertOpen();
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO ranite_usage (
+          id, at_ms, ended_ms, duration_ms, tz_offset_min, session_id, turn_id, event_id, run_kind, workspace_root,
+          provider_id, model_id, attempt, status, input_tokens, no_cache_tokens, cache_read_tokens, cache_write_tokens,
+          output_tokens, text_tokens, reasoning_tokens, total_tokens, usage_source, context_tokens,
+          price_input, price_output, price_reasoning, price_cache_read, price_cache_write, price_version, cost_usd,
+          cost_source, upstream_provider, generation_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        row.id,
+        row.atMs,
+        row.endedMs ?? null,
+        row.durationMs ?? null,
+        row.tzOffsetMin,
+        row.sessionId,
+        row.turnId ?? null,
+        row.eventId ?? null,
+        row.runKind,
+        row.workspaceRoot ?? null,
+        row.providerId,
+        row.modelId,
+        row.attempt,
+        row.status,
+        row.inputTokens ?? null,
+        row.noCacheTokens ?? null,
+        row.cacheReadTokens ?? null,
+        row.cacheWriteTokens ?? null,
+        row.outputTokens ?? null,
+        row.textTokens ?? null,
+        row.reasoningTokens ?? null,
+        row.totalTokens ?? null,
+        row.usageSource,
+        row.contextTokens ?? null,
+        row.priceInput ?? null,
+        row.priceOutput ?? null,
+        row.priceReasoning ?? null,
+        row.priceCacheRead ?? null,
+        row.priceCacheWrite ?? null,
+        row.priceVersion ?? null,
+        row.costUsd ?? null,
+        row.costSource ?? null,
+        row.upstreamProvider ?? null,
+        row.generationId ?? null,
+      );
+  }
+
   /** Notification metadata includes read messages that still await handling. */
   ownerInboxNotifications(): ObservedEventRow[] {
     this.assertOpen();
@@ -696,4 +855,40 @@ function validateEvent(event: ObservedEventInput): void {
   }
   if (event.workspaceRoot !== undefined && event.workspaceRoot.length > 32_768)
     throw new Error('Observed event workspace root is too long.');
+}
+
+/** SQLite row to the shape callers use. */
+function usageFromRow(row: Record<string, unknown>): UsageRow {
+  const number = (key: string) => (typeof row[key] === 'number' ? (row[key] as number) : undefined);
+  const text = (key: string) => (typeof row[key] === 'string' ? (row[key] as string) : undefined);
+  return {
+    id: String(row.id),
+    atMs: Number(row.at_ms),
+    ...(number('ended_ms') === undefined ? {} : { endedMs: number('ended_ms')! }),
+    ...(number('duration_ms') === undefined ? {} : { durationMs: number('duration_ms')! }),
+    tzOffsetMin: Number(row.tz_offset_min),
+    sessionId: String(row.session_id),
+    ...(text('turn_id') ? { turnId: text('turn_id')! } : {}),
+    ...(text('event_id') ? { eventId: text('event_id')! } : {}),
+    runKind: String(row.run_kind) as UsageRow['runKind'],
+    ...(text('workspace_root') ? { workspaceRoot: text('workspace_root')! } : {}),
+    providerId: String(row.provider_id),
+    modelId: String(row.model_id),
+    attempt: Number(row.attempt),
+    status: String(row.status) as UsageRow['status'],
+    ...(number('input_tokens') === undefined ? {} : { inputTokens: number('input_tokens')! }),
+    ...(number('no_cache_tokens') === undefined ? {} : { noCacheTokens: number('no_cache_tokens')! }),
+    ...(number('cache_read_tokens') === undefined ? {} : { cacheReadTokens: number('cache_read_tokens')! }),
+    ...(number('cache_write_tokens') === undefined ? {} : { cacheWriteTokens: number('cache_write_tokens')! }),
+    ...(number('output_tokens') === undefined ? {} : { outputTokens: number('output_tokens')! }),
+    ...(number('text_tokens') === undefined ? {} : { textTokens: number('text_tokens')! }),
+    ...(number('reasoning_tokens') === undefined ? {} : { reasoningTokens: number('reasoning_tokens')! }),
+    ...(number('total_tokens') === undefined ? {} : { totalTokens: number('total_tokens')! }),
+    usageSource: String(row.usage_source) as UsageRow['usageSource'],
+    ...(number('context_tokens') === undefined ? {} : { contextTokens: number('context_tokens')! }),
+    ...(number('cost_usd') === undefined ? {} : { costUsd: number('cost_usd')! }),
+    ...(text('cost_source') ? { costSource: text('cost_source')! as NonNullable<UsageRow['costSource']> } : {}),
+    ...(text('upstream_provider') ? { upstreamProvider: text('upstream_provider')! } : {}),
+    ...(text('generation_id') ? { generationId: text('generation_id')! } : {}),
+  };
 }
