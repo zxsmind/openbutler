@@ -198,6 +198,14 @@ function sessionSummary(session: {
   };
 }
 
+/** A compaction row carries no text of its own; it names its state and sizes. */
+function compactionText(entry: Extract<TranscriptEntry, { kind: 'compaction' }>): string {
+  const label = entry.status === 'done' ? 'Context compacted' : entry.status === 'failed' ? 'Compaction interrupted' : 'Compacting context';
+  return entry.beforeTokens !== undefined && entry.afterTokens !== undefined
+    ? `${label} (${entry.beforeTokens} → ${entry.afterTokens} tokens)`
+    : label;
+}
+
 function projectEntry(entry: TranscriptEntry, index: number): { value: Record<string, unknown>; cost: number; truncated: boolean } {
   if (entry.kind === 'tool') {
     const command = truncateText(redactSensitiveText(entry.command), MAX_TOOL_COMMAND_CHARS);
@@ -215,7 +223,7 @@ function projectEntry(entry: TranscriptEntry, index: number): { value: Record<st
       truncated: command.truncated || result.truncated,
     };
   }
-  const text = truncateText(redactSensitiveText(entry.text), MAX_ENTRY_TEXT_CHARS);
+  const text = truncateText(redactSensitiveText(entry.kind === 'compaction' ? compactionText(entry) : entry.text), MAX_ENTRY_TEXT_CHARS);
   return {
     value: {
       index,

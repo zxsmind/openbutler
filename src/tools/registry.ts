@@ -487,11 +487,13 @@ export class ToolRegistry {
       const toModelOutput = async ({ output }: { output: unknown }): Promise<ToolResultOutput> => {
         const base = definitionModelOutput ? await definitionModelOutput(output) : undefined;
         const note = typeof output === 'object' && output !== null ? reviewNotes.get(output) : undefined;
+        const timing = toolTiming(output);
+        const extras = (text: string) => `${text}${note !== undefined ? `\n\n${note}` : ''}${timing === null ? '' : `\n(${timing})`}`;
         if (base !== undefined) {
-          if (note !== undefined && isTextOutput(base)) return { type: 'text', value: `${base.value}\n\n${note}` };
+          if (isTextOutput(base)) return { type: 'text', value: extras(base.value) };
           return base;
         }
-        if (isTextOutput(output)) return note !== undefined ? { type: 'text', value: `${output.value}\n\n${note}` } : output;
+        if (isTextOutput(output)) return { type: 'text', value: extras(output.value) };
         if (note === undefined) return { type: 'json', value: (output === undefined ? null : output) as JSONValue };
         const text = typeof output === 'string' ? output : (JSON.stringify(output) ?? String(output));
         return { type: 'text', value: `${text}\n\n${note}` };
@@ -521,7 +523,15 @@ export class ToolRegistry {
           }
         },
         execute: (input, execOptions) => {
-          const current = queue.then(() => execute(definition, input, execOptions?.toolCallId));
+          const toolCallId = execOptions?.toolCallId;
+          const current = queue.then(async () => {
+            // Both ends are measured where the call actually runs: the start when
+            // the work begins, the finish the instant it returns. Queue wait and
+            // the trip to the provider stay out, so the number describes the tool.
+            const startedAt = Date.now();
+            const result = await execute(definition, input, toolCallId);
+            return withToolTiming(result, startedAt, Date.now());
+          });
           queue = current.then(
             () => undefined,
             () => undefined,
@@ -547,6 +557,45 @@ function isTextOutput(value: unknown): value is { type: 'text'; value: string } 
     (value as Record<string, unknown>).type === 'text' &&
     typeof (value as Record<string, unknown>).value === 'string'
   );
+}
+
+/** Local wall time with its offset, e.g. 2026-10-21 11:13:29 +03:00. */
+export function formatToolClock(at: number): string {
+  const now = new Date(at);
+  const pad = (value: number) => String(Math.abs(value)).padStart(2, '0');
+  const offset = -now.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  return (
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+    `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())} ` +
+    `${sign}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`
+  );
+}
+
+/** One line naming when a call ran and how long it took. */
+export function toolTimingLine(startedAt: number, finishedAt: number): string {
+  return `ran at ${formatToolClock(startedAt)}, took ${(Math.max(0, finishedAt - startedAt) / 1000).toFixed(1)}s`;
+}
+
+/**
+ * Rides the run's timing on the result, beside what the tool returned. The value
+ * is stored rather than recomputed, so the text it produces is byte-identical on
+ * every later request and the prompt cache keeps its prefix.
+ */
+export function withToolTiming(result: unknown, startedAt: number, finishedAt: number): unknown {
+  const line = toolTimingLine(startedAt, finishedAt);
+  if (typeof result === 'string') return `${result}\n(${line})`;
+  // The field goes on the same object rather than a copy: the review-note channel
+  // is keyed by identity, and a copy would silently lose a note attached to it.
+  if (result && typeof result === 'object' && !Array.isArray(result)) (result as Record<string, unknown>).raniteTiming = line;
+  return result;
+}
+
+/** The stored stamp, or null when a result carries none. */
+export function toolTiming(output: unknown): string | null {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return null;
+  const line = (output as Record<string, unknown>).raniteTiming;
+  return typeof line === 'string' ? line : null;
 }
 
 function toolOutcome(result: unknown): ToolActionState {

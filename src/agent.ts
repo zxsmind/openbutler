@@ -261,6 +261,12 @@ export async function runAgent(options: {
   maxRetries?: number;
   onReasoningDelta?: (text: string) => void;
   onContextUsage?: (inputTokens: number | null, contextEstimateTokens: number) => void;
+  /**
+   * Every model request, with the usage the provider reported and the wall time it
+   * took. Called once per step whether it succeeded, failed, or was stopped: a
+   * request that died still consumed tokens.
+   */
+  onStepUsage?: (report: StepUsageReport) => void;
   onConversationProgress?: (conversation: ModelMessage[], responseMessages: ModelMessage[]) => void;
 }) {
   const initialContext = getAgentContext(
@@ -279,6 +285,10 @@ export async function runAgent(options: {
   let preparedContextEstimate = 0;
   let streamError: unknown;
   let hasStreamError = false;
+  // When the request in flight began, so its duration covers the provider call and
+  // not the work between requests.
+  let stepStartedAt = Date.now();
+  let stepCount = 0;
   const result = streamText({
     model: options.model,
     maxRetries: options.maxRetries ?? 0,
@@ -301,8 +311,32 @@ export async function runAgent(options: {
         options.onConversationProgress?.(conversation, responseMessages);
       }
       options.onContextUsage?.(step.usage.inputTokens ?? null, preparedContextEstimate);
+      const details = step.usage;
+      const inputDetails = details.inputTokenDetails;
+      const outputDetails = details.outputTokenDetails;
+      stepCount += 1;
+      options.onStepUsage?.({
+        startedAt: stepStartedAt,
+        endedAt: Date.now(),
+        attempt: stepCount,
+        status: step.finishReason === 'error' ? 'error' : 'ok',
+        usage: {
+          ...(details.inputTokens === undefined ? {} : { inputTokens: details.inputTokens }),
+          ...(inputDetails?.noCacheTokens === undefined ? {} : { noCacheTokens: inputDetails.noCacheTokens }),
+          ...(inputDetails?.cacheReadTokens === undefined ? {} : { cacheReadTokens: inputDetails.cacheReadTokens }),
+          ...(inputDetails?.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: inputDetails.cacheWriteTokens }),
+          ...(details.outputTokens === undefined ? {} : { outputTokens: details.outputTokens }),
+          ...(outputDetails?.textTokens === undefined ? {} : { textTokens: outputDetails.textTokens }),
+          ...(outputDetails?.reasoningTokens === undefined ? {} : { reasoningTokens: outputDetails.reasoningTokens }),
+          ...(details.totalTokens === undefined ? {} : { totalTokens: details.totalTokens }),
+        },
+        raw: details.raw,
+        providerMetadata: step.providerMetadata,
+        ...(step.response.id ? { responseId: step.response.id } : {}),
+      });
     },
     prepareStep: async ({ messages }) => {
+      stepStartedAt = Date.now();
       const queuedMessages = ((await options.takeQueuedMessages?.()) ?? []).map(ensureQueuedMessageId);
       const result: { system?: string; messages?: ModelMessage[]; providerOptions?: AgentProviderOptions } = {};
       if (queuedMessages.length > 0) {
@@ -498,4 +532,25 @@ function insertMessages(
 
   merged.push(...generated.slice(cursor));
   return merged;
+} /** One model request as the accounting layer needs to see it. */
+export interface StepUsageReport {
+  startedAt: number;
+  endedAt: number;
+  attempt: number;
+  status: 'ok' | 'error' | 'aborted' | 'timeout';
+  usage: {
+    inputTokens?: number;
+    noCacheTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    outputTokens?: number;
+    textTokens?: number;
+    reasoningTokens?: number;
+    totalTokens?: number;
+  };
+  /** Raw provider usage, where an inline cost may sit. */
+  raw?: unknown;
+  providerMetadata?: unknown;
+  /** The provider's own id for this response, used to look its cost up. */
+  responseId?: string;
 }

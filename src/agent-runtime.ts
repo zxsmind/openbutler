@@ -24,6 +24,7 @@ import {
 import { loadSettings, rememberProviderModel, saveSettings, type ApprovalMode } from './settings.js';
 import type { RetryEvent } from './provider/retry.js';
 import type { AgentEnvironment } from './agent-session.js';
+import type { UsageRecordInput } from './usage/recorder.js';
 import type { SubagentRequest } from './tools/subagent.js';
 
 export interface CreateAgentRuntimeOptions {
@@ -48,6 +49,8 @@ export interface CreateAgentRuntimeOptions {
   subagent?: (request: SubagentRequest, senderSessionId: string | undefined, signal?: AbortSignal) => Promise<unknown> | unknown;
   parentMessage?: (input: ParentMessageInput, senderSessionId: string | undefined) => Promise<unknown> | unknown;
   subagentStop?: (input: { session: string }, senderSessionId: string | undefined) => Promise<unknown> | unknown;
+  /** Writes one accounting row per model request; supplied by whoever owns the ledger. */
+  recordUsage?: (input: UsageRecordInput, id: string) => void;
 }
 
 /** Creates the shared model/tool runtime without depending on a terminal UI. */
@@ -224,6 +227,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
           reviewResolved ? reviewRouting : activeRouting,
         ),
       registry: createRegistry(activeInputModalities),
+      ...(options.recordUsage ? { recordUsage: options.recordUsage } : {}),
+
       getPeerCapabilities: () => ({
         platform: process.platform,
         mcpServers: mcp!
@@ -266,7 +271,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         if (!defaultModelIsUsable(nextSettings)) {
           throw new Error(`Model ${nextModelId} is not available for tool calls.`);
         }
-        const next = await createLanguageModel(nextProviderId, nextModelId, nextProvider);
+        const next = await createLanguageModel(nextProviderId, nextModelId, nextProvider, undefined, reportRetry);
         if (!next.ok) throw new Error(next.error.reason);
         const nextCatalog = findReasoningCatalogMatch(nextProviderId, nextModelId, next.resolved);
         const nextVariants = listReasoningVariants(next.resolved, nextCatalog.model);

@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { sessionFilePath } from './session-paths.js';
-import { RETRY_DELAYS_MS, type RetryEvent } from './provider/retry.js';
+import { bindSessionKeyRotation, RETRY_DELAYS_MS, type RetryEvent } from './provider/retry.js';
 import type { JSONValue, LanguageModel, ModelMessage } from 'ai';
 import type { CompactionResult } from './compaction.js';
 import type { ToolActionUpdate } from './activity-ledger.js';
+import type { StepUsageReport } from './agent.js';
+import type { UsageRecordInput } from './usage/recorder.js';
 import {
   createSession,
   listSavedSessions,
@@ -31,6 +33,8 @@ import { sameReplyRoute, type TurnCommunication } from './communication.js';
 import { isUnsupportedImageInputError, omitUnsupportedImageInputs } from './image.js';
 import { attachmentReferences, storeAttachment, type FileAttachment } from './attachments.js';
 import { decodeBase64Image, MAX_IMAGE_BYTES } from './image-data.js';
+import type { ProjectContext } from './projects/types.js';
+import { projectFolder, sessionProject, ProjectInputError } from './projects/store.js';
 
 export type AgentProviderOptions = Record<string, Record<string, JSONValue>>;
 export type ApprovalDecision = 'allow' | 'deny' | 'always';
@@ -41,6 +45,8 @@ export type AgentTurnProgress =
   | { kind: 'tool-result'; tool: string; outcome: string };
 export type AgentEventOutput = { kind: 'assistant'; text: string };
 export type QueuedMessage = {
+  /** Host-bound project facts, never accepted as raw IPC metadata. */
+  projectContext?: ProjectContext;
   text: string;
   /** Legacy terminal wire input. Materialized to files before queue admission. */
   images: Array<{ base64: string; mediaType: 'image/png' }>;
@@ -60,6 +66,7 @@ export type QueuedMessage = {
 };
 
 export interface AgentSessionRuntimeView {
+  supportsProjects?: boolean;
   workspaceRoot: string;
   modelName: string;
   providerId: string;
@@ -92,6 +99,9 @@ export interface AgentEnvironment extends AgentSessionRuntimeView {
   registry: ToolRegistry;
   getPeerCapabilities?: () => { platform: string; mcpServers: Array<{ name: string; toolCount: number }>; mcpTools: string[] };
   selectWorkspaceRoot?: (workspaceRoot: string) => Promise<void>;
+  /** Accounting sink; absent when nothing owns a ledger (tests, one-off runs). */
+  recordUsage?: (input: UsageRecordInput, id: string) => void;
+
   selectModel: (providerId: string, modelId: string) => Promise<void>;
   close: () => Promise<void>;
 }
@@ -106,7 +116,7 @@ export interface AgentSessionSnapshot {
   pendingQuestion: { id: string; question: string; options: string[] | null } | null;
   queuedMessageCount: number;
   firstQueuedMessage: { text: string; imageCount: number } | null;
-  queuedMessages: { text: string; imageCount: number }[];
+  queuedMessages: { id?: string; text: string; imageCount: number; editable?: boolean }[];
   sessionSaveError: string | null;
   streamingAssistantEntry: SessionEntry | null;
 }
@@ -117,6 +127,7 @@ export interface AgentTurnPreferences {
 }
 
 type QueuedTurn = {
+  id: string;
   automatic: boolean;
   message: QueuedMessage;
   preferences: AgentTurnPreferences;
@@ -147,6 +158,13 @@ export interface AgentSessionOptions {
 export interface AgentSessionClient {
   readonly runtime: AgentSessionRuntimeView;
   getSnapshot: () => AgentSessionSnapshot;
+  /**
+   * The transcript as the host sent it, without the notices this client shows on
+   * its own. Index-addressed consumers (the web server's patches) must use this:
+   * a local notice sits inside the merged snapshot, so indices taken from there
+   * point at the wrong entries the moment one arrives or expires.
+   */
+  getServerEntries: () => readonly SessionEntry[];
   subscribe: (listener: () => void) => () => void;
   readonly isBusy: boolean;
   addEntry(entry: SessionEntry): void;
@@ -156,9 +174,12 @@ export interface AgentSessionClient {
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void>;
   compact(preferences: AgentTurnPreferences, recovery?: boolean): Promise<void>;
   selectModel(providerId: string, modelId: string): Promise<void>;
+  setApprovalMode(mode: ApprovalMode): Promise<void>;
   listSessions(): SessionSummary[] | Promise<SessionSummary[]>;
   loadSession(id: string): SavedSession | AgentSessionView | null | Promise<SavedSession | AgentSessionView | null>;
-  createNewSession(): void | Promise<void>;
+  createNewSession(projectId?: string | null): void | Promise<void>;
+  selectProject?(projectId: string | null, sessionId: string): void | Promise<void>;
+  manageQueuedMessage?(id: string, action: 'steer' | 'remove', sessionId: string): void | Promise<void>;
   removeReasoningEntries(): void;
   flushSave(): void | Promise<void>;
   close(): void | Promise<void>;
@@ -205,7 +226,7 @@ export class AgentSessionController implements AgentSessionClient {
   private activeEventOutputs: AgentEventOutput[] | null = null;
   private activeEventAssistantText = '';
   private activeTurnProgress: QueuedMessage['onProgress'];
-  private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string }> = [];
+  private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string; internal?: 'compaction' }> = [];
   private busy = false;
   private closed = false;
   /**
@@ -237,6 +258,8 @@ export class AgentSessionController implements AgentSessionClient {
   private streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private streamedAssistantEntry: SessionEntry | null = null;
   private streamedReasoningEntry: SessionEntry | null = null;
+  /** The compaction row currently on screen, so its state can be updated in place. */
+  private compactionEntry: Extract<SessionEntry, { kind: 'compaction' }> | null = null;
   /**
    * The one notice a retry sequence owns. Each further attempt replaces this
    * entry in place instead of appending a line per second, and the entry stays
@@ -249,7 +272,7 @@ export class AgentSessionController implements AgentSessionClient {
     const cause = describeRetryCause(event.error);
     const text =
       event.kind === 'retry'
-        ? `${cause}. Retry ${event.attempt + 1} of ${RETRY_DELAYS_MS.length + 1} in ${Math.max(1, Math.round(event.waitMs / 1000))}s.`
+        ? `${cause}. Retry ${event.attempt + 1} of ${RETRY_DELAYS_MS.length} in ${Math.max(1, Math.round(event.waitMs / 1000))}s.`
         : `${cause}. ${event.reason === 'auth' ? 'Key rejected' : 'Retries exhausted'}, switching to the next key.`;
     const next: SessionEntry = { kind: 'notice', text, tone: 'warn' };
     const previous = this.retryNotice;
@@ -304,6 +327,11 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   getSnapshot = (): AgentSessionSnapshot => this.snapshot;
+  private sessionModel(model: LanguageModel = this.runtime.model): LanguageModel {
+    return bindSessionKeyRotation(model, (this.session.keyPositions ??= {}));
+  }
+  /** The controller has no client-local notices, so both views are the same. */
+  getServerEntries = (): readonly SessionEntry[] => this.snapshot.session.entries;
   get isBusy(): boolean {
     return this.busy;
   }
@@ -333,13 +361,18 @@ export class AgentSessionController implements AgentSessionClient {
     // A held turn whose entry already sits in the transcript is not "queued" from
     // the owner's point of view; counting it twice would show the same text twice.
     const pending = this.queuedMessages.filter((turn) => !turn.entryAdded);
-    const queuedMessages = pending.map((turn) => ({ text: turn.message.text, imageCount: messageImageCount(turn.message) }));
+    const queuedMessages = pending.map((turn) => ({
+      id: turn.id,
+      text: turn.message.text,
+      imageCount: messageImageCount(turn.message),
+      editable: !turn.automatic,
+    }));
     const first = queuedMessages[0] ?? null;
     const { conversation, conversationArchive, ...session } = this.session;
     void conversation;
     void conversationArchive;
     return {
-      session,
+      session: { ...session, hasUserMessage: this.sessionHasUserMessage },
       busy: this.busy,
       pendingApproval: this.pendingApproval,
       pendingApprovalId: this.pendingApprovalId,
@@ -457,6 +490,7 @@ export class AgentSessionController implements AgentSessionClient {
     this.flushSave();
     this.session = {
       ...session,
+      keyPositions: session.keyPositions ?? {},
       ...(session.workspaceRoot === undefined && typeof this.sessionWorkspaceScope === 'string'
         ? { workspaceRoot: this.sessionWorkspaceScope }
         : {}),
@@ -479,8 +513,18 @@ export class AgentSessionController implements AgentSessionClient {
     this.publish();
   }
 
-  createNewSession(): void {
+  selectProject(projectId: string | null, sessionId: string): void {
+    if (sessionId !== this.session.id) throw new ProjectInputError('The active chat changed. Try again.');
+    if (this.sessionHasUserMessage || this.session.project?.locked || this.queuedMessages.some((turn) => !turn.automatic))
+      throw new ProjectInputError("This chat's project was fixed by its first message. Start a new chat.");
+    if (this.busy) throw new ProjectInputError('Wait for the running task to finish before choosing a project.');
+    this.session = saveSession({ ...this.session, project: sessionProject(projectId) }, { allowEmpty: true });
+    this.publish(false);
+  }
+
+  createNewSession(projectId?: string | null): void {
     if (this.busy) return;
+    const project = projectId === undefined ? undefined : sessionProject(projectId);
     this.flushSave();
     this.session = createSession(
       this.runtime.providerId,
@@ -488,6 +532,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.runtime.contextWindowTokens ?? undefined,
       this.sessionWorkspaceScope ?? undefined,
     );
+    if (project) this.session = saveSession({ ...this.session, project }, { allowEmpty: true });
     this.conversation = [];
     this.conversationArchive = [];
     this.frozenSystem = null;
@@ -529,6 +574,12 @@ export class AgentSessionController implements AgentSessionClient {
       delete this.session.contextGrowthTokens;
     }
     if (this.runtime.contextWindowTokens === null) delete this.session.contextWindowTokens;
+    this.publish();
+  }
+
+  async setApprovalMode(mode: ApprovalMode): Promise<void> {
+    if (!this.runtime.saveApprovalModePreference) throw new Error('Permission settings are unavailable.');
+    await this.runtime.saveApprovalModePreference(mode);
     this.publish();
   }
 
@@ -621,37 +672,49 @@ export class AgentSessionController implements AgentSessionClient {
     });
   }
 
-  private appendStreamedText(delta: string): void {
+  private appendStreamedText(delta: string, internal?: 'compaction'): void {
     // Assistant text ends the thinking block, so its duration is stamped first.
     this.finishStreamedReasoning();
     // A response arrived: any retry line belongs to a finished sequence.
     this.closeRetryNotice();
     const previous = this.streamedAssistantEntry;
+    // The marker belongs to the text that produced it and follows the entry as it
+    // grows, so one checkpoint stays one entry from its first token to its last.
+    const tag = internal ?? (previous?.kind === 'assistant' ? previous.internal : undefined);
+    const marked = tag === undefined ? {} : { internal: tag };
     if (previous?.kind === 'assistant') {
-      const next: SessionEntry = { kind: 'assistant', text: previous.text + delta };
+      const next: SessionEntry = { kind: 'assistant', text: previous.text + delta, ...marked };
       this.streamedAssistantEntry = next;
       this.replaceEntry(previous, next);
     } else {
-      const entry: SessionEntry = { kind: 'assistant', text: delta };
+      const entry: SessionEntry = { kind: 'assistant', text: delta, ...marked };
       this.streamedAssistantEntry = entry;
       this.addEntry(entry);
     }
   }
 
-  private appendStreamedReasoning(delta: string): void {
+  private appendStreamedReasoning(delta: string, internal?: 'compaction'): void {
     if (!delta) return;
     this.closeRetryNotice();
     const previous = this.streamedReasoningEntry;
+    const tag = internal ?? (previous?.kind === 'reasoning' ? previous.internal : undefined);
+    const marked = tag === undefined ? {} : { internal: tag };
     if (previous?.kind === 'reasoning') {
       const next: SessionEntry = {
         kind: 'reasoning',
         text: previous.text + delta,
         ...(previous.durationMs === undefined ? {} : { durationMs: previous.durationMs }),
+        ...marked,
       };
       this.streamedReasoningEntry = next;
       this.replaceEntry(previous, next);
     } else {
-      const entry: SessionEntry = { kind: 'reasoning', text: delta };
+      // Stamped here as well as in addEntry: this path inserts straight into the
+      // list, and an entry without a turn id can only be placed by array
+      // position — one misplacement and the thought lands in another turn.
+      const entry = { kind: 'reasoning', text: delta, ...marked } as SessionEntryMeta & SessionEntry;
+      if (entry.at === undefined) entry.at = Date.now();
+      if (entry.turnId === undefined && this.activeTurnId !== undefined) entry.turnId = this.activeTurnId;
       this.streamedReasoningEntry = entry;
       this.reasoningStartedAt = Date.now();
       const assistantIndex = this.streamedAssistantEntry ? this.session.entries.indexOf(this.streamedAssistantEntry) : -1;
@@ -677,11 +740,13 @@ export class AgentSessionController implements AgentSessionClient {
     this.replaceEntry(entry, next);
   }
 
-  private queueStreamDelta(kind: 'assistant' | 'reasoning', text: string): void {
+  private queueStreamDelta(kind: 'assistant' | 'reasoning', text: string, internal?: 'compaction'): void {
     if (!text) return;
     const last = this.pendingStreamDeltas[this.pendingStreamDeltas.length - 1];
-    if (last?.kind === kind) last.text += text;
-    else this.pendingStreamDeltas.push({ kind, text });
+    // Deltas merge only within the same provenance: a checkpoint token must never
+    // join the answer that follows it, or the marker would leak into the reply.
+    if (last?.kind === kind && last.internal === internal) last.text += text;
+    else this.pendingStreamDeltas.push({ kind, text, ...(internal === undefined ? {} : { internal }) });
     if (this.streamFlushTimer === null) {
       // A repaint batch keeps the current message open; tool/run boundaries finish it.
       this.streamFlushTimer = setTimeout(() => this.flushStreamedDeltas(), STREAM_RENDER_INTERVAL_MS);
@@ -718,8 +783,8 @@ export class AgentSessionController implements AgentSessionClient {
     if (this.streamFlushTimer !== null) clearTimeout(this.streamFlushTimer);
     this.streamFlushTimer = null;
     for (const delta of this.pendingStreamDeltas.splice(0)) {
-      if (delta.kind === 'assistant') this.appendStreamedText(delta.text);
-      else this.appendStreamedReasoning(delta.text);
+      if (delta.kind === 'assistant') this.appendStreamedText(delta.text, delta.internal);
+      else this.appendStreamedReasoning(delta.text, delta.internal);
     }
   }
 
@@ -920,7 +985,7 @@ export class AgentSessionController implements AgentSessionClient {
       let outcome: AutoReviewResult;
       try {
         outcome = await (this.options.autoReviewer ?? reviewToolRequest)({
-          model: this.runtime.reviewModel ?? this.runtime.model,
+          model: this.sessionModel(this.runtime.reviewModel ?? this.runtime.model),
           request,
           messages: [...this.currentReviewMessages],
           workspaceRoot: this.runtime.workspaceRoot,
@@ -1144,6 +1209,21 @@ export class AgentSessionController implements AgentSessionClient {
     return this.enqueueMessage(message, preferences, true);
   }
 
+  manageQueuedMessage(id: string, action: 'steer' | 'remove', sessionId: string): void {
+    if (this.session.id !== sessionId) throw new Error('The active session has changed.');
+    const index = this.queuedMessages.findIndex((turn) => turn.id === id && !turn.entryAdded && !turn.automatic);
+    if (index < 0) throw new Error('This message is no longer queued.');
+    const [turn] = this.queuedMessages.splice(index, 1);
+    if (action === 'remove') turn.resolve();
+    else {
+      // The existing step-boundary admission still enforces scope and reply routing.
+      this.queuedMessages.unshift(turn);
+      this.queueHold = false;
+    }
+    this.publish(false);
+    if (action === 'steer' && !this.busy) void this.runQueuedMessages();
+  }
+
   private enqueueMessage(message: QueuedMessage, preferences: AgentTurnPreferences, automatic: boolean): Promise<void> {
     if (this.closed) return Promise.resolve();
     const wasHeld = this.automaticWakeHeld || this.queueHold;
@@ -1168,8 +1248,22 @@ export class AgentSessionController implements AgentSessionClient {
         images: [],
       };
     }
+    if (!automatic && this.session.project) {
+      const binding = this.session.project;
+      const workspaceRoot = projectFolder(binding.workspaceRoot);
+      const folders = binding.folders.map(projectFolder);
+      message = {
+        ...message,
+        workspaceRoot,
+        ...(binding.id && binding.name ? { projectContext: { id: binding.id, name: binding.name, folders } } : {}),
+      };
+      if (!binding.locked) {
+        this.session = saveSession({ ...this.session, project: { ...binding, locked: true } }, { allowEmpty: true });
+        this.publish(false);
+      }
+    }
     return new Promise<void>((resolve, reject) => {
-      const turn = { message, preferences, resolve, reject, automatic };
+      const turn = { id: randomUUID(), message, preferences, resolve, reject, automatic };
       if (!automatic && wasHeld) {
         const events = this.queuedMessages.filter((queued) => queued.automatic);
         const ownerMessages = this.queuedMessages.filter((queued) => !queued.automatic);
@@ -1345,7 +1439,7 @@ export class AgentSessionController implements AgentSessionClient {
           try {
             const result = await runAgent({
               sessionId: this.session.id,
-              model: this.runtime.model,
+              model: this.sessionModel(),
               workspaceRoot: this.runtime.workspaceRoot,
               supportsVision: this.runtime.supportsVision,
               supportsImageToolResult: this.runtime.supportsImageToolResult,
@@ -1364,7 +1458,7 @@ export class AgentSessionController implements AgentSessionClient {
                   const compacted = await compactConversation({
                     ...context,
                     archivePath: sessionFilePath(this.session.id),
-                    model: this.runtime.model,
+                    model: this.sessionModel(),
                     contextWindowTokens: this.runtime.contextWindowTokens,
                     outputLimitTokens: this.runtime.outputLimitTokens,
                     ...(this.lastContextUsage !== undefined ? { previousContextTokens: this.lastContextUsage } : {}),
@@ -1382,10 +1476,16 @@ export class AgentSessionController implements AgentSessionClient {
                       : {}),
                     onStart: () => {
                       this.flushStreamedEntries();
-                      this.addNotice('Compacting the complete model context…');
+                      const entry: Extract<SessionEntry, { kind: 'compaction' }> = {
+                        kind: 'compaction',
+                        status: 'running',
+                        ...(this.lastContextUsage === undefined ? {} : { beforeTokens: this.lastContextUsage }),
+                      };
+                      this.compactionEntry = entry;
+                      this.addEntry(entry);
                     },
-                    onTextDelta: (delta) => this.queueStreamDelta('assistant', delta),
-                    onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta),
+                    onTextDelta: (delta) => this.queueStreamDelta('assistant', delta, 'compaction'),
+                    onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta, 'compaction'),
                     abortSignal: abortController.signal,
                   });
                   if (compacted) {
@@ -1394,6 +1494,17 @@ export class AgentSessionController implements AgentSessionClient {
                   return compacted;
                 } catch (error) {
                   this.flushStreamedEntries();
+                  // A compaction that stopped halfway is a fact about the context,
+                  // not a silent failure: the row says so and keeps its start size.
+                  const started = this.compactionEntry;
+                  this.compactionEntry = null;
+                  if (started) {
+                    this.replaceEntry(started, {
+                      kind: 'compaction',
+                      status: 'failed',
+                      ...(started.beforeTokens === undefined ? {} : { beforeTokens: started.beforeTokens }),
+                    });
+                  }
                   if (abortController.signal.aborted) throw error;
                   throw new Error(`Compaction failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
                 }
@@ -1426,6 +1537,7 @@ export class AgentSessionController implements AgentSessionClient {
                       next.message.communication?.source !== 'worker' &&
                       !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
                     (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
+                    next.message.projectContext?.id !== current.projectContext?.id ||
                     next.preferences.reasoningVariantId !== live.reasoningVariantId ||
                     next.preferences.showReasoning !== live.showReasoning
                   )
@@ -1462,6 +1574,7 @@ export class AgentSessionController implements AgentSessionClient {
                 }
               },
               onContextUsage: (inputTokens, contextEstimateTokens) => this.onContextUsage(inputTokens, contextEstimateTokens),
+              onStepUsage: (report) => this.onStepUsage(report),
             });
             this.flushStreamedEntries();
             finalResponseReceived = Boolean(result.finalText.trim());
@@ -1503,7 +1616,7 @@ export class AgentSessionController implements AgentSessionClient {
           try {
             const answer = await runAgent({
               sessionId: this.session.id,
-              model: this.runtime.model,
+              model: this.sessionModel(),
               workspaceRoot: this.runtime.workspaceRoot,
               supportsVision: this.runtime.supportsVision,
               supportsImageToolResult: this.runtime.supportsImageToolResult,
@@ -1546,7 +1659,7 @@ export class AgentSessionController implements AgentSessionClient {
           try {
             const live = this.liveTurnPreferences();
             const providerOptions = this.runtime.getReasoningProviderOptions(live.reasoningVariantId, live.showReasoning);
-            const title = await generateSessionTitle(this.runtime.model, request.message, abortController.signal, providerOptions);
+            const title = await generateSessionTitle(this.sessionModel(), request.message, abortController.signal, providerOptions);
             if (this.session.id === request.sessionId) {
               this.session = { ...this.session, title };
               this.publish();
@@ -1690,7 +1803,7 @@ export class AgentSessionController implements AgentSessionClient {
         ...context,
         archivePath: sessionFilePath(this.session.id),
         tools: tools.tools,
-        model: this.runtime.model,
+        model: this.sessionModel(),
         contextWindowTokens: this.runtime.contextWindowTokens,
         outputLimitTokens: this.runtime.outputLimitTokens,
         ...(this.lastContextUsage !== undefined ? { previousContextTokens: this.lastContextUsage } : {}),
@@ -1699,14 +1812,22 @@ export class AgentSessionController implements AgentSessionClient {
         providerOptions: this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning),
         onStart: () => {
           this.flushStreamedEntries();
-          this.addNotice(
-            recovery
-              ? 'Recovering compaction: earlier reasoning is omitted from this one request; dialogue and tool data are preserved. The full transcript remains archived.'
-              : 'Compacting the complete model context…',
-          );
+          // The row exists from the first moment so the reader sees "compacting"
+          // instead of a silent pause; applyCompaction replaces it in place.
+          const entry: Extract<SessionEntry, { kind: 'compaction' }> = {
+            kind: 'compaction',
+            status: 'running',
+            ...(this.lastContextUsage === undefined ? {} : { beforeTokens: this.lastContextUsage }),
+          };
+          this.compactionEntry = entry;
+          this.addEntry(entry);
+          if (recovery)
+            this.addNotice(
+              'Recovering compaction: earlier reasoning is omitted from this one request; dialogue and tool data are preserved. The full transcript remains archived.',
+            );
         },
-        onTextDelta: (delta) => this.queueStreamDelta('assistant', delta),
-        onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta),
+        onTextDelta: (delta) => this.queueStreamDelta('assistant', delta, 'compaction'),
+        onReasoningDelta: (delta) => this.queueStreamDelta('reasoning', delta, 'compaction'),
         abortSignal: abortController.signal,
         force: true,
         ...(recovery ? { recovery: true } : {}),
@@ -1714,6 +1835,17 @@ export class AgentSessionController implements AgentSessionClient {
       if (result) this.applyCompaction(result);
     } catch (error) {
       this.flushStreamedEntries();
+      // A compaction that stopped halfway is a fact about the context, not a
+      // silent failure: the row says so and keeps its start size.
+      const started = this.compactionEntry;
+      this.compactionEntry = null;
+      if (started) {
+        this.replaceEntry(started, {
+          kind: 'compaction',
+          status: 'failed',
+          ...(started.beforeTokens === undefined ? {} : { beforeTokens: started.beforeTokens }),
+        });
+      }
       const unsupportedImageInput = this.recoverFromUnsupportedImageInput(error);
       if (!abortController.signal.aborted)
         this.addNotice(
@@ -1750,8 +1882,45 @@ export class AgentSessionController implements AgentSessionClient {
     delete session.contextEstimateTokens;
     delete session.contextGrowthTokens;
     this.session = session;
-    this.addNotice(
-      'Context compacted in one LLM request. Visible user and assistant text is preserved. Earlier reasoning and large tool payloads are covered by the checkpoint; recent tool previews retain more detail. The full transcript remains in the session archive.',
+    // The compaction row replaces the one that was running, so the transcript
+    // shows one event that changed state instead of two unrelated notices.
+    const finished: Extract<SessionEntry, { kind: 'compaction' }> = {
+      kind: 'compaction',
+      status: 'done',
+      beforeTokens: result.beforeTokens,
+      afterTokens: result.afterTokens,
+    };
+    const started = this.compactionEntry;
+    this.compactionEntry = null;
+    if (started) this.replaceEntry(started, finished);
+    else this.addEntry(finished);
+  }
+
+  /**
+   * One accounting row per model request. Nothing here can fail a run: the sink is
+   * best effort and the ledger write is fire and forget.
+   */
+  private onStepUsage(report: StepUsageReport): void {
+    const sink = this.runtime.recordUsage;
+    if (!sink) return;
+    sink(
+      {
+        sessionId: this.session.id,
+        ...(this.activeEventId ? { eventId: this.activeEventId } : {}),
+        runKind: 'chat',
+        ...(this.runtime.workspaceRoot ? { workspaceRoot: this.runtime.workspaceRoot } : {}),
+        providerId: this.runtime.providerId,
+        modelId: this.runtime.modelId,
+        atMs: report.startedAt,
+        endedMs: report.endedAt,
+        attempt: report.attempt,
+        status: report.status,
+        tokens: report.usage,
+        ...(report.raw === undefined ? {} : { usageRaw: report.raw }),
+        ...(report.providerMetadata === undefined ? {} : { providerMetadata: report.providerMetadata }),
+        ...(report.responseId === undefined ? {} : { responseId: report.responseId }),
+      },
+      `${this.session.id}:${report.startedAt}:${report.attempt}`,
     );
   }
 
@@ -2299,6 +2468,9 @@ function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
           ? '[Host context: inbox notification]'
           : '';
   const workspaceLabel = message.workspaceRoot ? `[Host context: active workspace ${message.workspaceRoot.replace(/[\r\n]/g, ' ')}]` : '';
+  const projectLabel = message.projectContext
+    ? `[Host context: selected project ${JSON.stringify(message.projectContext)}; commands use the first source folder]`
+    : '';
   // A Telegram turn has to be answered in Telegram: text kept in this session is
   // invisible to the owner, which is an easy and completely silent mistake.
   const deliveryHint =
@@ -2306,7 +2478,10 @@ function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
       ? '[Host context: reply through send_message_to_owner; text written only in this session never reaches the owner]'
       : '';
   if (message.text || sourceLabel || workspaceLabel)
-    content.push({ type: 'text', text: [sourceLabel, workspaceLabel, deliveryHint, message.text].filter(Boolean).join('\n') });
+    content.push({
+      type: 'text',
+      text: [sourceLabel, workspaceLabel, projectLabel, deliveryHint, message.text].filter(Boolean).join('\n'),
+    });
   if (message.attachments?.length) content.push({ type: 'text', text: attachmentReferences(message.attachments) });
   return { role: 'user', content, ...(message.eventId ? { providerOptions: { ranite: { queuedMessageId: message.eventId } } } : {}) };
 }

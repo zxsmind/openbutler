@@ -370,6 +370,40 @@ describe('owner replies and safe steering', () => {
 });
 
 describe('provider retry reporting', () => {
+  it('keeps key selection per conversation across new sessions and reloads on a shared runtime', async () => {
+    const { createRotatingModel } = await import('../src/provider/retry.js');
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const first = new MockLanguageModelV3({
+      doStream: async () => {
+        throw Object.assign(new Error('rate limit'), { statusCode: 429 });
+      },
+    });
+    const second = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () =>
+        delayedStream([
+          { type: 'text-start', id: 'answer' },
+          { type: 'text-delta', id: 'answer', delta: 'Done.' },
+          { type: 'text-end', id: 'answer' },
+        ]),
+    });
+    const runtime = runtimeFor(second);
+    runtime.model = createRotatingModel([first, second], { poolId: 'a'.repeat(64), delaysMs: [] });
+    session = new AgentSessionController(runtime);
+    await session.sendMessage({ text: 'First', images: [] }, preferences);
+    expect(session.getLastRunError()).toBeNull();
+    const originalId = session.getSnapshot().session.id;
+    await session.sendMessage({ text: 'Continue', images: [] }, preferences);
+    expect(first.doStreamCalls).toHaveLength(1);
+    session.createNewSession();
+    await session.sendMessage({ text: 'New conversation', images: [] }, preferences);
+    expect(first.doStreamCalls).toHaveLength(2);
+    expect(session.loadSession(originalId)).not.toBeNull();
+    await session.sendMessage({ text: 'Resume', images: [] }, preferences);
+    expect(session.getLastRunError()).toBeNull();
+    expect(first.doStreamCalls).toHaveLength(2);
+  });
+
   it('shows a retry as one line that updates in place and stays after recovery', async () => {
     const model = new MockLanguageModelV3({
       doGenerate: async () => titleResponse(),
@@ -398,7 +432,7 @@ describe('provider retry reporting', () => {
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtime);
 
-    const running = session.sendMessage({ text: 'selam', images: [] }, preferences);
+    const running = session.sendMessage({ text: 'hello', images: [] }, preferences);
     await vi.waitFor(() => expect(report).not.toBeNull());
     const fire = report as unknown as (event: Record<string, unknown>) => void;
     fire({ kind: 'retry', keyIndex: 0, attempt: 0, waitMs: 1_000, error: { statusCode: 429 } });
@@ -440,7 +474,7 @@ describe('provider retry reporting', () => {
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtime);
 
-    const running = session.sendMessage({ text: 'selam', images: [] }, preferences);
+    const running = session.sendMessage({ text: 'hello', images: [] }, preferences);
     await vi.waitFor(() => expect(report).not.toBeNull());
     (report as unknown as (event: Record<string, unknown>) => void)({
       kind: 'rotate',
@@ -478,7 +512,7 @@ describe('session streaming message boundaries', () => {
     });
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtimeFor(model));
-    await session.sendMessage({ text: 'selam', images: [] }, preferences);
+    await session.sendMessage({ text: 'hello', images: [] }, preferences);
 
     const snapshot = session.getSnapshot();
     const reasoningEntries = snapshot.session.entries.filter((entry) => entry.kind === 'reasoning');
@@ -511,7 +545,7 @@ describe('session streaming message boundaries', () => {
     });
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtimeFor(model));
-    await session.sendMessage({ text: 'selam', images: [] }, { reasoningVariantId: 'default', showReasoning: false });
+    await session.sendMessage({ text: 'hello', images: [] }, { reasoningVariantId: 'default', showReasoning: false });
 
     const entries = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'reasoning');
     expect(entries).toHaveLength(1);
