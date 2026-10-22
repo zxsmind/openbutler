@@ -15,24 +15,34 @@ type GenerateResult = Awaited<ReturnType<V3LanguageModel['doGenerate']>>;
 /**
  * The backoff Ranite applies to one key before moving to the next.
  *
- * 1s, 2s, 4s, 8s, 16s, 32s: six waits, so up to seven attempts on a key. When
+ * 1s, 2s, 4s, 8s, 16s, 32s, 32s, 32s, 64s: nine waits, so up to ten attempts on a key. When
  * the sequence is exhausted the request moves to the next configured key; when
  * every key is exhausted the last error is raised. Retry lives here, not in the
  * AI SDK, so the two never compound.
  */
-export const RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000];
+export const RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 32_000, 32_000, 64_000];
 
 export type RetryEvent =
   | { kind: 'retry'; keyIndex: number; attempt: number; waitMs: number; error: unknown }
   | { kind: 'rotate'; keyIndex: number; reason: 'auth' | 'exhausted'; error: unknown };
 
 export interface RotatingModelOptions {
+  /** Opaque identity of the configured provider/key list. */
+  poolId?: string;
+  /** Owned and persisted by the conversation, never by the shared runtime. */
+  keyPositions?: Record<string, number>;
   /** Override the backoff sequence; tests pass `[]` to retry without waiting. */
   delaysMs?: readonly number[];
   /** Override the wait; tests record the requested delays instead of sleeping. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Observes each retry and rotation. */
   onRetry?: (event: RetryEvent) => void;
+}
+
+const sessionBindings = new WeakMap<object, (positions: Record<string, number>) => V3LanguageModel>();
+
+export function bindSessionKeyRotation(model: LanguageModel, positions: Record<string, number>): LanguageModel {
+  return typeof model === 'string' ? model : (sessionBindings.get(model)?.(positions) ?? model);
 }
 
 function statusOf(error: unknown): number | undefined {
@@ -90,7 +100,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 /**
  * Wraps one model per key behind a single model that retries and rotates.
  *
- * Each call runs against the first key; a retryable failure waits through the
+ * Each call starts at the session's current key; a retryable failure waits through the
  * backoff and tries again, and once the sequence is exhausted (or a key is
  * rejected outright) the call moves to the next key. With a single key this is
  * a plain retry; the identity of the base model is preserved so the SDK still
@@ -101,19 +111,31 @@ export function createRotatingModel(models: readonly V3LanguageModel[], options:
   if (!base) throw new Error('createRotatingModel needs at least one model.');
   const delays = options.delaysMs ?? RETRY_DELAYS_MS;
   const sleep = options.sleep ?? defaultSleep;
+  const positions = options.keyPositions ?? {};
+  const poolId = options.poolId ?? 'default';
 
   const run = async <T>(signal: AbortSignal | undefined, call: (model: V3LanguageModel) => PromiseLike<T>): Promise<T> => {
+    const start = positions[poolId] ?? 0;
+    if (!Number.isSafeInteger(start) || start < 0 || start >= models.length) {
+      throw new Error('Saved key position is outside the configured key pool.');
+    }
     let lastError: unknown;
-    for (let keyIndex = 0; keyIndex < models.length; keyIndex++) {
+    for (let keyIndex = start; keyIndex < models.length; keyIndex++) {
+      if (signal?.aborted) throw new Error('Run cancelled.');
+      keyIndex = Math.max(keyIndex, positions[poolId] ?? 0);
+      positions[poolId] = keyIndex;
       const model = models[keyIndex]!;
       const hasNextKey = keyIndex < models.length - 1;
       for (let attempt = 0; ; attempt++) {
+        if (signal?.aborted) throw new Error('Run cancelled.');
         try {
           return await call(model);
         } catch (error) {
+          if (signal?.aborted) throw error;
           lastError = error;
           if (isAuthError(error)) {
             if (hasNextKey) {
+              positions[poolId] = Math.max(keyIndex + 1, positions[poolId] ?? 0);
               options.onRetry?.({ kind: 'rotate', keyIndex, reason: 'auth', error });
               break;
             }
@@ -127,6 +149,7 @@ export function createRotatingModel(models: readonly V3LanguageModel[], options:
             continue;
           }
           if (hasNextKey) {
+            positions[poolId] = Math.max(keyIndex + 1, positions[poolId] ?? 0);
             options.onRetry?.({ kind: 'rotate', keyIndex, reason: 'exhausted', error });
             break;
           }
@@ -137,7 +160,7 @@ export function createRotatingModel(models: readonly V3LanguageModel[], options:
     throw lastError;
   };
 
-  return {
+  const rotating: V3LanguageModel = {
     specificationVersion: 'v3',
     provider: base.provider,
     modelId: base.modelId,
@@ -146,4 +169,6 @@ export function createRotatingModel(models: readonly V3LanguageModel[], options:
     doStream: (callOptions: StreamOptions) =>
       run(callOptions.abortSignal, (model) => model.doStream(callOptions)) as PromiseLike<StreamResult>,
   };
+  sessionBindings.set(rotating, (keyPositions) => createRotatingModel(models, { ...options, keyPositions }));
+  return rotating;
 }

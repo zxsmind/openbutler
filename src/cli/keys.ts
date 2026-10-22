@@ -1,7 +1,10 @@
 import { confirm, password } from '@inquirer/prompts';
 import { getCatalogIndex, listProviderSummaries } from '../provider/catalog.js';
+import { addProviderKeys } from '../provider/keys.js';
 import { loadSettings, saveSettings, type SettingsStore } from '../settings.js';
 import * as ui from './ui.js';
+
+export { addProviderKeys };
 
 export type KeysTarget = { kind: 'provider' } | { kind: 'unknown-provider'; id: string } | { kind: 'mcp-server'; id: string };
 
@@ -14,19 +17,6 @@ export function classifyKeysTarget(store: SettingsStore, id: string, catalogIds:
   if (id in store.providers || catalogIds.has(id)) return { kind: 'provider' };
   if (id in store.mcpServers) return { kind: 'mcp-server', id };
   return { kind: 'unknown-provider', id };
-}
-
-/** Appends keys to a provider, creating a fresh enabled entry when needed. Returns the keys actually added. */
-export function addProviderKeys(store: SettingsStore, providerId: string, keys: string[]): number {
-  const normalized = keys.map((key) => key.trim()).filter((key) => key.length > 0);
-  if (normalized.length === 0) return 0;
-  const existing = store.providers[providerId] ?? { enabled: true, keys: [] };
-  const merged = [...existing.keys];
-  for (const key of normalized) if (!merged.includes(key)) merged.push(key);
-  const added = merged.length - existing.keys.length;
-  store.providers[providerId] = { ...existing, keys: merged };
-  if (!store.providerOrder.includes(providerId)) store.providerOrder.push(providerId);
-  return added;
 }
 
 /** Drops every key of a provider while keeping the entry. False when there was nothing to drop. */

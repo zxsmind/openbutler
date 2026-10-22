@@ -1,4 +1,5 @@
 import type { JSONValue, LanguageModel } from 'ai';
+import { createHash } from 'node:crypto';
 import { getModel, getProvider, isCatalogLoaded, listProviderIdsForModel, type CatalogModel } from './catalog.js';
 import { importProviderFactory, packageReadsOwnEnv } from './install.js';
 import { createRotatingModel, type RetryEvent, type V3LanguageModel } from './retry.js';
@@ -439,7 +440,12 @@ export async function createLanguageModel(
       const perKey = source ? { ...provider, apiKey: source } : provider;
       models.push((await factory.createModel(perKey, modelId, fetch)) as V3LanguageModel);
     }
-    return { ok: true, model: createRotatingModel(models, onRetry ? { onRetry } : {}), resolved: provider };
+    // A reordered/replaced key list is a new pool; persisted positions cannot
+    // accidentally refer to a different credential. No credentials are stored.
+    const poolId = createHash('sha256')
+      .update(JSON.stringify([provider.id, provider.npm, provider.baseURL, provider.options, keySources.map((source) => source?.key)]))
+      .digest('hex');
+    return { ok: true, model: createRotatingModel(models, { poolId, ...(onRetry ? { onRetry } : {}) }), resolved: provider };
   } catch (error) {
     return {
       ok: false,
