@@ -78,5 +78,7 @@ it('leaves an ordinary result untouched', async () => {
 
   const built = await registry.createModelTools({ approve: async () => true, onResult: () => {} });
   const returned = await built.tools.plain!.execute!({}, { toolCallId: 'call-3', messages: [] });
-  expect(returned).toEqual({ status: 'completed', stdout: 'all good\nbuild finished in 3.2s' });
+  // The tool's own output is untouched; the run's timing rides beside it.
+  expect(returned).toMatchObject({ status: 'completed', stdout: 'all good\nbuild finished in 3.2s' });
+  expect(typeof (returned as Record<string, unknown>).raniteTiming).toBe('string');
 });

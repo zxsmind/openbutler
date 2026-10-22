@@ -87,7 +87,9 @@ describe('approval outcomes at the registry', () => {
   it('still stops the run on an explicit human decline', async () => {
     const { entry, shouldStop } = await buildModelTool(async () => false);
     const output = (await entry.execute({}, { toolCallId: 'call-1' })) as Record<string, unknown>;
-    expect(output).toEqual({ status: 'denied', error: 'The user declined this tool call. It was not run.' });
+    // The run's timing rides beside the tool's own answer; it never replaces it.
+    expect(output).toMatchObject({ status: 'denied', error: 'The user declined this tool call. It was not run.' });
+    expect(typeof output.raniteTiming).toBe('string');
     expect(shouldStop()).toBe(true);
   });
 
@@ -99,7 +101,8 @@ describe('approval outcomes at the registry', () => {
       risk: 'low',
     }));
     const output = await entry.execute({}, { toolCallId: 'call-1' });
-    expect(output).toEqual({ status: 'completed', detail: 'fixture result' });
+    // The tool's payload is unchanged; the stamp rides the same result object.
+    expect(output).toMatchObject({ status: 'completed', detail: 'fixture result' });
     expect(seen).toEqual([output]);
     const modelOutput = (await entry.toModelOutput?.({ output })) as { type: string; value: string };
     expect(modelOutput.type).toBe('text');

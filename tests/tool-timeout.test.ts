@@ -34,7 +34,7 @@ describe('one host-owned tool timeout contract', () => {
     expect(schema.jsonSchema).toMatchObject({ properties: { [TOOL_TIMEOUT_FIELD]: { type: 'integer', minimum: 1, maximum: 500 } } });
     expect(JSON.stringify(schema.jsonSchema)).not.toContain('description');
     expect(JSON.stringify(tool.inputSchema)).toBe(originalSchema);
-    expect(await available.execute!({ value: 'hello', _timeoutSeconds: 200 }, execOptions)).toEqual({
+    expect(await available.execute!({ value: 'hello', _timeoutSeconds: 200 }, execOptions)).toMatchObject({
       input: { value: 'hello' },
       seconds: 200,
     });
@@ -71,7 +71,7 @@ describe('one host-owned tool timeout contract', () => {
     await vi.advanceTimersByTimeAsync(61_000);
     expect(signal.aborted).toBe(false);
     finish.resolve({ status: 'completed' });
-    expect(await running).toEqual({ status: 'completed' });
+    expect(await running).toMatchObject({ status: 'completed' });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -178,7 +178,9 @@ describe('one host-owned tool timeout contract', () => {
     tool.inputSchema = { type: 'object', properties: { timeoutSeconds: { type: 'number' } } };
     registry.register(tool);
     const built = await registry.createModelTools({ approve: async () => true, onResult: () => {} });
-    expect(await built.tools.wait!.execute!({ timeoutSeconds: 12, _timeoutSeconds: 200 }, execOptions)).toEqual({ timeoutSeconds: 12 });
+    expect(await built.tools.wait!.execute!({ timeoutSeconds: 12, _timeoutSeconds: 200 }, execOptions)).toMatchObject({
+      timeoutSeconds: 12,
+    });
     const collision = definition(async () => ({}), 'mcp-reserved');
     collision.inputSchema = { type: 'object', properties: { _timeoutSeconds: { type: 'string' } } };
     expect(() => registry.register(collision)).toThrow('reserved');
