@@ -1,6 +1,6 @@
 {
   "name": "ranite",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "type": "module",
   "description": "An agent that knows your machine.",
   "publishConfig": {
@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc && node scripts/copy-builtin-skills.mjs",
     "prepare": "npm run build",
-    "check": "npm run typecheck && npm run lint && npm run format:check && vitest run",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm --prefix web run typecheck && vitest run",
     "dev": "tsx src/cli.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

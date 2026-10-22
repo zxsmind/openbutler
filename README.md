@@ -20,8 +20,8 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
 ```
 
-A specific release: `bash -s -- --version 0.4.3` for the shell installer, or
-download `install.ps1` first and run `.\install.ps1 -Version 0.4.3`.
+A specific release: `bash -s -- --version 0.5.0` for the shell installer, or
+download `install.ps1` first and run `.\install.ps1 -Version 0.5.0`.
 `--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
 Both installers verify the result with `ranite --version`; restart the
 terminal afterwards so the updated PATH takes effect.
