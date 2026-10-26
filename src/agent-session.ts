@@ -236,6 +236,7 @@ export class AgentSessionController implements AgentSessionClient {
   private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string; internal?: 'compaction' }> = [];
   private busy = false;
   private closed = false;
+  private titleAbort: AbortController | null = null;
   /**
    * A compaction requested while a run was in flight. The run serves it at its
    * next step boundary; the run's end is only the fallback for a request that
@@ -1716,21 +1717,7 @@ export class AgentSessionController implements AgentSessionClient {
           }
         }
 
-        if (titleRequest && !abortController.signal.aborted) {
-          const request = titleRequest;
-          titleRequest = null;
-          try {
-            const live = this.liveTurnPreferences();
-            const providerOptions = this.runtime.getReasoningProviderOptions(live.reasoningVariantId, live.showReasoning);
-            const title = await generateSessionTitle(this.sessionModel(), request.message, abortController.signal, providerOptions);
-            if (this.session.id === request.sessionId) {
-              this.session = { ...this.session, title };
-              this.publish();
-            }
-          } catch {
-            // Keep the first-message fallback when the title request is unavailable.
-          }
-        }
+        if (titleRequest && !abortController.signal.aborted) this.generateTitleInBackground(titleRequest);
         if (abortController.signal.aborted) this.runError = 'Run cancelled.';
         if (current.eventId) {
           this.flushEventAssistantText();
@@ -1801,6 +1788,36 @@ export class AgentSessionController implements AgentSessionClient {
       this.servePendingCompactionOrQueue();
       queueMicrotask(() => this.servePendingCompactionOrQueue());
     }
+  }
+
+  private cancelTitleGeneration(): void {
+    this.titleAbort?.abort();
+    this.titleAbort = null;
+  }
+
+  private generateTitleInBackground(request: { sessionId: string; message: string }): void {
+    this.cancelTitleGeneration();
+    const controller = new AbortController();
+    this.titleAbort = controller;
+    const fallback = this.session.title;
+    void (async () => {
+      try {
+        const live = this.liveTurnPreferences();
+        const providerOptions = this.runtime.getReasoningProviderOptions(live.reasoningVariantId, live.showReasoning);
+        // Metadata must not rotate the active conversation's keys or report retries into its next turn.
+        const model = bindSessionKeyRotation(this.runtime.model, { ...this.session.keyPositions }, () => {});
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
+        const title = await generateSessionTitle(model, request.message, signal, providerOptions);
+        if (!this.closed && !signal.aborted && this.session.id === request.sessionId && this.session.title === fallback) {
+          this.session = { ...this.session, title };
+          this.publish();
+        }
+      } catch {
+        // The first-message fallback remains valid when metadata generation fails.
+      } finally {
+        if (this.titleAbort === controller) this.titleAbort = null;
+      }
+    })();
   }
 
   /** Run the queued compaction, otherwise start the next queued turn. */
