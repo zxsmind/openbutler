@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeBase64Image, MAX_IMAGE_BYTES } from '../image-data.js';
@@ -32,10 +32,10 @@ import { readMemorySnapshot } from '../memory-view.js';
 import { readLogRecords } from '../cli/logs.js';
 import { createProject, listProjects, projectFolder, ProjectInputError, resolveProjectSelection } from '../projects/store.js';
 import { pickProjectFolder } from './folder-picker.js';
-
 import { attachTerminalServer } from './terminal-server.js';
 import { readWorkspaceFiles, readWorkspaceFileTree, WorkspaceFilesError } from './files.js';
 import { WebSessions, SessionRequestError } from './sessions.js';
+
 /** Outside the Windows ephemeral range so the port stays free between runs. */
 /**
  * Every model a configured provider offers, with the flag that decides whether it
@@ -159,15 +159,20 @@ function defaultAssetsDir(): string | null {
 
 /**
  * Identifies the bundle being served. Asset names are content-hashed, so the
- * index file's own digest changes exactly when a rebuild does.
+ * index file's own digest changes exactly when a rebuild does. Read on demand
+ * and memoized on the file itself: this server outlives rebuilds, so a digest
+ * captured once at startup would leave every open tab unaware of the new bundle.
  */
+let buildIdCache: { mtimeMs: number; size: number; id: string } | null = null;
 function readBuildId(assetsDir: string | undefined): string | null {
   if (!assetsDir) return null;
   try {
-    return createHash('sha256')
-      .update(readFileSync(join(assetsDir, 'index.html')))
-      .digest('hex')
-      .slice(0, 12);
+    const file = join(assetsDir, 'index.html');
+    const { mtimeMs, size } = statSync(file);
+    if (buildIdCache && buildIdCache.mtimeMs === mtimeMs && buildIdCache.size === size) return buildIdCache.id;
+    const id = createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 12);
+    buildIdCache = { mtimeMs, size, id };
+    return id;
   } catch {
     return null;
   }
@@ -219,8 +224,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   const assetsDir = options.assetsDir ?? defaultAssetsDir() ?? undefined;
   // An open tab keeps the bundle it loaded, so a rebuild would only reach the
   // reader after a manual reload. The build id lets the client notice and reload
-  // itself once it is idle.
-  const buildId = readBuildId(assetsDir);
+  // itself once it is idle; it is asked for per answer because this server keeps
+  // running across rebuilds.
+  const currentBuildId = () => readBuildId(assetsDir);
   const startedAt = Date.now();
   const client: AgentSessionClient = await connectDaemonSession(options.workspaceRoot, { clientKind: 'web' });
   const sessions = new WebSessions(client, options.workspaceRoot);
@@ -272,14 +278,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       session: {
         id: snapshot.session.id,
         title: snapshot.session.title,
+        hasUserMessage: snapshot.session.hasUserMessage ?? source.getServerEntries().some((entry) => entry.kind === 'user'),
         ...(snapshot.session.project ? { project: snapshot.session.project } : {}),
         projectLocked: snapshot.session.project?.locked === true || snapshot.session.hasUserMessage === true,
       },
-      buildId,
+      buildId: currentBuildId(),
     };
   };
 
-        hasUserMessage: snapshot.session.hasUserMessage ?? source.getServerEntries().some((entry) => entry.kind === 'user'),
   const writeEvent = (client_: SseClient, event: string, data: unknown) => {
     // One dead socket must never break the broadcast for the other clients, so a
     // failed write drops that stream instead of throwing through the loop.
@@ -304,6 +310,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     if (clients.size === 0) return;
     const entries = client.getServerEntries() as Entry[];
     for (const target of clients) {
+      if (target.sessionId !== boundId) continue;
+      if (client.getSnapshot().session.id !== boundId) {
+        target.res.end();
+        continue;
+      }
       const previous = target.lastEntries;
       const sessionChanged = target.sessionId !== client.getSnapshot().session.id;
       let payload: ReturnType<typeof snapshotPayload>;
@@ -311,11 +322,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       if (!previous || sessionChanged || entries.length < previous.length) {
         resetReason = !previous ? 'first' : sessionChanged ? 'session' : 'shrunk';
         const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      if (target.sessionId !== boundId) continue;
-      if (client.getSnapshot().session.id !== boundId) {
-        target.res.end();
-        continue;
-      }
         payload = snapshotPayload(entries.slice(from), true, from, client);
       } else {
         const updated: { index: number; entry: Entry }[] = [];
@@ -449,13 +455,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       }
     }
 
-    if (url.pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, clients: clients.size, uptimeMs: Date.now() - startedAt });
-    }
-
-    if (url.pathname === '/api/projects' && req.method === 'GET') {
-      return sendJson(res, 200, { projects: listProjects(), supportsSelection: client.runtime.supportsProjects === true });
-    }
     const headerSessionId = req.headers['x-ranite-session'];
     if (headerSessionId !== undefined && typeof headerSessionId !== 'string') return sendJson(res, 400, { error: 'Invalid chat ID.' });
     const querySessionId = url.searchParams.get('sessionId');
@@ -464,10 +463,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     const requestedSessionId = querySessionId ?? headerSessionId;
     const client = protectedPath && requestedSessionId ? await sessions.get(requestedSessionId) : sessions.defaultClient;
 
-    if (url.pathname === '/api/projects' && req.method === 'POST') {
-      return sendJson(res, 201, createProject(JSON.parse(await readBody(req, 65536))));
+    if (url.pathname === '/api/health') {
+      return sendJson(res, 200, { ok: true, clients: clients.size, uptimeMs: Date.now() - startedAt });
     }
-    if (url.pathname === '/api/project-folders' && req.method === 'POST') {
+
     if ((url.pathname === '/api/files' || url.pathname === '/api/files/tree') && req.method === 'GET') {
       const sessionId = url.searchParams.get('sessionId');
       if (sessionId !== client.getSnapshot().session.id)
@@ -486,6 +485,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       }
     }
 
+    if (url.pathname === '/api/projects' && req.method === 'GET') {
+      return sendJson(res, 200, { projects: listProjects(), supportsSelection: client.runtime.supportsProjects === true });
+    }
+    if (url.pathname === '/api/projects' && req.method === 'POST') {
+      return sendJson(res, 201, createProject(JSON.parse(await readBody(req, 65536))));
+    }
+    if (url.pathname === '/api/project-folders' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req, 65536)) as { path?: unknown };
       return sendJson(res, 200, { path: projectFolder(body.path) });
     }
@@ -525,6 +531,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           title: session.title,
           updatedAt: session.updatedAt,
           preview: session.preview ?? null,
+          running: session.running,
           workspaceRoot: session.workspaceRoot,
           ...(session.project ? { project: session.project } : {}),
         })),
@@ -532,7 +539,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
 
     if (url.pathname === '/api/approvals' && req.method === 'GET') {
-          running: session.running,
       let remembered: Array<{ id: string; label: string; at: number }> = [];
       try {
         remembered = listRememberedPermissions().map((entry) => ({ id: entry.hash, label: entry.label, at: entry.at }));
@@ -617,7 +623,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         dataDir: getDataPath(),
         logPath: getDataPath(join('logs', 'ranite.log')),
         uptimeMs: Date.now() - startedAt,
-        buildId,
+        buildId: currentBuildId(),
         providerId: client.runtime.providerId,
         modelId: client.runtime.modelId,
         contextWindowTokens: client.runtime.contextWindowTokens ?? null,
@@ -962,6 +968,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         socketError = problem.name;
       });
       const target: SseClient = { res, lastEntries: null, sessionId: client.getSnapshot().session.id, lastWriteAt: Date.now() };
+      const release = sessions.retain(target.sessionId);
       clients.add(target);
       const entries = client.getServerEntries() as Entry[];
       target.lastEntries = entries;
@@ -969,7 +976,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       writeEvent(target, 'snapshot', snapshotPayload(entries.slice(from), true, from, client));
       const heartbeat = setInterval(() => {
         if (res.writableEnded || res.destroyed) return;
-      const release = sessions.retain(target.sessionId);
         try {
           // A named event, not a comment: the browser must be able to see that
           // the stream is alive, or it cannot tell a healthy stream from a dead one.
@@ -984,6 +990,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const device = /iphone|ipad|android/i.test(agent) ? 'mobile' : 'desktop';
       logger.info('web.stream.open', { device, port: req.socket.remotePort ?? null, agent: agent.slice(0, 80), clients: clients.size });
       req.on('close', () => {
+        release();
         clearInterval(heartbeat);
         clients.delete(target);
         // Who ended the stream is the question a "keeps dropping" report asks:
@@ -991,7 +998,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         // simply went away look identical from the outside.
         logger.info('web.stream.close', {
           device,
-        release();
           port: req.socket.remotePort ?? null,
           seconds: Math.round((Date.now() - openedAt) / 1000),
           silentMs: Date.now() - target.lastWriteAt,
@@ -1110,6 +1116,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
     if (req.method === 'GET') {
       if (await serveStatic(res, url.pathname)) return;
+      // A missing hashed asset is how a stale tab shows itself: the bundle still
+      // running in that browser asks for a file a rebuild has already removed.
+      if (assetsDir !== undefined) logger.warn('web.static.missing', { path: url.pathname });
       // No client bundle and no static file to serve: say so. The server does not
       // carry a page of its own, so what a browser shows is the real client or a
       // 404 that names the command that builds it.
