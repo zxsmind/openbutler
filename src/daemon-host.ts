@@ -14,6 +14,9 @@ import {
   type QueuedMessage,
 } from './agent-session.js';
 import { createAgentRuntime } from './agent-runtime.js';
+import { createMcpConnectionManager } from './tools/mcp.js';
+import { CATALOG_FILENAMES } from './provider/catalog.js';
+import { resolveProjectSelection } from './projects/store.js';
 import { recordUsage as recordUsageRow } from './usage/recorder.js';
 import {
   DAEMON_PROTOCOL_VERSION,
@@ -261,9 +264,18 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   let settingsWatcher: SettingsWatcher | null = null;
   let workspaceSweepTimer: ReturnType<typeof setInterval> | null = null;
   let telegram: TelegramAdapter | null = null;
+  let appliedTelegramConfig: string | null = null;
   let reloadChain = Promise.resolve();
   let closePromise: Promise<void> | null = null;
   let closing = false;
+  const mcpManager = createMcpConnectionManager({
+    onError: (id, message) => options.log(`MCP server ${id}: ${redactSensitiveText(message)}`),
+    onConnected: (id, count) => options.log(`MCP server ${id} connected (${count} tools).`),
+    canReconfigure: () =>
+      ![...workspaces.values(), ...(custodianWorkspace ? [custodianWorkspace] : [])].some(
+        (workspace) => workspace.controller.isBusy || [...workspace.privateSessions.values()].some((session) => session.controller.isBusy),
+      ),
+  });
   /**
    * Team hub HTTP server. Runs only on a hub machine, bound to the tailnet
    * interface; started and stopped from reloadServices so a hand-edited
@@ -957,11 +969,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     return loading;
   }
 
-  async function createWorkspace(root: string, key: string): Promise<WorkspaceHost> {
-    const runtime = await (options.runtimeFactory ?? createAgentRuntime)({
+  async function createSessionRuntime(root: string, initialModel?: { providerId: string; modelId: string }): Promise<AgentEnvironment> {
+    return (options.runtimeFactory ?? createAgentRuntime)({
       workspaceRoot: root,
-      onMcpError: (serverId, message) => options.log(`MCP server ${serverId}: ${message}`),
-      onMcpConnected: (serverId, toolCount) => options.log(`MCP server ${serverId} connected (${toolCount} tools).`),
+      ...(initialModel ? { initialModel } : {}),
+      mcpManager,
       // Accounting lives with the ledger, which this host owns: one writer, every request.
       recordUsage: (input, id) => void recordUsageRow(ledger, input, id),
       backgroundManage: executeBackground,
@@ -1014,6 +1026,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const next = controller.getSnapshot();
       const previous = workspace.lastSnapshot;
       workspace.lastSnapshot = next;
+      if (previous.busy && !next.busy) reloadSettledRuntime(workspace);
       const event = makeSessionEvent(previous, next, runtime);
       for (const client of workspace.clients) writeEvent(client, event);
       observeApproval(controller, previous, next, root, 'Ranite');
@@ -1113,6 +1126,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         const next = controller.getSnapshot();
         const previous = workspace.lastSnapshot;
         workspace.lastSnapshot = next;
+        if (previous.busy && !next.busy) reloadSettledRuntime(workspace);
         if (previous.session.id !== next.session.id) ledger.setState(CUSTODIAN_CURRENT_SESSION_KEY, next.session.id);
         for (const client of workspace.clients) {
           const scopeRoot = attachments.get(client)?.scopeRoot ?? runtime.workspaceRoot;
@@ -1191,6 +1205,19 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const privateEvent = makeSessionEvent(privateSnapshot, privateSnapshot, workspace.runtime);
       for (const client of session.clients) writeEvent(client, privateEvent);
     }
+  }
+
+  async function reloadWorkspaceRuntime(workspace: WorkspaceHost): Promise<void> {
+    if (closing || !workspace.runtime.reloadSettings) return;
+    const busy = workspace.controller.isBusy || [...workspace.privateSessions.values()].some((session) => session.controller.isBusy);
+    await workspace.runtime.reloadSettings?.(!busy);
+    if (!closing) publishRuntime(workspace);
+  }
+
+  function reloadSettledRuntime(workspace: WorkspaceHost): void {
+    void reloadWorkspaceRuntime(workspace).catch((error: unknown) =>
+      options.log(`Runtime settings reload: ${redactSensitiveText(String(error))}`),
+    );
   }
 
   /**
@@ -1278,6 +1305,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const next = controller.getSnapshot();
       const previous = privateSession.lastSnapshot;
       privateSession.lastSnapshot = next;
+      if (previous.busy && !next.busy) reloadSettledRuntime(workspace);
       const lineage = readWorkerRecord(ledger, next.session.id);
       if (!closing && lineage?.background && !previous.busy && next.busy)
         writeWorkerRecord(ledger, next.session.id, { ...lineage, finished: false });
@@ -1429,42 +1457,52 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const reload = reloadChain.then(async () => {
       if (closing) return;
       const settings = loadSettings();
-      // A team switch or a leave drops the previous team's queued messages, so
-      // nothing is ever delivered to the wrong team.
-      const nextTeamId = settings.team ? membershipKey(settings.team) : null;
-      if (activeTeamId !== nextTeamId) teamReadMessageIds.clear();
-      // Deliveries retain their original membership and remain inspectable after a switch.
-      activeTeamId = nextTeamId;
       applyApprovalMode(settings.approvalMode, false);
+      await Promise.all(
+        [...workspaces.values(), ...(custodianWorkspace ? [custodianWorkspace] : [])].map(async (workspace) => {
+          try {
+            await reloadWorkspaceRuntime(workspace);
+          } catch (error) {
+            options.log(`Runtime settings reload: ${redactSensitiveText(String(error))}`);
+          }
+        }),
+      );
       await scheduler.reload(settings.schedules);
       if (closing) return;
-      if (telegram?.getStatus().paired === true && !(settings.telegram?.enabled === true && Boolean(settings.telegram.chatId))) {
-        await telegram.removeReplyKeyboard().catch((error: unknown) => options.log(`Telegram farewell: ${String(error)}`));
-      }
-      await telegram?.close();
-      if (closing) return;
-      telegram = new TelegramAdapter(settings.telegram, ledger, {
-        log: options.log,
-        message: (updateId, text, attachment) => receiveTelegramMessage(updateId, text, attachment),
-        approval: (requestId, decision) => {
-          const controller = approvalControllers.get(requestId);
-          if (!controller || controller.getSnapshot().pendingApprovalId !== requestId) return false;
-          controller.approveToolCall(decision, requestId);
-          return true;
-        },
-        paired: (chatId, userId) => {
-          const latest = loadSettings();
-          if (!latest.telegram || latest.telegram.tokenEnv !== settings.telegram?.tokenEnv)
-            throw new Error('Telegram settings changed while pairing. Start a new pairing request.');
-          latest.telegram.chatId = chatId;
-          latest.telegram.userId = userId;
-          saveSettings(latest);
-        },
-      });
-      try {
-        await telegram.start();
-      } catch (error) {
-        options.log(String(error));
+      const nextTelegramConfig = JSON.stringify([
+        settings.telegram,
+        settings.telegram ? process.env[settings.telegram.tokenEnv] : undefined,
+      ]);
+      if (nextTelegramConfig !== appliedTelegramConfig) {
+        if (telegram?.getStatus().paired === true && !(settings.telegram?.enabled === true && Boolean(settings.telegram.chatId))) {
+          await telegram.removeReplyKeyboard().catch((error: unknown) => options.log(`Telegram farewell: ${String(error)}`));
+        }
+        await telegram?.close();
+        if (closing) return;
+        telegram = new TelegramAdapter(settings.telegram, ledger, {
+          log: options.log,
+          message: (updateId, text, attachment) => receiveTelegramMessage(updateId, text, attachment),
+          approval: (requestId, decision) => {
+            const controller = approvalControllers.get(requestId);
+            if (!controller || controller.getSnapshot().pendingApprovalId !== requestId) return false;
+            controller.approveToolCall(decision, requestId);
+            return true;
+          },
+          paired: (chatId, userId) => {
+            const latest = loadSettings();
+            if (!latest.telegram || latest.telegram.tokenEnv !== settings.telegram?.tokenEnv)
+              throw new Error('Telegram settings changed while pairing. Start a new pairing request.');
+            latest.telegram.chatId = chatId;
+            latest.telegram.userId = userId;
+            saveSettings(latest);
+          },
+        });
+        try {
+          await telegram.start();
+          appliedTelegramConfig = nextTelegramConfig;
+        } catch (error) {
+          options.log(String(error));
+        }
       }
       if (closing) return;
       await ensureTeamServer(settings);
