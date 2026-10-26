@@ -25,6 +25,8 @@ export interface ToolEffect {
 }
 
 export interface ToolExecutionContext {
+  /** Capabilities of this call's model; shared transports never retain a chat's modalities. */
+  inputModalities?: readonly string[];
   /** Host-selected operation budget, separate from tool/server arguments. */
   timeoutSeconds?: number;
   /** The target resolved once before the permission decision, when the definition declared one. */

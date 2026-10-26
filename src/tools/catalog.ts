@@ -117,6 +117,14 @@ export function createToolCatalogue(options: ToolCatalogueOptions): ToolDefiniti
     ),
     createMcpManagementTool(options.mcp, options.onMcpConnectionsChanged),
   ];
-  definitions.push(...options.mcp.tools);
+  definitions.push(
+    ...options.mcp.tools.map(
+      (definition) =>
+        ({
+          ...definition,
+          execute: (input, signal, context) => definition.execute(input, signal, { ...context, inputModalities: options.inputModalities }),
+        }) satisfies ToolDefinition,
+    ),
+  );
   return definitions;
 }
