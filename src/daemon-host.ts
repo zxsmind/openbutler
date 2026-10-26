@@ -2115,57 +2115,6 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
   }
 
-  function finishOwnerInboxRecovery(event: ObservedEventRow): void {
-    const inboxIds = [
-      ...(Array.isArray(event.payload.inboxEventIds)
-        ? event.payload.inboxEventIds.filter((id): id is string => typeof id === 'string')
-        : []),
-      ...(typeof event.payload.inboxEventId === 'string' ? [event.payload.inboxEventId] : []),
-      ...parseOwnerInboxReadIds(),
-    ];
-    for (const inboxId of new Set(inboxIds)) {
-      if (!ledger.getState(`owner-inbox:reply:${inboxId}`))
-        ledger.setEventState(inboxId, 'failed', 'No Telegram response was sent after the bounded delivery retry.');
-    }
-  }
-
-  function queueOwnerInboxRecovery(event: ObservedEventRow, workspaceRoot: string): void {
-    const inboxId = event.payload.inboxEventId;
-    const userId = event.payload.userId;
-    if (typeof inboxId !== 'string' || typeof userId !== 'string' || ledger.getState(`owner-inbox:reply:${inboxId}`)) return;
-    const recoveryKey = `owner-inbox:recovery:${inboxId}`;
-    if (ledger.getState(recoveryKey)) return;
-    const recoveryActive = [...activeEvents.keys()].some((id) => {
-      const active = ledger.getEvent(id);
-      return active?.source === 'telegram' && active.payload.userId === userId && active.payload.recovery === true;
-    });
-    const recoveryPending = ledger
-      .pendingEvents(1000)
-      .some((pending) => pending.source === 'telegram' && pending.payload.userId === userId && pending.payload.recovery === true);
-    if (recoveryActive || recoveryPending) return;
-    const inbox = ledger.getEvent(inboxId);
-    if (!inbox || inbox.status === 'ignored') return;
-    const inboxIds = [...new Set([inboxId, ...parseOwnerInboxReadIds()])];
-    const inserted = ledger.insertEvent({
-      source: 'telegram',
-      kind: 'inbox.delivery-recovery',
-      dedupeKey: `telegram-inbox-recovery:${inboxId}`,
-      workspaceRoot,
-      payload: {
-        inboxEventId: inboxId,
-        inboxEventIds: inboxIds,
-        userId,
-        chatId: event.payload.chatId,
-        recovery: true,
-        wasRead: inbox.status === 'delivered' || inboxIds.some((id) => parseOwnerInboxReadIds().includes(id)),
-      },
-    });
-    if (!inserted.inserted) return;
-    for (const id of inboxIds) ledger.setState(`owner-inbox:recovery:${id}`, inserted.id);
-    ledger.setState(`owner-inbox:wakeup:${inboxId}`, inserted.id);
-    pumpEvents();
-  }
-
   /** The machine custodian may steer live workers; workspace runtimes cannot impersonate it. */
   function deliverSessionMessage(input: Record<string, unknown>, senderSessionId: string | undefined): unknown {
     if (!senderSessionId) return { status: 'error', error: 'The sending session could not be identified.' };
