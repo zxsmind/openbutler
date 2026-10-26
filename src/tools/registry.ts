@@ -165,7 +165,7 @@ export class ToolRegistry {
 
   async createModelTools(options: {
     approve: (request: ToolCallRequest, signal?: AbortSignal) => Promise<ToolApprovalResponse>;
-    approvalMode?: ApprovalMode;
+    approvalMode?: ApprovalMode | (() => ApprovalMode);
     autoApprove?: (request: ToolCallRequest) => boolean;
     allowToolAutoApproval?: boolean;
     /** Interactive user-question channel passed to every tool; absent in unattended runs. */
@@ -281,7 +281,8 @@ export class ToolRegistry {
         );
       }
       let scope: WorkspaceScope = 'unknown';
-      if (options.approvalMode === 'workspace' || options.approvalMode === 'auto-review') {
+      const approvalMode = typeof options.approvalMode === 'function' ? options.approvalMode() : options.approvalMode;
+      if (approvalMode === 'workspace' || approvalMode === 'auto-review') {
         try {
           scope = definition.workspaceScope?.(input, target) ?? 'unknown';
         } catch {
@@ -309,10 +310,10 @@ export class ToolRegistry {
       let autoApproved: boolean;
       try {
         autoApproved =
-          options.approvalMode === 'full-access' ||
+          approvalMode === 'full-access' ||
           definition.hostPreAuthorized?.(input, target) === true ||
           (options.allowToolAutoApproval !== false && definition.autoApprove?.(input, target) === true) ||
-          ((options.approvalMode === 'workspace' || options.approvalMode === 'auto-review') && scope === 'workspace') ||
+          ((approvalMode === 'workspace' || approvalMode === 'auto-review') && scope === 'workspace') ||
           options.autoApprove?.(request) === true;
       } catch (error) {
         return failClosed(`Tool approval policy failed; the tool was not run: ${error instanceof Error ? error.message : String(error)}`);

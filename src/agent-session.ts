@@ -1038,6 +1038,7 @@ export class AgentSessionController implements AgentSessionClient {
       }
       let outcome: AutoReviewResult;
       try {
+        await this.runtime.reloadSettings?.();
         outcome = await (this.options.autoReviewer ?? reviewToolRequest)({
           model: this.sessionModel(this.runtime.reviewModel ?? this.runtime.model),
           request,
@@ -1493,7 +1494,7 @@ export class AgentSessionController implements AgentSessionClient {
           const schemaSanitizer = this.toolSchemaSanitizer();
           const tools = await this.runtime.registry.createModelTools({
             approve: (request, signal) => this.requestApproval(request, signal),
-            approvalMode: this.runtime.approvalMode ?? 'workspace',
+            approvalMode: () => this.runtime.approvalMode ?? 'workspace',
             autoApprove: (request) => this.options.autoApprove?.(request) ?? isToolRequestWhitelisted(this.runtime.workspaceRoot, request),
             allowToolAutoApproval: this.options.background !== true,
             ...(this.options.tools ? { allowTools: this.options.tools } : {}),
@@ -1529,6 +1530,10 @@ export class AgentSessionController implements AgentSessionClient {
             const result = await runAgent({
               sessionId: this.session.id,
               model: this.sessionModel(),
+              getModel: async () => {
+                await this.runtime.reloadSettings?.();
+                return this.sessionModel();
+              },
               workspaceRoot: this.runtime.workspaceRoot,
               supportsVision: this.runtime.supportsVision,
               supportsImageToolResult: this.runtime.supportsImageToolResult,
@@ -1566,10 +1571,6 @@ export class AgentSessionController implements AgentSessionClient {
                     onStart: () => {
                       this.flushStreamedEntries();
                       const entry: Extract<SessionEntry, { kind: 'compaction' }> = {
-              getModel: async () => {
-                await this.runtime.reloadSettings?.();
-                return this.sessionModel();
-              },
                         kind: 'compaction',
                         status: 'running',
                         ...(this.lastContextUsage === undefined ? {} : { beforeTokens: this.lastContextUsage }),
