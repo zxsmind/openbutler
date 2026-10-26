@@ -2492,9 +2492,11 @@ function queuedUserMessageToModelMessage(message: QueuedMessage, steering = fals
       ? '[Host context: owner message via Telegram]'
       : source === 'terminal'
         ? '[Host context: owner message via terminal]'
-        : source === 'inbox' || source === 'owner-inbox' || source === 'team' || source === 'worker'
-          ? '[Host context: inbox notification]'
-          : '';
+        : source === 'web'
+          ? '[Host context: owner message via web]'
+          : source === 'inbox' || source === 'owner-inbox' || source === 'team' || source === 'worker'
+            ? '[Host context: inbox notification]'
+            : '';
   const workspaceLabel = message.workspaceRoot ? `[Host context: active workspace ${message.workspaceRoot.replace(/[\r\n]/g, ' ')}]` : '';
   const projectLabel = message.projectContext
     ? `[Host context: selected project ${JSON.stringify(message.projectContext)}; commands use the first source folder]`
