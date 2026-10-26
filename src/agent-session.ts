@@ -1541,6 +1541,10 @@ export class AgentSessionController implements AgentSessionClient {
                     onStart: () => {
                       this.flushStreamedEntries();
                       const entry: Extract<SessionEntry, { kind: 'compaction' }> = {
+              getModel: async () => {
+                await this.runtime.reloadSettings?.();
+                return this.sessionModel();
+              },
                         kind: 'compaction',
                         status: 'running',
                         ...(this.lastContextUsage === undefined ? {} : { beforeTokens: this.lastContextUsage }),

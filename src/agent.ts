@@ -238,6 +238,8 @@ function readMemoryFile(path: string, maxBytes = 4096): string {
 export async function runAgent(options: {
   sessionId?: string;
   model: LanguageModel;
+  /** Resolve refreshed credentials/options before each provider request. */
+  getModel?: () => Promise<LanguageModel>;
   workspaceRoot?: string;
   supportsVision?: boolean;
   supportsImageToolResult?: boolean;
@@ -338,8 +340,10 @@ export async function runAgent(options: {
     },
     prepareStep: async ({ messages }) => {
       stepStartedAt = Date.now();
+      const model = await options.getModel?.();
       const queuedMessages = ((await options.takeQueuedMessages?.()) ?? []).map(ensureQueuedMessageId);
-      const result: { system?: string; messages?: ModelMessage[]; providerOptions?: AgentProviderOptions } = {};
+      const result: { model?: LanguageModel; system?: string; messages?: ModelMessage[]; providerOptions?: AgentProviderOptions } = {};
+      if (model) result.model = model;
       if (queuedMessages.length > 0) {
         options.onQueuedMessages?.(queuedMessages);
         queuedMessages.forEach((message) =>
