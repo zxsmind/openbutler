@@ -118,6 +118,14 @@ export type AgentSessionView = Omit<SavedSession, 'conversation' | 'conversation
 export interface AgentSessionSnapshot {
   session: AgentSessionView;
   busy: boolean;
+  /**
+   * The transcript turn the running work writes into: null while the run has
+   * not placed its message yet and while no run is active. Clients must not
+   * guess the live turn from `busy` and list position - a run is marked busy
+   * before its message reaches the transcript, and that window used to light
+   * up the previous turn.
+   */
+  runningTurnId: string | null;
   pendingApproval: ToolCallRequest | null;
   pendingApprovalId: string | null;
   pendingQuestion: { id: string; question: string; options: string[] | null } | null;
@@ -238,6 +246,8 @@ export class AgentSessionController implements AgentSessionClient {
   private activeTurnProgress: QueuedMessage['onProgress'];
   private readonly pendingStreamDeltas: Array<{ kind: 'assistant' | 'reasoning'; text: string; internal?: 'compaction' }> = [];
   private busy = false;
+  /** The turn a standalone compaction writes its row into; null outside one. */
+  private compactionTurnId: string | null = null;
   private closed = false;
   private titleAbort: AbortController | null = null;
   /**
@@ -390,6 +400,7 @@ export class AgentSessionController implements AgentSessionClient {
     return {
       session: { ...session, hasUserMessage: this.sessionHasUserMessage },
       busy: this.busy,
+      runningTurnId: this.busy ? (this.activeTurnId ?? this.compactionTurnId ?? null) : null,
       pendingApproval: this.pendingApproval,
       pendingApprovalId: this.pendingApprovalId,
       pendingQuestion: this.pendingQuestion,
@@ -1267,6 +1278,15 @@ export class AgentSessionController implements AgentSessionClient {
       });
   }
 
+  /** The turn the transcript currently ends in; a standalone compaction row lands there. */
+  private lastTranscriptTurnId(): string | null {
+    for (let index = this.session.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.session.entries[index]!;
+      if (entry.kind === 'user') return entry.turnId ?? null;
+    }
+    return null;
+  }
+
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void> {
     return this.enqueueMessage(message, preferences, false);
   }
@@ -1908,6 +1928,9 @@ export class AgentSessionController implements AgentSessionClient {
     }
     const abortController = new AbortController();
     this.activeRunAbort = abortController;
+    // The row lands in the turn the transcript already ends in, so that turn
+    // stays the run's turn while the compaction is being written.
+    this.compactionTurnId = this.lastTranscriptTurnId();
     this.busy = true;
     reportSessionActivity(this.session.id, true);
     this.publish();
@@ -1986,6 +2009,7 @@ export class AgentSessionController implements AgentSessionClient {
     } finally {
       this.busy = false;
       this.activeTurnId = undefined;
+      this.compactionTurnId = null;
       this.runtime.reportRetry?.(null);
       this.retryNotice = null;
       reportSessionActivity(this.session.id, false);

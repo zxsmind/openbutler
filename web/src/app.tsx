@@ -79,7 +79,10 @@ export function App() {
     ],
     [session.entries, payload?.queuedMessages],
   );
-  const liveTurn = busy ? turns[turns.length - 1]?.id : undefined;
+  // The host names the turn its run is writing into; a run is marked busy
+  // before its message reaches the transcript, so the previous turn must not
+  // be inferred live from `busy` and list position.
+  const liveTurn = payload?.runningTurnId ?? undefined;
   // The dot is a "your message was taken, nothing has come back yet" signal, not a
   // running indicator: it appears after a send and leaves on the first chunk, so
   // it never sits under the transcript while the agent works.

@@ -410,6 +410,7 @@ class DaemonSessionClient implements AgentSessionClient {
     this.snapshot = {
       session,
       busy: event.patch.busy,
+      runningTurnId: event.patch.runningTurnId,
       pendingApproval: event.patch.pendingApproval,
       pendingApprovalId: event.patch.pendingApprovalId,
       pendingQuestion: event.patch.pendingQuestion ?? null,
@@ -544,6 +545,7 @@ function snapshotFromData(data: SessionSnapshotData): AgentSessionSnapshot {
   return {
     session: data.session,
     busy: data.busy,
+    runningTurnId: data.runningTurnId,
     pendingApproval: data.pendingApproval,
     pendingApprovalId: data.pendingApprovalId,
     pendingQuestion: data.pendingQuestion ?? null,

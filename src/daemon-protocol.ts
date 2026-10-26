@@ -46,6 +46,8 @@ export type SessionPatchData = {
   session: Omit<AgentSessionView, 'entries'>;
   entriesPatch?: SessionEntriesPatch;
   busy: boolean;
+  /** The turn the running work writes into; null when no run has placed a turn yet. */
+  runningTurnId: string | null;
   pendingApproval: AgentSessionSnapshot['pendingApproval'];
   pendingApprovalId: string | null;
   pendingQuestion: AgentSessionSnapshot['pendingQuestion'];

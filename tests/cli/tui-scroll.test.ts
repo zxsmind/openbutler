@@ -38,6 +38,7 @@ function fakeClient(entries: SessionEntry[]): AgentSessionClient {
       entries,
     } as AgentSessionSnapshot['session'],
     busy: false,
+    runningTurnId: null,
     pendingApproval: null,
     pendingApprovalId: null,
     pendingQuestion: null,

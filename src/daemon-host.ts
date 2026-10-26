@@ -3476,6 +3476,7 @@ function makeSessionEvent(
       session: stripSessionEntries(next),
       ...(entriesPatch ? { entriesPatch } : {}),
       busy: next.busy,
+      runningTurnId: next.runningTurnId,
       pendingApproval: next.pendingApproval,
       pendingApprovalId: next.pendingApprovalId,
       pendingQuestion: next.pendingQuestion,
@@ -3549,6 +3550,7 @@ function toSnapshotData(snapshot: AgentSessionSnapshot): SessionSnapshotData {
   return {
     session: snapshot.session,
     busy: snapshot.busy,
+    runningTurnId: snapshot.runningTurnId,
     pendingApproval: snapshot.pendingApproval,
     pendingApprovalId: snapshot.pendingApprovalId,
     pendingQuestion: snapshot.pendingQuestion,

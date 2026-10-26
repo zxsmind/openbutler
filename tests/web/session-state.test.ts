@@ -10,6 +10,7 @@ const payload = (id: string, text: string): SessionPayload => ({
   from: 10,
   totalEntries: 11,
   busy: false,
+  runningTurnId: null,
   queuedMessageCount: 0,
   pendingApproval: null,
   pendingQuestion: null,

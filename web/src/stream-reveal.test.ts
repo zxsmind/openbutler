@@ -15,6 +15,7 @@ const snapshot = (entries: Entry[]): SessionPayload => ({
   from: 0,
   totalEntries: entries.length,
   busy: true,
+  runningTurnId: null,
   queuedMessageCount: 0,
   pendingApproval: null,
   pendingQuestion: null,

@@ -54,6 +54,7 @@ beforeEach(async () => {
       entries: [{ kind: 'user', text: 'First', turnId: 't1' }],
     },
     busy: true,
+    runningTurnId: 't1',
     pendingApproval: null,
     pendingApprovalId: null,
     pendingQuestion: null,

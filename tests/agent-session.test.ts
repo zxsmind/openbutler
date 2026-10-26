@@ -1868,3 +1868,90 @@ describe('session activity reporting', () => {
     session = undefined;
   });
 });
+
+describe('run turn identity at send time', () => {
+  it('marks the run busy before the new message reaches the transcript', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    // The answer stream is held open so the run stays busy while the test
+    // inspects the snapshots in between; the fixture must not win the race.
+    let releaseRun!: () => void;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    let holdNextRun = false;
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () => ({
+        stream: new ReadableStream({
+          async start(controller) {
+            if (holdNextRun) await runGate;
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: 'fixture' });
+            controller.enqueue({ type: 'text-delta', id: 'fixture', delta: 'Second answer.' });
+            controller.enqueue({ type: 'text-end', id: 'fixture' });
+            controller.enqueue({
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: 'stop' },
+              usage: { ...usage, inputTokens: { ...usage.inputTokens, total: 100, noCache: 100 } },
+            });
+            controller.close();
+          },
+        }),
+      }),
+    });
+    session = new AgentSessionController(runtimeFor(model));
+    await session.sendMessage({ text: 'first message', images: [] }, preferences);
+    expect(session.getSnapshot().busy).toBe(false);
+    const entriesBefore = session.getSnapshot().session.entries;
+    const lastBefore = entriesBefore[entriesBefore.length - 1];
+    holdNextRun = true;
+    const run = session.sendMessage({ text: 'second message', images: [] }, preferences);
+    // The queue runner marks the run busy synchronously, but the message's entry
+    // only lands after the agent modules load. There is a published window in
+    // which the run is busy while the transcript still ends with the previous
+    // turn - the window that made a client guess the wrong live turn.
+    const started = session.getSnapshot();
+    expect(started.busy).toBe(true);
+    // The window must name no turn: lighting one here would be a guess, and the
+    // previous turn is what the reader just finished reading.
+    expect(started.runningTurnId).toBeNull();
+    expect(started.session.entries.some((entry) => entry.kind === 'user' && entry.text === 'second message')).toBe(false);
+    expect(started.session.entries[started.session.entries.length - 1]).toBe(lastBefore);
+    // Once the message reaches the transcript, the snapshot names that turn.
+    await vi.waitFor(() =>
+      expect(session!.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'second message')).toBe(true),
+    );
+    const running = session.getSnapshot();
+    expect(running.busy).toBe(true);
+    const secondEntry = running.session.entries.find((entry) => entry.kind === 'user' && entry.text === 'second message')!;
+    expect(secondEntry.turnId).toBeDefined();
+    expect(running.runningTurnId).toBe(secondEntry.turnId);
+    releaseRun();
+    await run;
+    const settled = session.getSnapshot();
+    expect(settled.busy).toBe(false);
+    expect(settled.runningTurnId).toBeNull();
+  });
+
+  it('names the turn a standalone compaction writes into', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () => fixtureText('Checkpoint: the fixture conversation is condensed.'),
+    });
+    session = new AgentSessionController(runtimeFor(model));
+    await session.sendMessage({ text: 'first message', images: [] }, preferences);
+    const userEntry = session.getSnapshot().session.entries.find((entry) => entry.kind === 'user')!;
+    expect(userEntry.turnId).toBeDefined();
+    const compaction = session.compact(preferences);
+    // compact() marks the run busy synchronously; the compaction row lands in
+    // the turn the transcript already ends in, and the snapshot says so.
+    const started = session.getSnapshot();
+    expect(started.busy).toBe(true);
+    expect(started.runningTurnId).toBe(userEntry.turnId);
+    await compaction;
+    const settled = session.getSnapshot();
+    expect(settled.busy).toBe(false);
+    expect(settled.runningTurnId).toBeNull();
+  });
+});

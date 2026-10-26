@@ -244,6 +244,7 @@ export function useSession() {
         from: 0,
         totalEntries: 0,
         busy: false,
+        runningTurnId: null,
         queuedMessageCount: 0,
         pendingApproval: null,
         pendingQuestion: null,

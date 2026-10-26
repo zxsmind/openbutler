@@ -258,6 +258,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       from,
       totalEntries: source.getServerEntries().length,
       busy: snapshot.busy,
+      runningTurnId: snapshot.runningTurnId,
       queuedMessageCount: snapshot.queuedMessageCount,
       queuedMessages: snapshot.queuedMessages,
       pendingApproval: snapshot.pendingApproval ?? null,

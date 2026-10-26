@@ -100,6 +100,8 @@ export interface SessionPayload {
   from: number;
   totalEntries: number;
   busy: boolean;
+  /** The turn the running work writes into; null before a new run has placed its message and when idle. */
+  runningTurnId: string | null;
   queuedMessageCount: number;
   queuedMessages?: Array<{ id?: string; text: string; imageCount: number; editable?: boolean; steering?: boolean }>;
   pendingApproval: ApprovalRequest | null;
