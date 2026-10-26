@@ -142,6 +142,7 @@ export interface SavedSession {
 export interface SessionSummary {
   project?: SessionProject;
   id: string;
+  running?: boolean;
   title: string;
   preview: string;
   updatedAt: string;
