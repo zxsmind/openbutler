@@ -1,20 +1,53 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MemoryIndex } from '../../src/memory-index.js';
 import { createToolCatalogue } from '../../src/tools/catalog.js';
 import type { McpConnectionManager } from '../../src/tools/mcp.js';
 
 const mcpStub: McpConnectionManager = {
+  revision: 0,
   tools: [],
   list: () => [],
   addServer: async () => [],
   connectServer: async () => ({ connected: false, changed: false, tools: [] }),
   disconnectServer: async () => false,
   removeServer: async () => false,
+  reload: async () => false,
   close: async () => {},
 };
+
+it('keeps each model input modality on its own call when MCP transports are shared', async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-catalog-'));
+  const memoryIndex = new MemoryIndex(workspaceRoot);
+  const execute = vi.fn(async () => ({}));
+  const shared: McpConnectionManager = {
+    ...mcpStub,
+    tools: [
+      {
+        providerId: 'mcp-fixture',
+        name: 'fixture',
+        description: 'Fixture',
+        inputSchema: { type: 'object' },
+        execute,
+        effect: { change: 'none', data: 'public', network: 'none', reversible: 'full', outbound: 'none' },
+      },
+    ],
+  };
+  try {
+    const catalogue = (inputModalities: string[]) =>
+      createToolCatalogue({ workspaceRoot, inputModalities, memoryIndex, mcp: shared, onMcpConnectionsChanged() {} });
+    const text = catalogue(['text']).find((tool) => tool.name === 'fixture')!;
+    const vision = catalogue(['text', 'image']).find((tool) => tool.name === 'fixture')!;
+    await text.execute({});
+    await vision.execute({});
+    expect(execute).toHaveBeenNthCalledWith(1, {}, undefined, { inputModalities: ['text'] });
+    expect(execute).toHaveBeenNthCalledWith(2, {}, undefined, { inputModalities: ['text', 'image'] });
+  } finally {
+    await memoryIndex.close();
+  }
+});
 
 function catalogueNames(options: Record<string, unknown> = {}): string[] {
   const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-catalog-'));
