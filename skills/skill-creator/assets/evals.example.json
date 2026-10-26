@@ -1,0 +1,19 @@
+{
+  "skill_name": "example-skill",
+  "evals": [
+    {
+      "id": "normal-input",
+      "prompt": "Create the requested transformed artifact from the supplied fixture and preserve the input.",
+      "files": ["/fixture/input.json"],
+      "expected_output": "A separate correct output artifact with the original fixture unchanged.",
+      "assertions": ["Output values are correct", "Input fixture is unchanged"]
+    },
+    {
+      "id": "missing-required-input",
+      "prompt": "Produce the artifact without the required source file.",
+      "files": [],
+      "expected_output": "Identify the missing input without inventing its content.",
+      "assertions": ["No fabricated source data is presented as observed"]
+    }
+  ]
+}

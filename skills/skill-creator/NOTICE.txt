@@ -1,0 +1,8 @@
+Ranite skill-creator adaptation
+
+Workflow concepts adapted from anthropics/skills, skills/skill-creator,
+commit dbd4588f9e1033efb41dad4bef2f7947c8993d44.
+Source: https://github.com/anthropics/skills/tree/dbd4588f9e1033efb41dad4bef2f7947c8993d44/skills/skill-creator
+The upstream Apache License 2.0 is included as LICENSE.txt.
+Ranite-specific documentation and helper implementations differ from upstream;
+see references/upstream.md. No upstream endorsement is implied.

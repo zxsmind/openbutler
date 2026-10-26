@@ -37,6 +37,9 @@ scripts/smoke.ts
 *.md
 !README.md
 !skills/**/SKILL.md
+!skills/ranite/references/*.md
+!skills/skill-creator/references/*.md
+!skills/skill-installer/references/*.md
 
 # Internal design and review records, deliberately untracked (see docs/README.md).
 docs/
@@ -52,3 +55,6 @@ docs/
 *.bak-*
 .DS_Store
 Thumbs.db
+
+# Local Modal credentials file - never commit
+modal.key.env

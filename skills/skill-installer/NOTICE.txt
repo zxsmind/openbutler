@@ -1,0 +1,8 @@
+Ranite skill-installer adaptation
+
+Workflow concepts adapted from jscraik/Agent-Skills, skills-system/skill-installer,
+commit afddb36dc2bdddd3e6ed84ac7c3393cd8e171f4c.
+Source: https://github.com/jscraik/Agent-Skills/tree/afddb36dc2bdddd3e6ed84ac7c3393cd8e171f4c/skills-system/skill-installer
+The upstream Apache License 2.0 is included as LICENSE.txt.
+Ranite-specific documentation and helper implementations differ from upstream;
+see references/upstream.md. No upstream endorsement is implied.

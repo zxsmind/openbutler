@@ -1,0 +1,12 @@
+[
+  {
+    "id": "positive-1",
+    "query": "Create the specialized artifact from my supplied inputs, preserving its required structure.",
+    "should_trigger": true
+  },
+  {
+    "id": "near-miss-1",
+    "query": "Explain what that artifact format is. Do not create or change any files.",
+    "should_trigger": false
+  }
+]
