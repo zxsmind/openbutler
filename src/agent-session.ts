@@ -769,16 +769,29 @@ export class AgentSessionController implements AgentSessionClient {
     }
   }
 
+  /** The admitted turn's own message preferences; cleared when the run settles. */
+  private activeTurnPreferences: AgentTurnPreferences | null = null;
+  private reasoningDefaultAtTurnStart = 'default';
+  private showReasoningAtTurnStart = true;
+
   /**
-   * Turn preferences as they are right now, not as they were when the turn
-   * started. Settings changed mid-run (reasoning variant, thinking visibility)
-   * apply to the running turn immediately instead of waiting for it to end:
-   * the next streamed delta and the next model step already see them.
+   * Turn preferences as they are right now. The admitted turn's message owns
+   * them; an explicit settings change made while it runs (another client's
+   * save, a TUI toggle) still applies immediately by overriding them for the
+   * rest of the turn instead of waiting for it to end.
    */
   private liveTurnPreferences(): AgentTurnPreferences {
+    const turn = this.activeTurnPreferences;
+    if (!turn)
+      return {
+        reasoningVariantId: this.runtime.reasoningDefault,
+        showReasoning: this.runtime.showReasoningDefault,
+      };
+    const changed = this.runtime.reasoningDefault !== this.reasoningDefaultAtTurnStart;
+    const visibilityChanged = this.runtime.showReasoningDefault !== this.showReasoningAtTurnStart;
     return {
-      reasoningVariantId: this.runtime.reasoningDefault,
-      showReasoning: this.runtime.showReasoningDefault,
+      reasoningVariantId: changed ? this.runtime.reasoningDefault : turn.reasoningVariantId,
+      showReasoning: visibilityChanged ? this.runtime.showReasoningDefault : turn.showReasoning,
     };
   }
 
@@ -1396,6 +1409,11 @@ export class AgentSessionController implements AgentSessionClient {
           nextTurn = this.queuedMessages.shift() ?? null;
           continue;
         }
+        // The admitted turn's own message preferences govern it; the runtime
+        // defaults only matter when an explicit settings change lands mid-run.
+        this.activeTurnPreferences = currentTurn.preferences;
+        this.reasoningDefaultAtTurnStart = this.runtime.reasoningDefault;
+        this.showReasoningAtTurnStart = this.runtime.showReasoningDefault;
         const current = currentTurn.message;
         this.resetAutoReviewTurn();
         this.runError = null;
@@ -1769,6 +1787,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.activeEventId = undefined;
       this.busy = false;
       this.activeTurnId = undefined;
+      this.activeTurnPreferences = null;
       // No run is active any more, so a late retry event must not write here.
       this.runtime.reportRetry?.(null);
       this.retryNotice = null;
