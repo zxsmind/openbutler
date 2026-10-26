@@ -864,7 +864,7 @@ export function createScheduleTool(
     providerId: 'host',
     name: 'schedule',
     maxInputChars: 32_000,
-    description: `Manage durable schedules. No schedules run by default. Actions: capabilities, list, log, add, update, remove, enable, disable, run. A schedule needs name, instruction, and trigger {adapter, options}; id is optional and generated from the name when omitted (read it from the add result for update, remove, enable, disable, run, and log); workspaceRoot defaults to the calling session's workspace; originSessionId defaults to the calling session; enabled defaults to true. Mutations follow the workspace permission mode against the schedule's workspace: same workspace runs silent, other workspaces ask. Time is always server-local wall time. Available trigger adapters: ${JSON.stringify(scheduleCapabilities)}. Create or update a schedule when the work must resume later or wait for a time or a condition. A schedule instruction must be complete enough for a stranger session and must never reference config.yaml. Bounded recurrence ("3 times", "until Friday") is written into the instruction: every wake states its run number and the agent disables the schedule when done. Close every run with a report message; it becomes the schedule's durable report. Use send_message_to_owner only when an owner channel exists, to report a material finding from scheduled work.`,
+    description: `Manage durable schedules. No schedules run by default. Actions: capabilities, list, log, add, update, remove, enable, disable, run. A schedule needs name, instruction, and trigger {adapter, options}; id is optional and generated from the name when omitted (read it from the add result for update, remove, enable, disable, run, and log); workspaceRoot defaults to the calling session's workspace; omitting originSessionId on add uses the calling session, explicitly setting it to an empty string uses one persistent schedule session across runs, and omitting it on update preserves the choice; enabled defaults to true. Mutations follow the workspace permission mode against the schedule's workspace: same workspace runs silent, other workspaces ask. Time is always server-local wall time. Available trigger adapters: ${JSON.stringify(scheduleCapabilities)}. Create or update a schedule when the work must resume later or wait for a time or a condition. A schedule instruction must be complete enough for a stranger session and must never reference config.yaml. Bounded recurrence ("3 times", "until Friday") is written into the instruction: every wake states its run number and the agent disables the schedule when done. Close every run with a report message; it becomes the schedule's durable report. Use send_message_to_owner only when an owner channel exists, to report a material finding from scheduled work.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -890,7 +890,11 @@ export function createScheduleTool(
             },
             trigger: { type: 'object', description: 'One of the adapters in capabilities: {adapter, options}.' },
             workspaceRoot: { type: 'string', description: 'Optional absolute path; defaults to the calling session workspace.' },
-            originSessionId: { type: 'string', description: 'Optional; defaults to the calling session. The run wakes there.' },
+            originSessionId: {
+              type: 'string',
+              description:
+                'Omit on add to use the calling session; omit on update to preserve the existing choice. Set to an empty string to use one dedicated persistent schedule session, reused across runs. A non-empty id wakes that session.',
+            },
             enabled: { type: 'boolean', description: 'Optional; defaults to true.' },
           },
         },
