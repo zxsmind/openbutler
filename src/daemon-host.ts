@@ -1881,6 +1881,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       }
       parent = parent ?? findSessionController(parentId);
       if (!parent) {
+        // A parent that cannot be loaded is a persistent failure, not a transient
+        // one: without a ceiling this branch retries forever (a live event spent
+        // three days at one claim per 30 seconds).
+        if (event.attempts >= 10) {
+          ledger.setEventState(event.id, 'failed', 'The parent session could not be loaded after repeated attempts.');
+          return;
+        }
         deferWorkerEvent(event, 30_000, 'Waiting for the original parent session to be loaded.');
         return;
       }
