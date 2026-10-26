@@ -1,0 +1,166 @@
+/* Feedback is plain text. Keep every tone and layout free of card surfaces. */
+.feedback {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #6d7787;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+}
+.feedback--error {
+  color: #9c5b67;
+}
+.feedback--warning {
+  color: #7f6b45;
+}
+.feedback--success {
+  color: #4e7561;
+}
+.feedback--dismissible {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.feedback__content {
+  min-width: 0;
+}
+.feedback__title {
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.feedback__description {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.feedback--inline .feedback__description,
+.feedback--compact .feedback__description {
+  max-height: min(180px, 30dvh);
+  overflow: auto;
+}
+.feedback__description > :first-child {
+  margin-top: 0;
+}
+.feedback__description > :last-child {
+  margin-bottom: 0;
+}
+.feedback__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.feedback__action,
+.feedback__dismiss {
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.feedback__action {
+  min-height: 24px;
+  max-width: 100%;
+  white-space: normal;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.feedback__action:hover:not(:disabled) {
+  color: #354457;
+}
+.feedback__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.feedback__dismiss {
+  width: 24px;
+  height: 24px;
+  margin-top: -2px;
+  color: #8a93a1;
+  font-size: 18px;
+  line-height: 1;
+}
+.feedback--compact {
+  padding: 8px 6px;
+}
+.feedback--state {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  padding: 24px;
+  text-align: center;
+}
+.feedback--state .feedback__content {
+  width: 100%;
+  max-width: 360px;
+  min-height: 0;
+  align-self: center;
+}
+.feedback--state .feedback__description {
+  max-height: min(240px, 35dvh);
+  overflow: auto;
+}
+.feedback--state .feedback__actions {
+  justify-content: center;
+  margin-top: 10px;
+}
+.action-dock > .feedback,
+.composer-dock > .feedback {
+  margin-bottom: 10px;
+}
+.turn .feedback {
+  margin-block: 8px;
+}
+.sidebar .feedback {
+  margin: 6px 0;
+}
+.dropdown__footer > .feedback {
+  flex: 1;
+}
+.composer-rail > .feedback {
+  margin: 10px 0 6px;
+}
+.create-project form > .feedback {
+  margin-top: 12px;
+}
+.panel-feedback {
+  margin: 6px 14px;
+  width: auto;
+}
+.terminal-app > .feedback--inline {
+  width: auto;
+  margin: 6px 12px;
+}
+.terminal-screen[hidden] {
+  display: none;
+}
+.files-tree-scroll > .feedback,
+.files-tree-folder > .feedback {
+  width: auto;
+  margin: 6px 3px;
+}
+.files-editor > .feedback {
+  min-height: 0;
+}
+.files-tree-scroll .feedback__description {
+  max-height: 180px;
+  overflow: auto;
+}
