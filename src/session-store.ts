@@ -81,14 +81,16 @@ type SessionEntryBody =
     }
   | {
       kind: 'tool';
-      command: string;
+      command?: string;
+      /** Complete, redacted input for expanded tool details. */
+      input?: Record<string, unknown>;
       result: string;
       running?: boolean;
       preparing?: boolean;
       tool?: string;
+      toolTitle?: string;
       session?: string;
       durationMs?: number;
-      toolTitle?: string;
       outcome?: string;
     };
 
@@ -140,9 +142,9 @@ export interface SavedSession {
 }
 
 export interface SessionSummary {
+  running?: boolean;
   project?: SessionProject;
   id: string;
-  running?: boolean;
   title: string;
   preview: string;
   updatedAt: string;
@@ -582,10 +584,10 @@ function isSessionEntry(value: unknown): value is SessionEntry {
       (value.running === undefined || typeof value.running === 'boolean') &&
       (value.preparing === undefined || typeof value.preparing === 'boolean') &&
       (value.tool === undefined || typeof value.tool === 'string') &&
+      (value.toolTitle === undefined || typeof value.toolTitle === 'string') &&
       (value.session === undefined || typeof value.session === 'string')
     );
   if (value.kind === 'user')
-      (value.toolTitle === undefined || typeof value.toolTitle === 'string') &&
     return (
       typeof value.text === 'string' &&
       (value.source === undefined || (USER_ENTRY_SOURCES as readonly string[]).includes(String(value.source))) &&
