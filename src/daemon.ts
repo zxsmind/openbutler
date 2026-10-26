@@ -88,6 +88,24 @@ export async function getDaemonStatus(): Promise<DaemonStatus | null> {
   return null;
 }
 
+/** The host entry decides its code vintage: a `.ts`/`.tsx` entry runs the source tree, anything else runs a built bundle. */
+export function hostVintage(entry: string | undefined | null): 'source' | 'dist' | 'unknown' {
+  if (!entry) return 'unknown';
+  return /\.tsx?$/i.test(entry) ? 'source' : 'dist';
+}
+
+/**
+ * A client and a host built from different code behave differently while looking
+ * identical, so the skew is named once when a client attaches.
+ */
+export function hostVintageMismatchWarning(clientEntry: string | undefined | null, hostEntry: string | undefined | null): string | null {
+  const client = hostVintage(clientEntry);
+  const host = hostVintage(hostEntry);
+  if (client === 'unknown' || host === 'unknown' || client === host) return null;
+  const label = (kind: 'source' | 'dist') => (kind === 'source' ? 'source (tsx)' : 'a built bundle');
+  return `Code vintage mismatch: this client runs ${label(client)} but the background host runs ${label(host)}. Run \`ranite restart\` here to relaunch the host from this client.`;
+}
+
 export async function requestHost(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
   const response = await requestDaemon(action, payload, 45_000);
   if (!response.ok) throw new Error(response.error ?? 'Ranite host request failed.');

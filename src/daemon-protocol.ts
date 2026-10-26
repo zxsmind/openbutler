@@ -18,6 +18,8 @@ export type DaemonStatus = {
   legacy?: true;
   /** PID is still alive, but IPC is unavailable. Counts in this state are unknown. */
   unresponsive?: true;
+  /** The entry script the host process runs: a built bundle or the source tree. Clients compare it with their own entry to notice a code-vintage skew. */
+  entry?: string;
 };
 
 export type RuntimeViewData = Omit<
@@ -71,6 +73,8 @@ export type DaemonResponse = { version: 2; id: string; ok: true; result: unknown
 export type DaemonRequest = { version: 2; id: string; action: string; [key: string]: unknown };
 
 export interface AttachResult {
+  /** How the host process was launched: a built bundle or the source tree. */
+  hostEntry?: string;
   /** The host can attach to a conversation without replacing another controller. */
   sessionAttachments?: true;
   workspaceKey?: string;

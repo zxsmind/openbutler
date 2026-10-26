@@ -175,6 +175,8 @@ export interface AgentSessionOptions {
 
 export interface AgentSessionClient {
   readonly runtime: AgentSessionRuntimeView;
+  /** The host process's launch entry, when the transport carried one. */
+  readonly hostEntry?: string | null;
   getSnapshot: () => AgentSessionSnapshot;
   /**
    * The transcript as the host sent it, without the notices this client shows on

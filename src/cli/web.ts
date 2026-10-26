@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import * as ui from './ui.js';
 import type { Parsed } from './args.js';
-import { startDaemon } from '../daemon.js';
+import { hostVintageMismatchWarning, startDaemon } from '../daemon.js';
 import { DEFAULT_WEB_HOST, DEFAULT_WEB_PORT, startWebServer, type WebServer } from '../web/server.js';
 
 function readPort(parsed: Parsed): number {
@@ -32,7 +32,9 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
     ui.warn('This server is reachable from the network. Keep the pairing link private.');
   }
 
-  await startDaemon();
+  const hostStatus = await startDaemon();
+  const vintageWarning = hostVintageMismatchWarning(process.argv[1], hostStatus?.entry);
+  if (vintageWarning) ui.warn(vintageWarning);
   let server: WebServer | null = null;
   try {
     server = await startWebServer({ workspaceRoot, port, host });

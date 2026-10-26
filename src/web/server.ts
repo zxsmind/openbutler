@@ -21,7 +21,7 @@ import { watchSettingsFiles } from '../settings-watch.js';
 import { addProviderKeys } from '../provider/keys.js';
 import { verifyAttachmentPath } from '../attachments.js';
 import { connectDaemonSession } from '../daemon-client.js';
-import { getDaemonStatus } from '../daemon.js';
+import { getDaemonStatus, hostVintage, hostVintageMismatchWarning } from '../daemon.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../agent-session.js';
 import { ActivityLedger } from '../activity-ledger.js';
 import { createLogger, fileSink } from '../logging.js';
@@ -240,6 +240,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   let pairUsed = false;
 
   const logger = createLogger({ sink: fileSink(join(getDataPath('logs'), 'web.log')), context: { process: 'web' } });
+  const vintageWarning = hostVintageMismatchWarning(process.argv[1], client.hostEntry);
+  if (vintageWarning) logger.warn('web.host.vintage-mismatch', { host: client.hostEntry, client: process.argv[1] ?? null });
   const clients = new Set<SseClient>();
 
   const issuePairToken = (): string => {
@@ -628,6 +630,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         providerId: client.runtime.providerId,
         modelId: client.runtime.modelId,
         contextWindowTokens: client.runtime.contextWindowTokens ?? null,
+        hostEntry: client.hostEntry ? `${hostVintage(client.hostEntry)} · ${client.hostEntry}` : null,
       });
     }
 

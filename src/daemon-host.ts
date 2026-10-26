@@ -847,6 +847,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   const status = (): DaemonStatus => ({
     pid: process.pid,
     startedAt: options.startedAt,
+    entry: process.argv[1] ?? '',
     workspaceCount: workspaces.size + (custodianWorkspace ? 1 : 0),
     connectedClients:
       [...workspaces.values()].reduce(
@@ -3165,6 +3166,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
             ...(workers.has(target.controller.getSnapshot().session.id) ? { readOnly: true } : {}),
           });
           writeResponse(socket, request.id, true, {
+            hostEntry: process.argv[1] ?? '',
             sessionAttachments: true,
             workspaceKey: target.workspace.root,
             clientKind,
@@ -3236,6 +3238,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           ...(readOnly ? { readOnly: true } : {}),
         });
         const result: AttachResult = {
+          hostEntry: process.argv[1] ?? '',
           sessionAttachments: true,
           clientKind,
           snapshot: toSnapshotData(controller.getSnapshot()),

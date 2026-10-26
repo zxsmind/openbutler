@@ -46,6 +46,9 @@ export function AboutSettings() {
               <SettingsRow label="Workspace">
                 <span className="settings-value">{info.workspace}</span>
               </SettingsRow>
+              <SettingsRow label="Host process">
+                <span className="settings-value">{info.hostEntry ?? 'unknown'}</span>
+              </SettingsRow>
             </SettingsGroup>
           </SettingsSection>
           <SettingsSection title="Model">

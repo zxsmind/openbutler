@@ -236,6 +236,8 @@ export interface AboutInfo {
   version: string;
   /** Which browser bundle this server is serving. */
   buildId: string | null;
+  /** The daemon's launch entry (source tsx or built js), formatted by the server. */
+  hostEntry?: string | null;
   workspace: string;
   dataDir: string;
   logPath: string;

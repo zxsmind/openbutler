@@ -85,6 +85,8 @@ class DaemonSessionClient implements AgentSessionClient {
   private readonly localNotices = new LocalNoticeList(MAX_LOCAL_NOTICES, LOCAL_NOTICE_TTL_MS);
   private localNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   private workspaceKey: string;
+  /** The host's launch entry, carried on every attach. */
+  hostEntry: string | null = null;
   private savedSessions: SessionSummary[] = [];
 
   readonly runtime: AgentSessionRuntimeView;
@@ -168,6 +170,7 @@ class DaemonSessionClient implements AgentSessionClient {
       ...(options.runningWorkerOf ? { runningWorkerOf: options.runningWorkerOf } : {}),
     });
     if (!isAttachResult(result)) throw new Error('The Ranite host returned an invalid session attachment.');
+    this.hostEntry = typeof result.hostEntry === 'string' && result.hostEntry ? result.hostEntry : null;
     if ((options.chatSessionId || options.newChatSession) && result.sessionAttachments !== true)
       throw new Error('Restart the Ranite host to enable independent chats. The current run has been kept running.');
     if (options.chatSessionId || options.newChatSession) {

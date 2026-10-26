@@ -10,7 +10,16 @@ import { parseArgs, questionFrom, type Parsed } from './cli/args.js';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
-import { getDaemonStatus, requestHost, restartDaemon, runDaemonProcess, startDaemon, stopDaemon } from './daemon.js';
+import {
+  getDaemonStatus,
+  hostVintage,
+  hostVintageMismatchWarning,
+  requestHost,
+  restartDaemon,
+  runDaemonProcess,
+  startDaemon,
+  stopDaemon,
+} from './daemon.js';
 import {
   autostartDescription,
   installAutostart,
@@ -620,7 +629,9 @@ async function defaultModelReady(): Promise<boolean> {
 async function runQuestion(question: string, workspaceRoot: string): Promise<void> {
   if (!(await defaultModelReady())) throw new Error('Configure a default model first: ranite setup');
 
-  await startDaemon();
+  const hostStatus = await startDaemon();
+  const vintageWarning = hostVintageMismatchWarning(process.argv[1], hostStatus?.entry);
+  if (vintageWarning) ui.warn(vintageWarning);
   const controller = await connectDaemonSession(workspaceRoot, { isolatedSession: true });
   const runtime = controller.runtime;
   ui.section('Ranite agent');
@@ -771,6 +782,11 @@ async function runSession(workspaceRoot: string): Promise<void> {
       starting.fail('Background host failed to start.');
       throw error;
     }
+  }
+  {
+    const hostStatus = await getDaemonStatus();
+    const warning = hostVintageMismatchWarning(process.argv[1], hostStatus?.entry);
+    if (warning) ui.warn(warning);
   }
   ui.kv(
     'Automatic startup',
@@ -1560,6 +1576,7 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     status = (await getDaemonStatus()) ?? status;
     ui.success(`Background host running (pid ${status.pid}).`);
     ui.kv('Workspaces', String(status.workspaceCount));
+    if (status.entry) ui.kv('Host entry', `${status.entry} (${hostVintage(status.entry)})`);
     ui.info('It stays alive after this terminal closes. Stop it with `ranite daemon stop`.');
     return;
   }
@@ -1577,6 +1594,7 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     ui.success(`Background host running (pid ${status.pid}).`);
     ui.kv('Started', status.startedAt);
     ui.kv('Workspaces', String(status.workspaceCount));
+    if (status.entry) ui.kv('Host entry', `${status.entry} (${hostVintage(status.entry)})`);
     ui.kv('Connected clients', String(status.connectedClients));
     ui.kv('Schedules', String(status.schedules ?? 0));
     if (status.telegram) ui.kv('Telegram', `${status.telegram.state}${status.telegram.paired ? ' / paired' : ''}`);
