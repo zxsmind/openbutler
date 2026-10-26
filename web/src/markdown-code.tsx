@@ -1,7 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import commonLanguages from 'highlight.js/lib/common';
 import { Icon } from './components/icon.js';
 import { ScrollArea } from './components/scroll-area.js';
+import { StreamRanges, StreamText } from './components/stream-text.js';
+import { highlightedStream } from './stream-markdown.js';
 
 export function CopyCode({ source }: { source: string }) {
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -49,6 +51,7 @@ export const CodeBlock = memo(function CodeBlock({
   language?: string;
   complete?: boolean;
 }) {
+  const ranges = useContext(StreamRanges);
   const [expanded, setExpanded] = useState(false);
   const [hljs, setHighlighter] = useState(commonLanguages);
   useEffect(() => {
@@ -103,7 +106,17 @@ export const CodeBlock = memo(function CodeBlock({
         tabIndex={0}
         follow={!complete}
       >
-        <pre>{html === null ? <code>{source}</code> : <code dangerouslySetInnerHTML={{ __html: html }} />}</pre>
+        <pre>
+          {html === null ? (
+            <code>
+              <StreamText text={source} ranges={ranges} />
+            </code>
+          ) : ranges.length ? (
+            <code>{highlightedStream(html, ranges)}</code>
+          ) : (
+            <code dangerouslySetInnerHTML={{ __html: html }} />
+          )}
+        </pre>
       </ScrollArea>
     </div>
   );

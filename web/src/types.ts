@@ -8,6 +8,9 @@ export interface Entry {
   text?: string;
   command?: string;
   result?: string;
+  /** Client-only source ranges received through incremental patches. Snapshots
+   * and paged history have no entrance animation. Never sent to the server. */
+  streamReveal?: import('./stream-reveal.js').StreamRange[];
   tool?: string;
   running?: boolean;
   preparing?: boolean;
