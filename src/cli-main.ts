@@ -507,9 +507,10 @@ async function runListModels(parsed: Parsed): Promise<void> {
   const catalogModels = listCatalogModels(rows);
   // A custom provider has no catalog list to offer; its saved model ids are the
   // list. Shown beside catalog rows so an added model is never invisible.
+  const listSettings = loadSettings();
   const seen = new Set(catalogModels.map((entry) => `${entry.providerId}/${entry.model}`));
   const customModels = rows
-    .flatMap((providerId) => (settings.providers[providerId]?.models ?? []).map((model) => ({ providerId, model })))
+    .flatMap((providerId) => (listSettings.providers[providerId]?.models ?? []).map((model) => ({ providerId, model })))
     .filter((entry) => !seen.has(`${entry.providerId}/${entry.model}`));
   const models = [...catalogModels, ...customModels];
   ui.section(`Models (${models.length})`);

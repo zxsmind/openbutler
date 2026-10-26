@@ -12,7 +12,7 @@ import { mergeMarkdownTokenSegments } from './markdown-merge.js';
 import type { ApprovalDecision } from '../agent-session.js';
 import type { AgentSessionClient } from '../agent-session.js';
 import { getCatalogIndex, getProvider, listProviderSummaries } from '../provider/catalog.js';
-import { listSupportedPackages, listToolCapableModels, providerIsConfigured, resolveReasoningVariant } from '../provider/registry.js';
+import { listSupportedPackages, listCatalogModels, providerIsConfigured, resolveReasoningVariant } from '../provider/registry.js';
 import { loadSettings, rememberProviderModel } from '../settings.js';
 import { listSavedSessions, type SessionEntry, type SessionSummary, type NoticeTone } from '../session-store.js';
 import { upsertProvider, writeSettings } from './config-edit.js';
@@ -1215,8 +1215,8 @@ export function SessionScreen({
         return;
       }
       for (const [index, element] of toolRefs.current) {
-        const entry = state.entries[index];
-        if (subagentCall(entry) === null) continue;
+        const entry = subagentCall(state.entries[index]);
+        if (!entry) continue;
         const bounds = measureElement(element);
         const top = bounds.y - scrollTopRef.current;
         // The input toggles disclosure; the result still opens the worker view.
@@ -2004,7 +2004,7 @@ function ProviderPicker({
             knownChoices.add(key);
             available.push({ providerId, modelId });
           };
-          for (const entry of listToolCapableModels(configuredProviders, settings.providers)) {
+          for (const entry of listCatalogModels(configuredProviders)) {
             addModel(entry.providerId, entry.model);
           }
           for (const providerId of configuredProviders) {
@@ -2033,10 +2033,9 @@ function ProviderPicker({
         }
         const catalogOptions = listProviderSummaries()
           .flatMap((entry): ProviderChoice[] => {
-            if (entry.toolCapableCount === 0) return [];
             const provider = getProvider(entry.id);
             if (!provider?.npm) return [];
-            return [{ kind: 'catalog', id: entry.id, name: provider.name ?? entry.id, modelCount: entry.toolCapableCount }];
+            return [{ kind: 'catalog', id: entry.id, name: provider.name ?? entry.id, modelCount: entry.modelCount }];
           })
           .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
         const settings = loadSettings();
@@ -2122,14 +2121,14 @@ function ProviderPicker({
         knownChoices.add(key);
         available.push({ providerId, modelId });
       };
-      for (const entry of listToolCapableModels([providerId], latest.providers)) addModel(entry.model);
+      for (const entry of listCatalogModels([providerId])) addModel(entry.model);
       for (const modelId of latest.providers[providerId]?.models ?? []) addModel(modelId);
       if (available.length === 0 && latest.defaultProvider === providerId) addModel(latest.defaultModel);
       setModels(available);
       setModelSearch('');
       setModelSelection(0);
       setStep('models');
-      if (available.length === 0 && !configured?.npm) setError(`No tool-capable models are listed for ${providerName}.`);
+      if (available.length === 0 && !configured?.npm) setError(`No models are listed for ${providerName}.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -2448,7 +2447,7 @@ function ProviderPicker({
             <Text dimColor={!providerSearch}>{providerSearch || 'Type to filter providers'}</Text>
           </Box>
           {loading ? <Text dimColor>Loading providers…</Text> : null}
-          {!loading && filteredProviders.length === 0 ? <Text dimColor>No matching tool-capable providers.</Text> : null}
+          {!loading && filteredProviders.length === 0 ? <Text dimColor>No matching providers.</Text> : null}
           <Box flexDirection="column" width="100%">
             {visibleProviders.map((provider, offset) => {
               const index = providerStart + offset;
@@ -2770,6 +2769,7 @@ function toolNeedsExpand(entry: Extract<Entry, { kind: 'tool' }>, width: number)
   const outputLines = result.split(/\r?\n/);
   const contentWidth = Math.max(8, width - toolCommandReserve(entry));
   return (
+    entry.input !== undefined ||
     terminalTextWidth(command) > contentWidth ||
     result.length > 320 ||
     outputLines.length > 3 ||
@@ -2950,7 +2950,7 @@ export function estimateTranscriptEntryHeight(
     return 1 + (bodyVisible ? wrappedRows(text, width) : 0) + 1;
   }
   if (entry.kind === 'tool') {
-    const command = displayableCommand(entry.command).replace(/\n/g, ' ↵ ');
+    const showFullDetails = expandedTool || !mouseSupported;
     const command = displayableCommand(showFullDetails ? toolEntryDetails(entry) : toolEntryCommand(entry));
     if (toolActivity(entry).active)
       return (
@@ -2960,9 +2960,6 @@ export function estimateTranscriptEntryHeight(
         ) + 1
       );
     const result = displayableCommand(entry.result).trimEnd();
-    if (toolActivity(entry).active) return wrappedRows(clipTerminalWidth(command, width - toolCommandReserve(entry)), width - 2) + 1;
-    const result = displayableCommand(entry.result).trimEnd();
-    const showFullDetails = expandedTool || !mouseSupported;
     const preview = showFullDetails ? result : toolOutputPreview(result, width - 6);
     return (
       wrappedRows(showFullDetails ? command : clipTerminalWidth(command.replace(/\n/g, ' ↵ '), width - 6), width - 2) +
