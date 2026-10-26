@@ -60,6 +60,18 @@ describe('retry classification', () => {
 });
 
 describe('createRotatingModel', () => {
+  it('isolates background metadata key positions and retry notices from the conversation', async () => {
+    const notices: unknown[] = [];
+    const first = model([apiError(401)]);
+    const second = model([{ ok: true }]);
+    const shared = createRotatingModel([first, second], { delaysMs: [], poolId: 'fixture', onRetry: (event) => notices.push(event) });
+    const conversation = { fixture: 0 };
+    const metadata = { ...conversation };
+    await (bindSessionKeyRotation(shared, metadata, () => {}) as V3LanguageModel).doGenerate({} as never);
+    expect(metadata.fixture).toBe(1);
+    expect(conversation.fixture).toBe(0);
+    expect(notices).toEqual([]);
+  });
   it('keeps the session on B, retries B, and starts a separate session at A', async () => {
     const first = model([apiError(429)]);
     const second = model([{ ok: true }, apiError(429), { ok: true }]);

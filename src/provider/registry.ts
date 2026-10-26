@@ -26,7 +26,7 @@ import { hasCredential, type ProviderState, type SettingsStore } from '../settin
  * - `inline` tool-call mode means parsing a tool call out of the model's free
  *   text. Ranite's one non-negotiable is that the runtime, not the model,
  *   decides what executes. Reading instructions out of prose is the opposite of
- *   that, so a model that cannot call tools natively is a model ranite refuses.
+ *   that. Catalog capability flags are informational and do not block selection.
  */
 
 export interface ProviderOverride {
@@ -867,11 +867,10 @@ function capitalize(value: string): string {
 /**
  * How a model asks for a tool.
  *
- * Only `native` and `unsupported` exist. Ranite does not have an `inline` mode:
+ * The catalog reports `native`, `unsupported`, or `unknown`. There is no `inline` mode:
  * a model that writes its tool call into prose is a model whose instructions
  * have to be read out of text, and the runtime has to stay the thing that
- * decides what runs. `unknown` means the catalog has no opinion, which
- * `--list-models` treats as "do not offer".
+ * decides what runs. `unknown` means the catalog has no opinion.
  */
 export type ToolCallMode = 'native' | 'unsupported' | 'unknown';
 
@@ -895,7 +894,6 @@ export function canUseTools(providerId: string, modelId: string, override?: Prov
   return toolCallMode(providerId, modelId, override) === 'native';
 }
 
-/** True only when the configured default resolves to a verified native tool-capable model. */
 /**
  * True when a provider has any way to authenticate: a key or options in
  * settings, or a catalog-declared variable already set in the environment.
@@ -914,14 +912,14 @@ export function defaultModelIsUsable(settings: SettingsStore): boolean {
   return modelIsUsable(settings, settings.defaultProvider, settings.defaultModel);
 }
 
-/** True when the named provider/model is enabled, authenticated, and verified for native tool calls. */
+/** True when a model is named and its provider is enabled and configured. */
 export function modelIsUsable(settings: SettingsStore, providerId: string, modelId: string): boolean {
   if (!providerId || !modelId) return false;
   const state = settings.providers[providerId];
   if (!state || !state.enabled || !providerIsConfigured(providerId, state)) return false;
   const custom = Boolean(state.npm) || Boolean(state.url);
   if (!isCatalogLoaded() && !custom) return false;
-  return canUseTools(providerId, modelId, state);
+  return true;
 }
 
 export interface RoutableModel {
@@ -930,22 +928,17 @@ export interface RoutableModel {
 }
 
 /**
- * Every model ranite will actually offer, derived from data alone.
- *
- * The filter is the catalog's own `tool_call` flag. Ranite is an agent: a model
- * that cannot call a tool is not a worse option, it is not an option, and
- * offering it would produce a session where the model can only talk.
+ * Every catalog model, including models with absent or negative capability flags.
  */
-export function listToolCapableModels(providerIds: readonly string[], overrides: Record<string, ProviderOverride> = {}): RoutableModel[] {
+export function listCatalogModels(providerIds: readonly string[]): RoutableModel[] {
   const out: RoutableModel[] = [];
   for (const providerId of providerIds) {
-    const override = overrides[providerId];
     const models = getProvider(providerId)?.models;
     /* A provider the catalog does not carry has no list to offer; the operator
        named the one model it serves, and that is not a list. */
     if (!models) continue;
     for (const model of Object.keys(models)) {
-      if (canUseTools(providerId, model, override)) out.push({ providerId, model });
+      out.push({ providerId, model });
     }
   }
   return out;

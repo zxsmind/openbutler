@@ -39,10 +39,17 @@ export interface RotatingModelOptions {
   onRetry?: (event: RetryEvent) => void;
 }
 
-const sessionBindings = new WeakMap<object, (positions: Record<string, number>) => V3LanguageModel>();
+const sessionBindings = new WeakMap<
+  object,
+  (positions: Record<string, number>, onRetry?: (event: RetryEvent) => void) => V3LanguageModel
+>();
 
-export function bindSessionKeyRotation(model: LanguageModel, positions: Record<string, number>): LanguageModel {
-  return typeof model === 'string' ? model : (sessionBindings.get(model)?.(positions) ?? model);
+export function bindSessionKeyRotation(
+  model: LanguageModel,
+  positions: Record<string, number>,
+  onRetry?: (event: RetryEvent) => void,
+): LanguageModel {
+  return typeof model === 'string' ? model : (sessionBindings.get(model)?.(positions, onRetry) ?? model);
 }
 
 function statusOf(error: unknown): number | undefined {
@@ -169,6 +176,8 @@ export function createRotatingModel(models: readonly V3LanguageModel[], options:
     doStream: (callOptions: StreamOptions) =>
       run(callOptions.abortSignal, (model) => model.doStream(callOptions)) as PromiseLike<StreamResult>,
   };
-  sessionBindings.set(rotating, (keyPositions) => createRotatingModel(models, { ...options, keyPositions }));
+  sessionBindings.set(rotating, (keyPositions, onRetry) =>
+    createRotatingModel(models, { ...options, keyPositions, ...(onRetry ? { onRetry } : {}) }),
+  );
   return rotating;
 }

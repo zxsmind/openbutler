@@ -159,7 +159,7 @@ the base URL, and the model id.
 
 Only models the catalog marks as able to call tools are offered. A model that
 cannot call a tool is not a weaker option here; it is not an option.
-`ranite --list-models` prints the tool-capable models for the configured
+`ranite --list-models` prints all catalog models for the configured
 providers, with `--filter`, `--limit`, and `--provider`.
 
 In an interactive session, `/provider` adds a provider, its key, and a model, and
@@ -436,7 +436,7 @@ ranite permissions --review-model <provider>/<model>|none
 ranite approve [n]        List auto-review denials; retry one exactly once
 ranite mcp [list|add|remove]             Manage global MCP servers
 ranite skills             List global and active-workspace Agent Skills
-ranite --list-models      List tool-capable models (--filter, --limit, --provider)
+ranite --list-models      List catalog models (--filter, --limit, --provider)
 ranite schedule list|log|capabilities|add|update|remove|enable|disable|run|open
 ranite team <subcommand>  init, invite, invites, invite-revoke, join, join-status,
                           pending, approve, deny, members, leave, remove, status,

@@ -24,7 +24,7 @@ import { getCatalogIndex } from './provider/catalog.js';
 import {
   findReasoningCatalogMatch,
   listReasoningVariants,
-  listToolCapableModels,
+  listCatalogModels,
   listSupportedPackages,
   normalizeReasoningVariantId,
   providerIsConfigured,
@@ -503,7 +503,7 @@ async function runListModels(parsed: Parsed): Promise<void> {
   }
   await getCatalogIndex();
   const rows = parsed.flags.has('provider') ? [parsed.flags.get('provider')!] : configured;
-  const catalogModels = listToolCapableModels(rows, settings.providers);
+  const catalogModels = listCatalogModels(rows);
   // A custom provider has no catalog list to offer; its saved model ids are the
   // list. Shown beside catalog rows so an added model is never invisible.
   const seen = new Set(catalogModels.map((entry) => `${entry.providerId}/${entry.model}`));
@@ -511,7 +511,7 @@ async function runListModels(parsed: Parsed): Promise<void> {
     .flatMap((providerId) => (settings.providers[providerId]?.models ?? []).map((model) => ({ providerId, model })))
     .filter((entry) => !seen.has(`${entry.providerId}/${entry.model}`));
   const models = [...catalogModels, ...customModels];
-  ui.section(`Models that can call tools (${catalogModels.length}) plus ${customModels.length} saved custom model(s)`);
+  ui.section(`Models (${models.length})`);
 
   const filter = (parsed.flags.get('filter') ?? '').toLowerCase();
   const shown = filter ? models.filter((entry) => `${entry.providerId}/${entry.model}`.toLowerCase().includes(filter)) : models;
@@ -616,7 +616,7 @@ async function defaultModelReady(): Promise<boolean> {
 }
 
 async function runQuestion(question: string, workspaceRoot: string): Promise<void> {
-  if (!(await defaultModelReady())) throw new Error('Configure a tool-capable default model first: ranite setup');
+  if (!(await defaultModelReady())) throw new Error('Configure a default model first: ranite setup');
 
   await startDaemon();
   const controller = await connectDaemonSession(workspaceRoot, { isolatedSession: true });
@@ -1552,7 +1552,7 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     return;
   }
   if (action === 'start') {
-    if (!(await defaultModelReady())) throw new Error('Configure a tool-capable default model first: ranite setup');
+    if (!(await defaultModelReady())) throw new Error('Configure a default model first: ranite setup');
     let status = await startDaemon();
     ui.info('The machine custodian and its workspace runtime initialize when a TUI or Telegram turn arrives.');
     status = (await getDaemonStatus()) ?? status;

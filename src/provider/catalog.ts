@@ -29,7 +29,7 @@ import { getDataPath } from '../paths.js';
  * what models.dev ships, so a field that gains a reader later is already there.
  *
  * What is held in memory is a *decision*, not a copy. A run reads the index
- * once and then reads only the provider lines it is asked about, which is why
+ * once per disk revision and then only the provider lines it is asked about, which is why
  * the catalog costs about a megabyte on a warm run instead of the 24 MiB that
  * parsing the whole 5 MiB payload cost. `JSON.parse` cannot do this, because a
  * JSON document has no addressable interior; NDJSON does, which is the entire
@@ -90,9 +90,9 @@ interface CatalogIndex {
   modelProviders?: Record<string, string[]>;
 }
 
-const DATA_PATH = getDataPath('catalog');
-const NDJSON_FILE = `${DATA_PATH}.ndjson`;
-const INDEX_FILE = `${DATA_PATH}-index.json`;
+export const CATALOG_FILENAMES = ['catalog.ndjson', 'catalog-index.json'] as const;
+const NDJSON_FILE = getDataPath(CATALOG_FILENAMES[0]);
+const INDEX_FILE = getDataPath(CATALOG_FILENAMES[1]);
 const CATALOG_URL = 'https://models.dev/api.json';
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_CATALOG_BYTES = 20 * 1024 * 1024;
@@ -111,6 +111,7 @@ export const DEFAULT_CATALOG_TTL_MS = 12 * 60 * 60 * 1000;
 const RETRY_DELAY_MS = 60 * 1000;
 
 let index: CatalogIndex | null = null;
+let diskRevision: string | null = null;
 /** Providers read during this run, so a second lookup costs nothing. */
 const loaded = new Map<string, CatalogProvider | null>();
 let inFlight: Promise<CatalogIndex> | null = null;
@@ -163,9 +164,32 @@ function readDiskIndex(): CatalogIndex | null {
 }
 
 function currentIndex(): CatalogIndex | null {
-  if (index) return index;
-  index = readDiskIndex();
+  const revision = catalogDiskRevision();
+  if (revision !== diskRevision) {
+    index = readDiskIndex();
+    loaded.clear();
+    diskRevision = revision;
+  }
   return index;
+}
+
+function catalogDiskRevision(): string {
+  try {
+    return [INDEX_FILE, NDJSON_FILE]
+      .map((file) => {
+        const stat = statSync(file, { bigint: true });
+        return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      })
+      .join('|');
+  } catch {
+    return '';
+  }
+}
+
+/** Tracks disk replacements across processes, including cached misses and changed byte offsets. */
+export function getCatalogRevision(): string {
+  currentIndex();
+  return diskRevision ?? '';
 }
 
 /**
@@ -344,8 +368,9 @@ export async function getCatalogIndex(
  * the index has not been loaded, the answer is "not known", not "no".
  */
 export function getProvider(providerId: string): CatalogProvider | null {
+  const catalog = currentIndex();
   if (loaded.has(providerId)) return loaded.get(providerId) ?? null;
-  const entry = currentIndex()?.entries[providerId];
+  const entry = catalog?.entries[providerId];
   const provider = entry ? readProviderLine(entry) : null;
   // A line whose id does not match its index slot means the pair is torn; the
   // honest answer is "unknown" until the next refresh writes a consistent pair.
@@ -420,6 +445,7 @@ export function isCatalogLoaded(): boolean {
 /** Clears the in-memory state. Exported for tests. */
 export function resetCatalogCacheForTests(): void {
   index = null;
+  diskRevision = null;
   loaded.clear();
   inFlight = null;
   retryAfter = 0;

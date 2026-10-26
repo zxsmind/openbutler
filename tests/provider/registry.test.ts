@@ -77,8 +77,7 @@ describe('tool-call mode', () => {
 
   it('reports unknown rather than guessing when the catalog says nothing', async () => {
     const { registry } = await load();
-    /* Unknown must not be treated as usable: a model the catalog is silent about
-       would otherwise be offered and then never call a tool. */
+    /* Capability reporting stays informational, including unknown metadata. */
     expect(registry.toolCallMode('openai', 'gpt-silent')).toBe('unknown');
     expect(registry.canUseTools('openai', 'gpt-silent')).toBe(false);
     expect(registry.canUseTools('openai', 'gpt-5')).toBe(true);
@@ -219,25 +218,27 @@ describe('resolving a provider', () => {
 });
 
 describe('listing models ranite will offer', () => {
-  it('offers only models the catalog says can call tools', async () => {
+  it('offers models with positive, negative, and missing tool metadata', async () => {
     const { registry } = await load();
-    const models = registry.listToolCapableModels(['openai']).map((entry) => entry.model);
-    expect(models).toEqual(['gpt-5']);
+    const models = registry.listCatalogModels(['openai']).map((entry) => entry.model);
+    expect(models).toEqual(['gpt-5', 'gpt-4o-mini', 'gpt-silent']);
   });
 
-  it('offers every tool-capable model, because a run uses one model and not a list', async () => {
+  it('allows configured models regardless of their tool metadata', async () => {
     const { registry } = await load();
-    const models = registry.listToolCapableModels(['openai']).map((entry) => entry.model);
-    /* There is no whitelist to narrow this with any more; the catalog's own
-       tool-call flag is the only filter, which is the point. */
-    expect(models).toEqual(['gpt-5']);
+    const settings = (await import('../../src/settings.js')).defaultSettings();
+    settings.providers.openai = { enabled: true, keys: ['k'] };
+    expect(registry.modelIsUsable(settings, 'openai', 'gpt-4o-mini')).toBe(true);
+    expect(registry.modelIsUsable(settings, 'openai', 'gpt-silent')).toBe(true);
+    settings.providers.openai.enabled = false;
+    expect(registry.modelIsUsable(settings, 'openai', 'gpt-4o-mini')).toBe(false);
   });
 
   it('offers nothing for a provider the catalog does not carry', async () => {
     const { registry } = await load();
     /* Its one model is named in settings, not enumerated here, so there is no
        list to return and pretending otherwise would invent models. */
-    expect(registry.listToolCapableModels(['my-local'])).toEqual([]);
+    expect(registry.listCatalogModels(['my-local'])).toEqual([]);
   });
 });
 

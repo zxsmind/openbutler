@@ -1,5 +1,5 @@
 import { rememberProviderModel, saveSettings, type SettingsStore } from '../settings.js';
-import { listToolCapableModels } from '../provider/registry.js';
+import { canUseTools, listCatalogModels } from '../provider/registry.js';
 import { isCatalogLoaded } from '../provider/catalog.js';
 import { providerIsConfigured } from '../provider/registry.js';
 
@@ -50,7 +50,8 @@ export function summarizeProviders(settings: SettingsStore): ProviderSummary[] {
   const loaded = isCatalogLoaded();
   return Object.entries(settings.providers).map(([id, state]) => {
     const custom = Boolean(state.npm) || Boolean(state.url);
-    const toolCapableCount = loaded && !custom ? listToolCapableModels([id], { [id]: state }).length : null;
+    const toolCapableCount =
+      loaded && !custom ? listCatalogModels([id]).filter((entry) => canUseTools(id, entry.model, state)).length : null;
     return {
       id,
       enabled: state.enabled,
@@ -87,13 +88,7 @@ export interface ReadinessReport {
 /**
  * What still stands between this configuration and a working run.
  *
- * A provider with a key is not enough for ranite. The model also has to be able
- * to call a tool, or the agent has no way to look at the machine and every
- * answer is a guess.
- *
- * Sync and pure on purpose: the caller owns loading the catalog. Without it the
- * tool-capable count is unknown, and unknown is reported as a problem rather
- * than as a pass.
+ * Capability metadata does not determine whether a configuration is ready.
  */
 export function readiness(settings: SettingsStore): ReadinessReport {
   const problems: string[] = [];
@@ -106,21 +101,13 @@ export function readiness(settings: SettingsStore): ReadinessReport {
     return { ready: false, problems, hints };
   }
 
-  const summaries = summarizeProviders(settings);
-  const usable = providers.filter((id) => (summaries.find((entry) => entry.id === id)?.toolCapableCount ?? 0) > 0);
   const customConfigured = providers.some((id) => {
     const provider = settings.providers[id];
     return Boolean(provider.npm || provider.url);
   });
-  if (usable.length === 0 && !customConfigured) {
-    const unknown = summaries.some((entry) => entry.toolCapableCount === null);
-    if (unknown) {
-      problems.push('The model catalog has not been loaded, so no model can be verified.');
-      hints.push('Load it: ranite config  (needs network or a warm cache)');
-    } else {
-      problems.push('No enabled provider has a model that can call tools.');
-      hints.push('Pick a model: ranite setup  (the catalog includes models that cannot call tools)');
-    }
+  if (!isCatalogLoaded() && !customConfigured) {
+    problems.push('The model catalog has not been loaded, so no model can be verified.');
+    hints.push('Load it: ranite config  (needs network or a warm cache)');
   }
 
   if (!settings.defaultProvider || !settings.defaultModel) {

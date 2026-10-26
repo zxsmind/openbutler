@@ -75,6 +75,29 @@ async function loadWithCatalog(
 }
 
 describe('reading a provider out of the file', () => {
+  it('invalidates cached providers, misses and byte offsets when another process replaces the catalog', async () => {
+    const catalog = await loadWithCatalog();
+    const revision = catalog.getCatalogRevision();
+    expect(catalog.getModel('openai', 'gpt-5')?.limit?.context).toBe(400000);
+    expect(catalog.getProvider('new-provider')).toBeNull();
+    const fetchedAt = (await catalog.getCatalogIndex()).fetchedAt;
+    catalog.writeCatalogSnapshot(
+      {
+        'new-provider': { npm: '@ai-sdk/openai-compatible', models: { 'new-model': { reasoning: true } } },
+        openai: {
+          ...FIXTURE.providers.openai,
+          models: { 'gpt-5': { ...FIXTURE.providers.openai.models['gpt-5'], limit: { context: 1048576 } } },
+        },
+      },
+      fetchedAt,
+    );
+    expect(catalog.getModel('openai', 'gpt-5')?.limit?.context).toBe(1048576);
+    expect(catalog.getModel('new-provider', 'new-model')?.reasoning).toBe(true);
+    expect(catalog.listProviderIdsForModel('new-model')).toEqual(['new-provider']);
+    expect(catalog.getCatalogRevision()).not.toBe(revision);
+    expect((await catalog.getCatalogIndex()).fetchedAt).toBe(fetchedAt);
+  });
+
   it('keeps every field the catalog shipped, not just the tool-call flag', async () => {
     const catalog = await loadWithCatalog();
     const model = catalog.getModel('openai', 'gpt-5');

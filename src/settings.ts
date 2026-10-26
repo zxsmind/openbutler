@@ -48,6 +48,8 @@ export interface ProviderState {
    * them, it only places them under the namespace the gateway expects.
    */
   routing?: Record<string, unknown>;
+  /** Native routing per exact model ID; overrides provider-wide routing. */
+  modelRouting?: Record<string, Record<string, unknown>>;
   /** Extra JSON fields merged into every request body this provider sends. */
   payload?: Record<string, unknown>;
   /** Facts about this provider's own models that the catalog does not carry. */
@@ -64,6 +66,11 @@ export interface ProviderModelSpec {
   reasoning?: { efforts?: string[] };
   /** Extra JSON fields merged into requests for this model; overrides the provider payload. */
   payload?: Record<string, unknown>;
+}
+
+/** Select routing for this model without leaking another model's preferences. */
+export function providerModelRouting(provider: ProviderState | undefined, modelId: string): Record<string, unknown> | undefined {
+  return provider?.modelRouting?.[modelId] ?? provider?.routing;
 }
 
 /** MCP credentials are environment-variable names, never secret values. */
@@ -183,7 +190,18 @@ const KNOWN_KEYS = new Set([
   'telegram',
   'team',
 ]);
-const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options', 'routing', 'payload', 'modelSpecs']);
+const KNOWN_PROVIDER_KEYS = new Set([
+  'enabled',
+  'keys',
+  'models',
+  'url',
+  'npm',
+  'options',
+  'routing',
+  'modelRouting',
+  'payload',
+  'modelSpecs',
+]);
 
 /**
  * Rebuilds a provider state from an existing one plus a patch, carrying every
@@ -387,6 +405,16 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
   if (raw.routing !== undefined) {
     const routing = providerOptions(raw.routing, `providers.${id}.routing`);
     if (Object.keys(routing).length > 0) state.routing = routing;
+  }
+  if (raw.modelRouting !== undefined) {
+    const entries = providerOptions(raw.modelRouting, `providers.${id}.modelRouting`);
+    const modelRouting: Record<string, Record<string, unknown>> = {};
+    for (const [modelId, routing] of Object.entries(entries)) {
+      if (!modelId.trim() || modelId.length > 512)
+        throw new Error(`providers.${id}.modelRouting requires non-empty model IDs under 512 characters.`);
+      modelRouting[modelId] = providerOptions(routing, `providers.${id}.modelRouting.${modelId}`);
+    }
+    state.modelRouting = modelRouting;
   }
   if (raw.payload !== undefined) {
     const payload = providerOptions(raw.payload, `providers.${id}.payload`);

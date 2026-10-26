@@ -1,6 +1,6 @@
 import { confirm, input, password, search, select } from '@inquirer/prompts';
 import { getCatalogIndex, getProvider, listProviderSummaries } from '../provider/catalog.js';
-import { listToolCapableModels, listSupportedPackages } from '../provider/registry.js';
+import { listCatalogModels, listSupportedPackages } from '../provider/registry.js';
 import { loadSettings, saveSettings, withProviderFields, type ProviderState, type SettingsStore, getSettingsPath } from '../settings.js';
 import { BACK_CHOICE, BACK_LABEL, createStepMachine } from './steps.js';
 import { defaultModelIsUsable, readiness, setDefaultModel } from './config-edit.js';
@@ -67,9 +67,9 @@ function getProviderName(id: string): string {
   return getProvider(id)?.name ?? id;
 }
 
-/** Models the catalog marks as able to call tools, so a choice is never a dead end. */
-function toolCapableModels(providerId: string, state: ProviderState | undefined): string[] {
-  return listToolCapableModels([providerId], state ? { [providerId]: state } : {}).map((entry) => entry.model);
+/** All catalog models, regardless of capability metadata. */
+function catalogModels(providerId: string): string[] {
+  return listCatalogModels([providerId]).map((entry) => entry.model);
 }
 
 /**
@@ -227,9 +227,9 @@ async function askDefaultModel(settings: SettingsStore): Promise<void> {
     ...(settings.defaultProvider && ids.includes(settings.defaultProvider) ? { default: settings.defaultProvider } : {}),
   });
 
-  const available = toolCapableModels(provider, settings.providers[provider]);
+  const available = catalogModels(provider);
   if (available.length === 0) {
-    ui.warn(`No tool-capable model in the catalog for ${provider}; type the model id.`);
+    ui.warn(`No model in the catalog for ${provider}; type the model id.`);
     const raw = await input({ message: `Model id for ${provider}`, default: settings.defaultModel });
     const model = parseList(raw)[0] ?? '';
     if (model && setDefaultModel(settings, provider, model)) ui.success(`Default: ${provider} / ${model}`);
@@ -382,7 +382,7 @@ export async function runSetup(): Promise<boolean> {
     return false;
   }
   if (!defaultModelIsUsable(settings)) {
-    ui.warn('The default model is unset or cannot call tools.');
+    ui.warn('The default model is unset or its provider is not ready.');
     ui.info('Fix it: ranite setup');
     return false;
   }
