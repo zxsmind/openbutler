@@ -47,6 +47,23 @@ const action: ToolActionUpdate = {
 };
 
 describe('durable events and actions', () => {
+  it('does not resurrect read owner notifications after restart and retains their history', () => {
+    const event = ledger.insertEvent({
+      source: 'owner-inbox',
+      kind: 'owner.message',
+      dedupeKey: 'read-owner-message',
+      payload: { text: 'History' },
+    });
+    ledger.setEventState(event.id, 'delivered');
+    expect(ledger.recoverInterruptedEvents()).toBe(0);
+    expect(ledger.ownerInboxNotifications()).toEqual([]);
+    expect(ledger.getEvent(event.id)?.payload.text).toBe('History');
+    ledger.setEventState(event.id, 'failed');
+    ledger.setState(`owner-inbox:read:${event.id}`, 'read');
+    expect(ledger.ownerInboxNotifications()).toEqual([]);
+    expect(ledger.ownerInboxEvents()).toEqual([]);
+  });
+
   it('resumes interrupted owner delivery from its receipt while keeping work execution non-replayable', () => {
     const delivery = ledger.insertEvent({
       source: 'notification',
