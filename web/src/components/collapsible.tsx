@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 /** Intrinsic grid sizing follows nested panels and streaming content throughout
  * the transition, without capturing an intermediate pixel height as its target. */
-export function Collapsible({ open, children }: { open: boolean; children: ReactNode }) {
+export function Collapsible({ open, children, id }: { open: boolean; children: ReactNode; id?: string }) {
   const [mounted, setMounted] = useState(open);
   const root = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -24,7 +24,7 @@ export function Collapsible({ open, children }: { open: boolean; children: React
     };
   }, [open]);
   return (
-    <div ref={root} className="step-collapse" data-state={open ? 'open' : 'closed'} aria-hidden={!open} inert={!open}>
+    <div id={id} ref={root} className="step-collapse" data-state={open ? 'open' : 'closed'} aria-hidden={!open} inert={!open}>
       <div className="step-collapse-content">{open || mounted ? children : null}</div>
     </div>
   );

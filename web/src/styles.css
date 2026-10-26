@@ -28,6 +28,9 @@
   --blue: #3b7ef5;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --mono: 'Cascadia Code', Consolas, monospace;
+  --scrollbar-size: 4px;
+  --scrollbar-thumb: #cbd0d8;
+  --scrollbar-thumb-hover: #9ba3ae;
 }
 * {
   box-sizing: border-box;
@@ -76,15 +79,15 @@ select:focus-visible,
   background: #dce8ff;
 }
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 ::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: #cbd0d8;
+  background: var(--scrollbar-thumb);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #9ba3ae;
+  background: var(--scrollbar-thumb-hover);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -102,7 +105,7 @@ select:focus-visible,
 @supports not selector(::-webkit-scrollbar) {
   * {
     scrollbar-width: thin;
-    scrollbar-color: #cbd0d8 transparent;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
   }
 }
 .spacer {
@@ -379,12 +382,14 @@ select:focus-visible,
   white-space: nowrap;
 }
 
-.sidebar-message {
-  margin: 12px 10px;
-  font-size: 12px;
-  color: #969aa3;
+.session-running {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: #8ba8d1;
 }
-
 .sidebar-brand {
   font-size: 18px;
   font-weight: 600;
@@ -724,7 +729,6 @@ select:focus-visible,
   max-height: min(280px, 40dvh);
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
   padding: 4px 2px;
 }
 .step-line {
@@ -798,7 +802,6 @@ select:focus-visible,
   max-height: min(180px, 30dvh);
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
   border: 1px solid #d9dcdf;
   border-radius: 14px;
   background: #f2f3f3;
@@ -839,7 +842,6 @@ select:focus-visible,
   max-height: min(180px, 30dvh);
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
   white-space: normal;
   line-height: 1.55;
 }
@@ -901,6 +903,7 @@ select:focus-visible,
   color: #a33b3b;
 }
 .turn-work-duration {
+  width: 100%;
   margin: 0 0 16px;
   padding-bottom: 4px;
   border-bottom: 1px solid #ededee;
@@ -1171,39 +1174,6 @@ select:focus-visible,
 }
 
 /* Attention states and session information. */
-.notice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0;
-  padding: 4px 10px;
-  border: 1px solid #e5e8ee;
-  border-radius: 10px;
-  background: #f8f9fb;
-  font-size: 12px;
-  line-height: 1.45;
-  color: #788291;
-  overflow-wrap: anywhere;
-}
-.notice > span:first-child {
-  flex: 1;
-}
-.notice.error {
-  background: #fff7f7;
-  border-color: #eedde0;
-  color: #b0636f;
-}
-.notice.warn {
-  background: #fffcf5;
-  border-color: #eee6d6;
-  color: #a48a54;
-}
-.connection-notice {
-  margin-bottom: 12px;
-  text-align: center;
-  font-size: 12px;
-  color: #969eab;
-}
 .approval {
   margin-bottom: 14px;
   padding: 14px;

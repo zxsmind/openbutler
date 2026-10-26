@@ -10,6 +10,8 @@ import { useModelSelection } from '../use-model-selection.js';
 import { ApprovalSelector } from './approval-selector.js';
 import { ContextMeter } from './context-meter.js';
 import { MessageQueue } from './message-queue.js';
+import { Feedback } from './feedback.js';
+import { moveHistory, type ComposerHistory } from '../composer-state.js';
 interface ComposerProps {
   projectName?: string;
   context?: ReactNode;
@@ -20,6 +22,7 @@ interface ComposerProps {
   models: ModelChoice[];
   pendingModel: ModelChoice | null;
   draft: string;
+  history: readonly string[];
   images: DraftImage[];
   onImages: (images: DraftImage[]) => void;
   busy: boolean;
@@ -37,6 +40,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   const input = useRef<HTMLTextAreaElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const sending = useRef(false);
+  const history = useRef<ComposerHistory | null>(null);
+  const historyCaret = useRef<'start' | 'end' | null>(null);
   // Tracks the newest draft so a failed send only restores text the owner has
   // not replaced in the meantime.
   const latestDraft = useRef(props.draft);
@@ -47,9 +52,20 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   const modelSelection = useModelSelection(props.runtime, props.models, props.onModel);
   const dictation = useDictation((text) => props.onDraft([props.draft, text].filter(Boolean).join(' ')), setError);
   useLayoutEffect(() => {
-    if (!input.current) return;
-    input.current.style.height = 'auto';
-    input.current.style.height = `${Math.min(200, Math.max(42, input.current.scrollHeight))}px`;
+    const node = input.current;
+    const form = node?.form;
+    if (!node || !form) return;
+    // Measuring must not shrink the dock and clamp the transcript's scrollTop.
+    const minHeight = form.style.minHeight;
+    form.style.minHeight = `${form.getBoundingClientRect().height}px`;
+    node.style.height = 'auto';
+    node.style.height = `${Math.min(200, Math.max(42, node.scrollHeight))}px`;
+    form.style.minHeight = minHeight;
+    if (historyCaret.current) {
+      const position = historyCaret.current === 'start' ? 0 : node.value.length;
+      node.setSelectionRange(position, position);
+      historyCaret.current = null;
+    }
   }, [props.draft]);
   const submit = async () => {
     const text = props.draft.trim();
@@ -62,6 +78,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
     // stays enabled and keeps the caret, so the owner can start the next message
     // while this one is on its way; a disabled field would lose focus here.
     const images = props.images;
+    history.current = null;
     props.onDraft('');
     props.onImages([]);
     try {
@@ -111,13 +128,12 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
         </div>
       ) : null}
       {error ? (
-        <div className="notice error" role="alert">
-          <span>{error}</span>
-          <IconButton icon="x" label="Dismiss error" onClick={() => setError(null)} />
-        </div>
+        <Feedback tone="error" onDismiss={() => setError(null)}>
+          {error}
+        </Feedback>
       ) : null}
       {props.context}
-      <MessageQueue messages={props.queuedMessages} disabled={props.disabled} onAction={props.onQueueAction} />
+      <MessageQueue messages={props.queuedMessages} busy={props.busy} disabled={props.disabled} onAction={props.onQueueAction} />
       <form
         className="composer"
         onDragOver={(event) => {
@@ -169,9 +185,34 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
           }}
           onChange={(event) => {
             setError(null);
+            history.current = null;
             props.onDraft(event.target.value);
           }}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
+            if (
+              (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+              !event.shiftKey &&
+              !event.ctrlKey &&
+              !event.altKey &&
+              !event.metaKey
+            ) {
+              const node = event.currentTarget;
+              const up = event.key === 'ArrowUp';
+              // Preserve selection and normal movement within multiline drafts.
+              const atEdge = up
+                ? !node.value.slice(0, node.selectionStart).includes('\n')
+                : !node.value.slice(node.selectionEnd).includes('\n');
+              if (node.selectionStart !== node.selectionEnd || !atEdge) return;
+              const next = moveHistory(history.current, props.history, props.draft, up ? -1 : 1);
+              if (!next) return;
+              event.preventDefault();
+              const text = next.messages[next.index] ?? next.draft;
+              history.current = next.index === next.messages.length ? null : next;
+              historyCaret.current = up ? 'start' : 'end';
+              props.onDraft(text);
+              return;
+            }
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void submit();

@@ -16,6 +16,17 @@ export const surfaceLayoutTransition: Transition = {
   ease: [0.4, 0, 0.2, 1],
 };
 
+/** Chromium tab bounds: 200 ms with gfx::Tween::EASE_OUT (quadratic).
+ * https://chromium.googlesource.com/chromium/src/+/7956363699684821b85960b5a056fb2e3fe8b3db/chrome/browser/ui/views/tabs/tab_container_impl.cc
+ * https://github.com/chromium/chromium/blob/main/ui/gfx/animation/tween.cc
+ * Only tab creation/removal uses this; selection and page content remain instant.
+ */
+export const tabBoundsTransition: Transition = {
+  type: 'tween',
+  duration: 0.2,
+  ease: (progress: number) => 1 - (1 - progress) ** 2,
+};
+
 export const surfaceMotionVariants: Variants = {
   hidden: { opacity: 0 },
   visible: { opacity: 1 },

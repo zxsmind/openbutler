@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DraftImage } from './types.js';
-import { useSession } from './use-session.js';
+import { PENDING_CHAT_ID, useSession } from './use-session.js';
 import { useProjects } from './projects/use-projects.js';
 import { ProjectContextBar } from './projects/project-selector.js';
 import { CreateProjectDialog } from './projects/create-project-dialog.js';
@@ -17,14 +17,22 @@ import { Composer } from './components/composer.js';
 import { PendingActions } from './components/pending-actions.js';
 import { SessionDetails } from './components/session-details.js';
 import { Button, IconButton } from './components/ui.js';
+import { readDrafts, saveDraft } from './composer-state.js';
+import { WorkspacePanels } from './components/workspace-panels.js';
+import { Feedback } from './components/feedback.js';
 
 export function App() {
   const session = useSession();
+  // Where the placeholder chat's text came from; set when a new chat starts
+  // and consumed once the host answers it.
+  const placeholderRef = useRef<{ key: string; previousId: string } | null>(null);
   const projects = useProjects(
     session.payload?.session,
     async (projectId) => {
       if (session.payload?.session.projectLocked) {
+        const from = session.payload?.session.id;
         if (!(await session.switchSession(undefined, projectId))) throw new Error('A new chat could not be opened in this project.');
+        if (from) placeholderRef.current = { key: PENDING_CHAT_ID, previousId: from };
       } else await session.selectProject(projectId);
     },
     !session.payload?.busy && (session.payload?.queuedMessageCount ?? 0) === 0,
@@ -49,7 +57,13 @@ export function App() {
   };
   const [draftImages, setDraftImages] = useState<Record<string, DraftImage[]>>({});
   const closeSearch = useCallback(() => setSearchOpen(false), []);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => {
+    try {
+      return readDrafts(window.localStorage);
+    } catch {
+      return {};
+    }
+  });
   const [elapsed, setElapsed] = useState(0);
   const composer = useRef<HTMLTextAreaElement>(null);
   const payload = session.payload;
@@ -58,13 +72,43 @@ export function App() {
   const queued = payload?.queuedMessageCount ?? 0;
   const connected = session.status === 'open' && !!payload;
   const turns = useMemo(() => buildTurns(session.entries, session.base), [session.entries, session.base]);
+  const messageHistory = useMemo(
+    () => [
+      ...session.entries.filter((entry) => entry.kind === 'user' && !entry.internal && entry.text?.trim()).map((entry) => entry.text!),
+      ...(payload?.queuedMessages ?? []).filter((message) => message.text.trim()).map((message) => message.text),
+    ],
+    [session.entries, payload?.queuedMessages],
+  );
   const liveTurn = busy ? turns[turns.length - 1]?.id : undefined;
   // The dot is a "your message was taken, nothing has come back yet" signal, not a
   // running indicator: it appears after a send and leaves on the first chunk, so
   // it never sits under the transcript while the agent works.
   const showTyping = awaitingFirstChunk(turns, liveTurn);
   const typingIndicator = useMemo(() => (showTyping ? <TypingIndicator /> : null), [showTyping]);
-  const navigationDisabled = !connected || busy || queued > 0 || session.changing;
+  const independentChats = payload?.runtime?.supportsSessionAttachments === true;
+  const navigationDisabled = !connected || session.changing || (!independentChats && (busy || queued > 0));
+  // Text typed into the placeholder belongs to the real chat once the host
+  // answers: it is carried over in memory only, so no storage key ever exists
+  // for a placeholder. A failed create keeps it under the placeholder key for
+  // the retry.
+  useEffect(() => {
+    if (session.pendingNewChatId || !placeholderRef.current) return;
+    const placeholder = placeholderRef.current;
+    placeholderRef.current = null;
+    if (!id || id === placeholder.previousId) return;
+    const draft = drafts[placeholder.key];
+    const images = draftImages[placeholder.key];
+    setDrafts((previous) => {
+      const next = { ...previous };
+      delete next[placeholder.key];
+      return draft ? { ...next, [id]: draft } : next;
+    });
+    setDraftImages((previous) => {
+      const next = { ...previous };
+      delete next[placeholder.key];
+      return images ? { ...next, [id]: images } : next;
+    });
+  }, [session.pendingNewChatId, id, drafts, draftImages]);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)');
@@ -125,7 +169,9 @@ export function App() {
   }, [settingsSection, detailsOpen, narrow, sidebarVisible, busy, payload?.pendingApproval, session.stop, session.approve]);
 
   const navigate = async (target?: string) => {
+    const from = id;
     if (await session.switchSession(target)) {
+      if (target === undefined && from) placeholderRef.current = { key: PENDING_CHAT_ID, previousId: from };
       setSearchOpen(false);
       setDetailsOpen(false);
       if (narrow) setSidebarVisible(false);
@@ -154,7 +200,9 @@ export function App() {
         loading={session.sessionsLoading}
         error={session.sessionsError}
         disabled={navigationDisabled}
-        disabledReason={busy || queued ? 'Finish or stop the current run before switching chats.' : undefined}
+        disabledReason={
+          session.changing ? 'Opening chat…' : !independentChats && busy ? 'Restart Ranite to enable independent chats.' : undefined
+        }
         onSearch={() => setSearchOpen(true)}
         onRetry={session.retrySessions}
         onNew={() => void navigate()}
@@ -163,120 +211,149 @@ export function App() {
         onSettings={() => openSettings(DEFAULT_SETTINGS_SECTION)}
       />
       <div className="workspace-surface" inert={!!settingsSection}>
-        <header className="topbar">
-          <IconButton
-            icon="panel-left"
-            label="Toggle sidebar"
-            aria-expanded={sidebarVisible}
-            onClick={() => setSidebarVisible(!sidebarVisible)}
-          />
-          <span className="session-title">{session.changing ? 'Opening chat…' : payload?.session.title || 'Ranite'}</span>
-          <span className="spacer" />
-          <span className={`run-status${connected && !busy ? ' sr-only' : ''}`} role="status">
-            {busy ? (
-              <>
-                <span className="pulse" />
-                Working {formatDuration(elapsed)}
-              </>
-            ) : (
-              <>
-                <span className={`connection-dot ${connected ? 'online' : ''}`} />
-                {connected ? 'Connected' : session.status === 'error' ? 'Reconnecting' : 'Connecting'}
-              </>
-            )}
-          </span>
-          {queued > 0 ? <span className="queued-count">{queued} queued</span> : null}
-          <IconButton icon="info" label="Session details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)} />
-        </header>
-        <main className={`conversation${turns.length === 0 ? ' conversation-empty' : ''}`} aria-busy={session.changing}>
-          {turns.length ? (
-            <VirtualList
-              key={id}
-              followRequest={session.followRequest}
-              items={turns}
-              getKey={(turn) => turn.id}
-              estimate={180}
-              hasOlder={session.base > 0}
-              loadingOlder={session.loadingOlder}
-              onLoadOlder={() => void session.loadOlder()}
-              header={
-                <div className="transcript-head">
-                  {session.base > 0 ? (
-                    <Button disabled={session.loadingOlder} onClick={() => void session.loadOlder()}>
-                      {session.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
-                    </Button>
-                  ) : null}
-                </div>
-              }
-              render={(turn) => <TurnView turn={turn} live={turn.id === liveTurn} sessionId={id} />}
-              footer={typingIndicator}
-            />
-          ) : null}
-          <div className="action-dock">
-            {session.notice ? (
-              <div className="notice error" role="alert">
-                <span>{session.notice}</span>
-                <IconButton icon="x" label="Dismiss error" onClick={session.clearNotice} />
-              </div>
-            ) : null}
-            {!connected ? (
-              <div className="connection-notice" role="status">
-                {session.status === 'error' ? 'Connection lost. Reconnecting to your workspace…' : 'Connecting to your workspace…'}
-              </div>
-            ) : null}
-            <PendingActions
-              key={payload?.pendingApproval?.id || payload?.pendingQuestion?.id || id}
-              approval={payload?.pendingApproval}
-              question={payload?.pendingQuestion}
-              onApprove={session.approve}
-              onAnswer={session.answer}
-            />
-            <Composer
-              key={id}
-              ref={composer}
-              projectName={projects.selected?.name ?? undefined}
-              context={
-                !projects.locked && payload ? (
-                  <ProjectContextBar
-                    controller={projects}
-                    onCreate={() => setCreateProjectOpen(true)}
-                    onSettings={() => openSettings(DEFAULT_SETTINGS_SECTION)}
+        <WorkspacePanels
+          sessionId={session.pendingNewChatId && placeholderRef.current ? placeholderRef.current.previousId : id}
+          chatTitle={payload?.session.title || 'Chat'}
+        >
+          {({ panelOpen, togglePanel }) => (
+            <>
+              <header className="topbar">
+                <IconButton
+                  icon="panel-left"
+                  label="Toggle sidebar"
+                  aria-expanded={sidebarVisible}
+                  onClick={() => setSidebarVisible(!sidebarVisible)}
+                />
+                <span className="session-title">{payload?.session.title || 'Ranite'}</span>
+                <span className="spacer" />
+                <span className={`run-status${connected && !busy ? ' sr-only' : ''}`} role="status">
+                  {busy ? (
+                    <>
+                      <span className="pulse" />
+                      Working {formatDuration(elapsed)}
+                    </>
+                  ) : (
+                    <>
+                      <span className={`connection-dot ${connected ? 'online' : ''}`} />
+                      {connected ? 'Connected' : session.status === 'error' ? 'Reconnecting' : 'Connecting'}
+                    </>
+                  )}
+                </span>
+                {queued > 0 ? <span className="queued-count">{queued} queued</span> : null}
+                <IconButton icon="info" label="Session details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)} />
+                <IconButton
+                  icon={panelOpen ? 'panel-right-close' : 'panel-right'}
+                  label={panelOpen ? 'Close right panel' : 'Open right panel'}
+                  aria-expanded={panelOpen}
+                  aria-controls="workspace-panel-right"
+                  onClick={togglePanel}
+                />
+              </header>
+              <main className={`conversation${turns.length === 0 ? ' conversation-empty' : ''}`} aria-busy={session.changing}>
+                {turns.length ? (
+                  <VirtualList
+                    key={id}
+                    followRequest={session.followRequest}
+                    items={turns}
+                    getKey={(turn) => turn.id}
+                    estimate={180}
+                    hasOlder={session.base > 0}
+                    loadingOlder={session.loadingOlder}
+                    onLoadOlder={() => void session.loadOlder()}
+                    header={
+                      <div className="transcript-head">
+                        {session.base > 0 ? (
+                          <Button disabled={session.loadingOlder} onClick={() => void session.loadOlder()}>
+                            {session.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
+                          </Button>
+                        ) : null}
+                      </div>
+                    }
+                    render={(turn) => <TurnView turn={turn} live={turn.id === liveTurn} sessionId={id} />}
+                    footer={typingIndicator}
                   />
-                ) : null
-              }
-              runtime={payload?.runtime}
-              contextTokens={payload?.contextTokens}
-              queuedMessages={payload?.queuedMessages}
-              onQueueAction={session.manageQueue}
-              models={session.models}
-              pendingModel={session.pendingModel}
-              draft={drafts[id] || ''}
-              images={draftImages[id] || []}
-              onImages={(images) => setDraftImages((previous) => ({ ...previous, [id]: images }))}
-              busy={busy}
-              disabled={!connected || session.changing || projects.selecting}
-              changing={session.changing || queued > 0}
-              empty={turns.length === 0 && connected}
-              onDraft={(value) => setDrafts((previous) => ({ ...previous, [id]: value }))}
-              onSend={async (text, images, reasoning) => {
-                if (projects.loading || projects.error)
-                  throw new Error('Project information is not ready yet. Try again from the project menu.');
-                if (!projects.supportsSelection) throw new Error('Restart the Ranite server to enable the project scope.');
-                await session.send(text, images, reasoning);
-              }}
-              onStop={() => void session.stop()}
-              onModel={session.selectModel}
-              onApprovalMode={session.selectApprovalMode}
-              onDetails={() => setDetailsOpen(!detailsOpen)}
-            />
-          </div>
-        </main>
+                ) : null}
+                <div className="action-dock">
+                  {session.notice ? (
+                    <Feedback tone="error" onDismiss={session.clearNotice}>
+                      {session.notice}
+                    </Feedback>
+                  ) : null}
+                  {!connected ? (
+                    <Feedback tone={session.status === 'error' ? 'warning' : 'loading'}>
+                      {session.status === 'error' ? 'Connection lost. Reconnecting to your workspace…' : 'Connecting to your workspace…'}
+                    </Feedback>
+                  ) : null}
+                  <PendingActions
+                    key={payload?.pendingApproval?.id || payload?.pendingQuestion?.id || id}
+                    approval={payload?.pendingApproval}
+                    question={payload?.pendingQuestion}
+                    onApprove={session.approve}
+                    onAnswer={session.answer}
+                  />
+                  <Composer
+                    key={id}
+                    ref={composer}
+                    projectName={projects.selected?.name ?? undefined}
+                    context={
+                      !projects.locked && payload ? (
+                        <ProjectContextBar
+                          controller={projects}
+                          onCreate={() => setCreateProjectOpen(true)}
+                          onSettings={() => openSettings(DEFAULT_SETTINGS_SECTION)}
+                        />
+                      ) : null
+                    }
+                    runtime={payload?.runtime}
+                    contextTokens={
+                      (payload?.session.hasUserMessage ?? turns.some((turn) => turn.user !== null)) ? payload?.contextTokens : undefined
+                    }
+                    queuedMessages={payload?.queuedMessages}
+                    onQueueAction={session.manageQueue}
+                    models={session.models}
+                    pendingModel={session.pendingModel}
+                    draft={drafts[id] || ''}
+                    history={messageHistory}
+                    images={draftImages[id] || []}
+                    onImages={(images) => setDraftImages((previous) => ({ ...previous, [id]: images }))}
+                    busy={busy}
+                    disabled={!connected || (session.changing && session.pendingNewChatId === null) || projects.selecting}
+                    changing={session.changing || queued > 0}
+                    empty={turns.length === 0 && connected}
+                    onDraft={(value) => {
+                      setDrafts((previous) => ({ ...previous, [id]: value }));
+                      // The placeholder chat has no persisted draft: storage stays
+                      // the host/client contract for real sessions only.
+                      if (session.pendingNewChatId) return;
+                      try {
+                        saveDraft(window.localStorage, id, value);
+                      } catch {
+                        // Accessing localStorage itself can be blocked by the browser.
+                      }
+                    }}
+                    onSend={async (text, images, reasoning) => {
+                      if (projects.loading || projects.error)
+                        throw new Error('Project information is not ready yet. Try again from the project menu.');
+                      if (!projects.supportsSelection) throw new Error('Restart the Ranite server to enable the project scope.');
+                      await session.send(text, images, reasoning);
+                    }}
+                    onStop={() => void session.stop()}
+                    onModel={session.selectModel}
+                    onApprovalMode={session.selectApprovalMode}
+                    onDetails={() => setDetailsOpen(!detailsOpen)}
+                  />
+                </div>
+              </main>
+            </>
+          )}
+        </WorkspacePanels>
       </div>
       {createProjectOpen ? <CreateProjectDialog controller={projects} onClose={closeCreateProject} /> : null}
       {settingsSection ? (
         <SettingsSessionProvider
           value={{
             models: session.models,
+            modelsRevision: session.modelsRevision,
             runtime: payload?.runtime,
             busy,
             selectModel: (model) => void session.selectModel(model),

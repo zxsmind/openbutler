@@ -6,11 +6,6 @@
   height: 46px;
   margin: 0 auto;
   padding: 0 28px 22px;
-  /* Pinned to the transcript's bottom edge. Without this the dot slides down
-     with every row that arrives and back up as the view follows, which reads as
-     a tremble exactly when a message is sent. */
-  position: sticky;
-  bottom: 0;
 }
 .typing-indicator__dot {
   display: block;
