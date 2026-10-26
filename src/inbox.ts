@@ -1,4 +1,4 @@
-/** One agent-facing inbox. Sources own their durable content and handling state. */
+/** Pending unread notifications. Sources retain history and own durable read receipts. */
 export interface InboxItem {
   reference: string;
   receivedAt: string;
@@ -50,7 +50,7 @@ export class AgentInbox {
         sources.map(async (source) => {
           try {
             const page = await source.list(sessionId);
-            return { source: source.name, ...page };
+            return { source: source.name, ...page, items: page.items.filter((item) => item.state === 'unread') };
           } catch (error) {
             errors.push({ source: source.name, error: error instanceof Error ? error.message : String(error) });
             return { source: source.name, items: [], remaining: 0 };

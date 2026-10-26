@@ -431,8 +431,6 @@ export class ActivityLedger {
         error = CASE WHEN source = 'owner-inbox' THEN 'Owner message is available for retry after host restart.' ELSE 'Host stopped while this event was being processed.' END,
         updated_at = ?
       WHERE status = 'processing'
-        OR (source = 'owner-inbox' AND status = 'delivered'
-          AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || ranite_events.event_id))
     `,
       )
       .run(now);
@@ -595,13 +593,13 @@ export class ActivityLedger {
       );
   }
 
-  /** Notification metadata includes read messages that still await handling. */
+  /** Only unread notifications; replying is independent of consuming the inbox. */
   ownerInboxNotifications(): ObservedEventRow[] {
     this.assertOpen();
     return (
       this.database
         .prepare(
-          "SELECT * FROM ranite_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted','delivered') AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || e.event_id) ORDER BY received_at, rowid",
+          "SELECT * FROM ranite_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || e.event_id OR key = 'owner-inbox:read:' || e.event_id) ORDER BY received_at, rowid",
         )
         .all() as unknown as EventDbRow[]
     ).map(eventFromRow);
@@ -611,7 +609,7 @@ export class ActivityLedger {
     this.assertOpen();
     const rows = this.database
       .prepare(
-        "SELECT * FROM ranite_events WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') ORDER BY received_at, rowid LIMIT ?",
+        "SELECT * FROM ranite_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || e.event_id OR key = 'owner-inbox:read:' || e.event_id) ORDER BY received_at, rowid LIMIT ?",
       )
       .all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);

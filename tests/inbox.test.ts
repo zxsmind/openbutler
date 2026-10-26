@@ -49,12 +49,18 @@ describe('one extensible agent inbox', () => {
     expect(inboxNotice('Calendar', 1)).toBe('You have 1 "Calendar" notification. Use inbox to read.');
   });
 
-  it('keeps read-but-unhandled items visible and routes acknowledgement through the same id', async () => {
+  it('removes read notifications while keeping their content available by id', async () => {
     const inbox = new AgentInbox();
     const backend = source('Team');
     inbox.register(backend);
     await inbox.execute({ action: 'read', ids: [inboxId('Team', 'first')] }, 'parent');
-    expect(await inbox.execute({ action: 'list' }, 'parent')).toMatchObject({ items: [{ state: 'read' }, { state: 'unread' }] });
+    expect(await inbox.execute({ action: 'list' }, 'another-chat')).toMatchObject({
+      items: [{ id: 'Team:second' }],
+      sources: [{ count: 1, unread: 1 }],
+    });
+    expect(await inbox.execute({ action: 'read', ids: [inboxId('Team', 'first')] }, 'another-chat')).toMatchObject({
+      items: [{ id: 'Team:first', content: { text: 'content:Team:first' } }],
+    });
     await inbox.execute({ action: 'acknowledge', ids: [inboxId('Team', 'first')] }, 'parent');
     expect(backend.acknowledge).toHaveBeenCalledWith(['first'], 'parent');
     expect(await inbox.execute({ action: 'list' }, 'parent')).toMatchObject({ items: [{ id: 'Team:second' }] });
