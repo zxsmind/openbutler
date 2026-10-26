@@ -2,6 +2,7 @@ import type { AgentSessionRuntimeView, AgentSessionSnapshot, AgentSessionView } 
 import type { SessionEntry, SessionSummary } from './session-store.js';
 import type { TelegramStatus } from './telegram.js';
 import type { ApprovalMode } from './settings.js';
+import type { LocalClientKind } from './communication.js';
 
 export const DAEMON_PROTOCOL_VERSION = 2;
 export const MAX_DAEMON_FRAME_BYTES = 32 * 1024 * 1024;
@@ -68,6 +69,11 @@ export type DaemonResponse = { version: 2; id: string; ok: true; result: unknown
 export type DaemonRequest = { version: 2; id: string; action: string; [key: string]: unknown };
 
 export interface AttachResult {
+  /** The host can attach to a conversation without replacing another controller. */
+  sessionAttachments?: true;
+  workspaceKey?: string;
+  /** Source identity accepted for this local IPC connection. */
+  clientKind?: LocalClientKind;
   snapshot: SessionSnapshotData;
   runtime: RuntimeViewData;
   savedSessions: SessionSummary[];

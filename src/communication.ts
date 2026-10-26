@@ -1,7 +1,18 @@
 /** Host-owned communication facts; channel adapters never choose agent identity. */
 import type { FileAttachment } from './attachments.js';
 // Legacy source tags remain readable in saved sessions. All new notifications use inbox.
-export const TURN_SOURCES = ['terminal', 'telegram', 'inbox', 'owner-inbox', 'schedule', 'background', 'team', 'worker'] as const;
+export const LOCAL_CLIENT_KINDS = ['terminal', 'web'] as const;
+export type LocalClientKind = (typeof LOCAL_CLIENT_KINDS)[number];
+export const TURN_SOURCES = [
+  ...LOCAL_CLIENT_KINDS,
+  'telegram',
+  'inbox',
+  'owner-inbox',
+  'schedule',
+  'background',
+  'team',
+  'worker',
+] as const;
 export type OwnerReplyRoute = { channel: 'terminal' } | { channel: 'telegram'; chatId: string };
 export type TurnCommunication = {
   source: (typeof TURN_SOURCES)[number];

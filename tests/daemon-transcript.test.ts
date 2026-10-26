@@ -20,8 +20,10 @@ let web: WebServer | undefined;
 let snapshot: SessionSnapshotData;
 let runtime: RuntimeViewData;
 let connect: typeof import('../src/daemon-client.js').connectDaemonSession;
+let supportsClientKind: boolean;
 
 beforeEach(async () => {
+  supportsClientKind = true;
   root = mkdtempSync(join(tmpdir(), 'ranite-transcript-'));
   vi.stubEnv('RANITE_DATA_DIR', root);
   vi.resetModules();
@@ -70,7 +72,19 @@ beforeEach(async () => {
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const request = JSON.parse(buffer.slice(0, newline));
         buffer = buffer.slice(newline + 1);
-        connection.write(JSON.stringify({ version: 2, id: request.id, ok: true, result: { snapshot, runtime, savedSessions: [] } }) + '\n');
+        connection.write(
+          JSON.stringify({
+            version: 2,
+            id: request.id,
+            ok: true,
+            result: {
+              snapshot,
+              runtime,
+              savedSessions: [],
+              ...(supportsClientKind ? { clientKind: request.clientKind ?? 'terminal' } : {}),
+            },
+          }) + '\n',
+        );
       }
     });
   });
@@ -110,6 +124,18 @@ function patch(append: SessionEntry[] = [], appendText: Array<{ index: number; d
     patch: { ...snapshot, session, runtime, entriesPatch: { kind: 'delta', append, appendText, replace: [] } },
   });
 }
+
+it('refuses silent web-to-terminal fallback on an older host while retaining terminal compatibility', async () => {
+  supportsClientKind = false;
+  await expect(connect(root, { clientKind: 'web' })).rejects.toThrow('Restart the Ranite host');
+  client = await connect(root);
+  expect(client.getSnapshot().session.id).toBe('chat');
+});
+
+it('rejects an unsupported local connection source', async () => {
+  // The real host validates this at attach; the fixture returns it to exercise client validation.
+  await expect(connect(root, { clientKind: 'telegram' as never })).rejects.toThrow('invalid session attachment');
+});
 
 it('expires local notices without changing the host index space used by later text deltas', async () => {
   client = await connect(root);

@@ -26,6 +26,7 @@ import {
 import type { SessionEntry, SessionSummary, NoticeTone } from './session-store.js';
 import { LocalNoticeList, LOCAL_NOTICE_TTL_MS, MAX_LOCAL_NOTICES } from './local-notices.js';
 import type { ApprovalMode } from './settings.js';
+import { LOCAL_CLIENT_KINDS, type LocalClientKind } from './communication.js';
 
 const CLIENT_CONNECT_TIMEOUT_MS = 10_000;
 
@@ -36,6 +37,10 @@ interface PendingRequest {
 }
 
 type AttachOptions = {
+  chatSessionId?: string;
+  newChatSession?: boolean;
+  projectId?: string | null;
+  clientKind?: LocalClientKind;
   custodian?: boolean;
   isolatedSession?: boolean;
   scheduleId?: string;
@@ -79,7 +84,7 @@ class DaemonSessionClient implements AgentSessionClient {
    */
   private readonly localNotices = new LocalNoticeList(MAX_LOCAL_NOTICES, LOCAL_NOTICE_TTL_MS);
   private localNoticeTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly workspaceKey: string;
+  private workspaceKey: string;
   private savedSessions: SessionSummary[] = [];
 
   readonly runtime: AgentSessionRuntimeView;
@@ -152,13 +157,31 @@ class DaemonSessionClient implements AgentSessionClient {
     this.attachOptions = options;
     const result = await this.request<AttachResult>('attach', {
       workspaceRoot: this.workspaceRoot,
+      clientKind: options.clientKind ?? 'terminal',
       ...(options.custodian ? { custodian: true } : {}),
+      ...(options.chatSessionId ? { chatSessionId: options.chatSessionId } : {}),
+      ...(options.newChatSession ? { newChatSession: true } : {}),
+      ...(options.projectId !== undefined ? { projectId: options.projectId } : {}),
       ...(options.isolatedSession ? { isolatedSession: true } : {}),
       ...(options.scheduleId ? { scheduleId: options.scheduleId } : {}),
       ...(options.workerSessionId ? { workerSessionId: options.workerSessionId } : {}),
       ...(options.runningWorkerOf ? { runningWorkerOf: options.runningWorkerOf } : {}),
     });
     if (!isAttachResult(result)) throw new Error('The Ranite host returned an invalid session attachment.');
+    if ((options.chatSessionId || options.newChatSession) && result.sessionAttachments !== true)
+      throw new Error('Restart the Ranite host to enable independent chats. The current run has been kept running.');
+    if (options.chatSessionId || options.newChatSession) {
+      if (typeof result.workspaceKey !== 'string') throw new Error('The host did not provide a chat binding.');
+      this.workspaceKey = result.workspaceKey;
+    }
+    if (options.chatSessionId && result.snapshot.session.id !== options.chatSessionId)
+      throw new Error('The host attached to a different chat. This connection cannot be used.');
+    if (options.newChatSession) {
+      const { newChatSession: _newChat, projectId: _project, ...rest } = options;
+      this.attachOptions = { ...rest, chatSessionId: result.snapshot.session.id };
+    }
+    if (options.clientKind === 'web' && result.clientKind !== 'web')
+      throw new Error('Restart the Ranite host to identify web messages correctly: ranite restart');
     if (options.custodian && result.custodian !== true)
       throw new Error(
         'The running Ranite host predates the machine-wide custodian update. Run `ranite restart` to load the installed code.',
@@ -578,7 +601,8 @@ function isAttachResult(value: unknown): value is AttachResult {
     isSessionSnapshotData(value.snapshot) &&
     isRuntimeViewData(value.runtime) &&
     Array.isArray(value.savedSessions) &&
-    (value.custodian === undefined || typeof value.custodian === 'boolean')
+    (value.custodian === undefined || typeof value.custodian === 'boolean') &&
+    (value.clientKind === undefined || LOCAL_CLIENT_KINDS.some((kind) => kind === value.clientKind))
   );
 }
 
