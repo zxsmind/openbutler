@@ -52,14 +52,3 @@
   color: #969699;
   font-size: 11px;
 }
-.message-queue__error {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  color: #b23e3e;
-  font-size: 12px;
-}
-.message-queue__error span {
-  flex: 1;
-}

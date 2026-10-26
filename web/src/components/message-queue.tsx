@@ -3,14 +3,17 @@ import type { SessionPayload } from '../types.js';
 import { Button, Icon, IconButton } from './ui.js';
 import { Dropdown } from './selection/dropdown.js';
 import { ComposerRail } from './composer-rail.js';
+import { Feedback } from './feedback.js';
 import './message-queue.css';
 
 export function MessageQueue({
   messages = [],
+  busy,
   disabled,
   onAction,
 }: {
   messages: SessionPayload['queuedMessages'];
+  busy: boolean;
   disabled: boolean;
   onAction: (id: string, action: 'steer' | 'remove') => Promise<void>;
 }) {
@@ -32,10 +35,9 @@ export function MessageQueue({
   return (
     <ComposerRail aria-label="Kuyruktaki mesajlar" aria-busy={pending}>
       {error ? (
-        <div className="message-queue__error" role="alert">
-          <span>{error}</span>
-          <IconButton icon="x" label="Dismiss error" onClick={() => setError(null)} />
-        </div>
+        <Feedback tone="error" layout="compact" onDismiss={() => setError(null)}>
+          {error}
+        </Feedback>
       ) : null}
       {messages.length ? (
         <ol className="message-queue__list">
@@ -57,11 +59,11 @@ export function MessageQueue({
                 <Button
                   className="message-queue__steer"
                   icon="corner-down-right"
-                  disabled={inactive}
+                  disabled={inactive || !busy || message.steering}
                   title="Steer the running task at its next step"
                   onClick={() => void perform(() => onAction(message.id!, 'steer'))}
                 >
-                  Steer
+                  {message.steering ? 'Steering…' : 'Steer'}
                 </Button>
                 <IconButton
                   icon="trash-2"

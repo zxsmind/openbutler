@@ -164,17 +164,34 @@ describe('team wake steering', () => {
     expect(prompts[1]).toContain('[Host context: inbox notification]');
   });
 
-  it('still steers a same-route owner message', async () => {
+  it('steers a same-route owner message only after explicit promotion', async () => {
     const { model, release, first } = await setupBusyRun();
     const second = session!.sendMessage(
       { text: 'OWNER_NOTE', images: [], eventId: 'owner', communication: { source: 'terminal', replyTo: { channel: 'terminal' } } },
       preferences,
     );
+    session!.manageQueuedMessage(session!.getSnapshot().queuedMessages[0]!.id!, 'steer', session!.getSnapshot().session.id);
     release();
     await Promise.all([first, second]);
     const prompts = model.doStreamCalls.map((call) => JSON.stringify(call.prompt));
     expect(model.doStreamCalls).toHaveLength(2);
     expect(prompts[1]).toContain('OWNER_NOTE');
+  });
+
+  it('admits host notifications even when an ordinary owner message is waiting ahead of them', async () => {
+    const { model, release, first } = await setupBusyRun();
+    const waiting = session!.sendMessage(
+      { text: 'LATER_OWNER_TASK', images: [], communication: { source: 'terminal', replyTo: { channel: 'terminal' } } },
+      preferences,
+    );
+    const notification = session!.sendEvent({ text: 'WORKER_SIGNAL', images: [], communication: { source: 'inbox' } }, preferences);
+    release();
+    await Promise.all([first, waiting, notification]);
+    expect(model.doStreamCalls).toHaveLength(3);
+    const active = JSON.stringify(model.doStreamCalls[1]!.prompt);
+    expect(active).toContain('WORKER_SIGNAL');
+    expect(active).not.toContain('LATER_OWNER_TASK');
+    expect(JSON.stringify(model.doStreamCalls[2]!.prompt.at(-1))).toContain('LATER_OWNER_TASK');
   });
 
   it('decides a wake on the cursor alone, independent of busy state', () => {

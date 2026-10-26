@@ -101,7 +101,7 @@ export interface SessionPayload {
   totalEntries: number;
   busy: boolean;
   queuedMessageCount: number;
-  queuedMessages?: Array<{ id?: string; text: string; imageCount: number; editable?: boolean }>;
+  queuedMessages?: Array<{ id?: string; text: string; imageCount: number; editable?: boolean; steering?: boolean }>;
   pendingApproval: ApprovalRequest | null;
   pendingQuestion: PendingQuestion | null;
   contextTokens?: number | null;

@@ -473,3 +473,11 @@ In the session: `/help`, `/clear`, `/settings`, `/permissions`, `/reasoning`,
 `/exit`. Esc twice stops a run and keeps queued messages in the chat, waiting for
 the next explicit send; Ctrl+C copies a text selection first, then clears the
 composer, then stops and exits.
+
+Messages sent while the agent is working wait in the queue and start a new turn
+after the current task finishes. In the web UI, choose **Steer** on a queued
+message to apply it to the running task at the next compatible step boundary.
+Steering keeps the same turn and tells the agent to incorporate the follow-up
+while preserving unfinished work, unless the owner changes or cancels it.
+The agent receives the message's web or terminal source from the local client
+connection, including after reconnecting; the message body cannot override it.

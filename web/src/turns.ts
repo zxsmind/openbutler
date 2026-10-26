@@ -33,6 +33,28 @@ function failed(entry: Entry): boolean {
 export function buildTurns(entries: Entry[], base = 0): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
+  // Older held steering messages could keep a separate turn id even though the
+  // agent processed them in the preceding turn. Reconcile those saved records
+  // for display without rewriting the transcript.
+  const lastWorkByTurn = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    if (entry.kind !== 'user' && entry.turnId) lastWorkByTurn.set(entry.turnId, index);
+  });
+  const displayTurnIds = new Map<string, string>();
+  entries.forEach((entry, index) => {
+    const previous = entries[index - 1];
+    if (
+      entry.kind === 'user' &&
+      previous?.kind === 'user' &&
+      previous.turnOutcome === 'completed' &&
+      previous.turnId &&
+      entry.turnId &&
+      !entry.turnOutcome &&
+      !lastWorkByTurn.has(entry.turnId) &&
+      (lastWorkByTurn.get(previous.turnId) ?? -1) > index
+    )
+      displayTurnIds.set(entry.turnId, previous.turnId);
+  });
   // The turn being built, so a message the owner sent into a run that was still
   // going stays in that turn instead of opening a new one.
   let currentTurnId: string | undefined;
@@ -65,14 +87,15 @@ export function buildTurns(entries: Entry[], base = 0): Turn[] {
   };
 
   for (const [index, entry] of entries.entries()) {
+    const turnId = entry.turnId ? (displayTurnIds.get(entry.turnId) ?? entry.turnId) : undefined;
     // Text the machinery wrote is stored so the record stays complete, but it is
     // not part of the conversation: the compaction row already carries the event,
     // and the checkpoint prose would read as an answer nobody asked for.
     if (entry.internal === 'compaction') continue;
-    if (entry.kind === 'user' && (entry.turnId === undefined || entry.turnId !== currentTurnId)) {
+    if (entry.kind === 'user' && (turnId === undefined || turnId !== currentTurnId)) {
       current = open(entry, index);
       current.user = entry;
-      currentTurnId = entry.turnId;
+      currentTurnId = turnId;
       continue;
     }
     if (!current) {
@@ -81,11 +104,11 @@ export function buildTurns(entries: Entry[], base = 0): Turn[] {
     }
     // An entry that names a turn belongs to that turn. Falling back to position
     // alone is what put a fresh thought above the message that asked for it.
-    if (entry.turnId !== undefined && entry.turnId !== currentTurnId) {
-      const named = byTurn.get(entry.turnId);
+    if (turnId !== undefined && turnId !== currentTurnId) {
+      const named = byTurn.get(turnId);
       if (named) {
         current = named;
-        currentTurnId = entry.turnId;
+        currentTurnId = turnId;
       }
     }
     current.timeline.push(entry);
