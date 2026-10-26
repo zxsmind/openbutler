@@ -499,6 +499,7 @@ export class AgentSessionController implements AgentSessionClient {
 
   openSession(session: SavedSession): void {
     if (this.busy) return;
+    if (session.id !== this.session.id) this.cancelTitleGeneration();
     this.flushSave();
     this.session = {
       ...session,
@@ -542,6 +543,7 @@ export class AgentSessionController implements AgentSessionClient {
   createNewSession(projectId?: string | null): void {
     if (this.busy) return;
     const project = projectId === undefined ? undefined : sessionProject(projectId);
+    this.cancelTitleGeneration();
     this.flushSave();
     this.session = createSession(
       this.runtime.providerId,
@@ -661,6 +663,7 @@ export class AgentSessionController implements AgentSessionClient {
 
   private async closeSession(): Promise<void> {
     this.closed = true;
+    this.cancelTitleGeneration();
     this.stop({ preserveWakePolicy: true });
     this.flushStreamedEntries();
     this.flushSave();
