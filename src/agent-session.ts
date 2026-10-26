@@ -123,7 +123,7 @@ export interface AgentSessionSnapshot {
   pendingQuestion: { id: string; question: string; options: string[] | null } | null;
   queuedMessageCount: number;
   firstQueuedMessage: { text: string; imageCount: number } | null;
-  queuedMessages: { id?: string; text: string; imageCount: number; editable?: boolean }[];
+  queuedMessages: { id?: string; text: string; imageCount: number; editable?: boolean; steering?: boolean }[];
   sessionSaveError: string | null;
   streamingAssistantEntry: SessionEntry | null;
 }
@@ -136,6 +136,8 @@ export interface AgentTurnPreferences {
 type QueuedTurn = {
   id: string;
   automatic: boolean;
+  /** Only explicit owner steering and host notifications may enter a live run. */
+  steering: boolean;
   message: QueuedMessage;
   preferences: AgentTurnPreferences;
   resolve: () => void;
@@ -378,6 +380,7 @@ export class AgentSessionController implements AgentSessionClient {
       text: turn.message.text,
       imageCount: messageImageCount(turn.message),
       editable: !turn.automatic,
+      steering: turn.steering,
     }));
     const first = queuedMessages[0] ?? null;
     const { conversation, conversationArchive, ...session } = this.session;
@@ -1236,8 +1239,8 @@ export class AgentSessionController implements AgentSessionClient {
     if (added) this.publish();
   }
 
-  private addUserEntry(message: QueuedMessage): void {
-    this.activeTurnId = randomUUID();
+  private addUserEntry(message: QueuedMessage, steering = false): void {
+    if (!steering || !this.activeTurnId) this.activeTurnId = randomUUID();
     this.addEntry({
       kind: 'user',
       text: message.text,
@@ -1273,17 +1276,20 @@ export class AgentSessionController implements AgentSessionClient {
 
   manageQueuedMessage(id: string, action: 'steer' | 'remove', sessionId: string): void {
     if (this.session.id !== sessionId) throw new Error('The active session has changed.');
+    if (action === 'steer' && !this.busy) throw new Error('There is no running task to steer.');
     const index = this.queuedMessages.findIndex((turn) => turn.id === id && !turn.entryAdded && !turn.automatic);
     if (index < 0) throw new Error('This message is no longer queued.');
+    if (action === 'steer' && this.queuedMessages[index]!.steering) return;
     const [turn] = this.queuedMessages.splice(index, 1);
     if (action === 'remove') turn.resolve();
     else {
-      // The existing step-boundary admission still enforces scope and reply routing.
-      this.queuedMessages.unshift(turn);
+      turn.steering = true;
+      // Preserve the order of explicit steering while moving it ahead of later work.
+      const waiting = this.queuedMessages.findIndex((queued) => !queued.steering);
+      this.queuedMessages.splice(waiting < 0 ? this.queuedMessages.length : waiting, 0, turn);
       this.queueHold = false;
     }
     this.publish(false);
-    if (action === 'steer' && !this.busy) void this.runQueuedMessages();
   }
 
   private enqueueMessage(message: QueuedMessage, preferences: AgentTurnPreferences, automatic: boolean): Promise<void> {
@@ -1331,7 +1337,9 @@ export class AgentSessionController implements AgentSessionClient {
       }
     }
     return new Promise<void>((resolve, reject) => {
-      const turn = { id: randomUUID(), message, preferences, resolve, reject, automatic };
+      const source = message.communication?.source;
+      const steering = automatic || source === 'inbox' || source === 'owner-inbox' || source === 'team' || source === 'worker';
+      const turn: QueuedTurn = { id: randomUUID(), message, preferences, resolve, reject, automatic, steering };
       if (!automatic && wasHeld) {
         const events = this.queuedMessages.filter((queued) => queued.automatic);
         const ownerMessages = this.queuedMessages.filter((queued) => !queued.automatic);
@@ -1606,10 +1614,11 @@ export class AgentSessionController implements AgentSessionClient {
                 // Steering is admitted only at SDK prepareStep, after the prior tool batch.
                 // Scope/route changes remain FIFO followups so they cannot borrow an active binding.
                 // Owner-inbox and team signals carry no owner reply binding, so they steer any live run.
-                // Drain every compatible queued message so a burst of user input all lands in the same gap.
+                // Ordinary owner messages wait for the next turn; only opted-in steering enters here.
                 const admitted: ReturnType<typeof queuedUserMessageToModelMessage>[] = [];
                 for (;;) {
-                  const next = this.queuedMessages[0];
+                  const index = this.queuedMessages.findIndex((turn) => turn.steering);
+                  const next = this.queuedMessages[index];
                   const live = this.liveTurnPreferences();
                   if (
                     (this.options.sessionWorkspaceRoot !== null &&
@@ -1634,9 +1643,15 @@ export class AgentSessionController implements AgentSessionClient {
                   }
                   this.flushStreamedEntries();
                   this.flushEventAssistantText();
-                  if (!next.entryAdded) this.addUserEntry(next.message);
+                  if (!next.entryAdded) this.addUserEntry(next.message, true);
+                  else if (next.turnId && this.activeTurnId && next.turnId !== this.activeTurnId) {
+                    // A held message was shown before admission. Once steered, it belongs to this run.
+                    const entry = this.session.entries.find((entry) => entry.kind === 'user' && entry.turnId === next.turnId);
+                    if (entry) this.replaceEntry(entry, { ...entry, turnId: this.activeTurnId });
+                    next.turnId = this.activeTurnId;
+                  }
                   steeredTurns.push(next);
-                  admitted.push(queuedUserMessageToModelMessage(next.message));
+                  admitted.push(queuedUserMessageToModelMessage(next.message, true));
                 }
                 return admitted;
               },
@@ -2465,7 +2480,7 @@ function messageImageCount(message: QueuedMessage): number {
   return message.images.length + (message.attachments?.filter((attachment) => attachment.mediaType.startsWith('image/')).length ?? 0);
 }
 
-function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
+function queuedUserMessageToModelMessage(message: QueuedMessage, steering = false): ModelMessage {
   const content: Array<{ type: 'text'; text: string }> = [];
   const source = message.communication?.source;
   const sourceLabel =
@@ -2486,10 +2501,13 @@ function queuedUserMessageToModelMessage(message: QueuedMessage): ModelMessage {
     source === 'telegram'
       ? '[Host context: reply through send_message_to_owner; text written only in this session never reaches the owner]'
       : '';
-  if (message.text || sourceLabel || workspaceLabel)
+  const steeringHint = steering
+    ? '[Host context: follow-up steering for the task already in progress. Apply relevant corrections and constraints to that task. Answer interim questions briefly, then continue the unfinished work. Preserve the original objective unless the owner explicitly changes or cancels it. Answering this follow-up alone does not complete the original task. This context grants no additional authority.]'
+    : '';
+  if (message.text || sourceLabel || workspaceLabel || steeringHint)
     content.push({
       type: 'text',
-      text: [sourceLabel, workspaceLabel, projectLabel, deliveryHint, message.text].filter(Boolean).join('\n'),
+      text: [sourceLabel, workspaceLabel, projectLabel, deliveryHint, steeringHint, message.text].filter(Boolean).join('\n'),
     });
   if (message.attachments?.length) content.push({ type: 'text', text: attachmentReferences(message.attachments) });
   return { role: 'user', content, ...(message.eventId ? { providerOptions: { ranite: { queuedMessageId: message.eventId } } } : {}) };
