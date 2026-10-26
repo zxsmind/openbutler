@@ -225,7 +225,7 @@ it('keeps the global entrypoint to concise shared-user links and supplies curren
   expect(system).toContain(paths.preferencesFile);
   expect(system).toContain(paths.workspaceFile);
   expect(system).toContain('never a substitute for content');
-  expect(system).toContain('Maintain, do not append');
+  expect(system).toContain('Append only independent facts');
   expect(system).toContain('Persistent Continuity');
   expect(system).toContain('expected future utility');
   expect(system).not.toContain('Nobody will say "remember this"');
