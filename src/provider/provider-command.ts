@@ -7,9 +7,18 @@
  * Nothing here ever prints key material: lists and checks report counts only,
  * and `remove` touches settings, never the secret store.
  */
-import { loadSettings, rememberProviderModel, removeProvider, saveSettings, upsertProvider, type SettingsStore } from '../settings.js';
+import {
+  loadSettings,
+  rememberProviderModel,
+  removeProvider,
+  saveSettings,
+  upsertProvider,
+  type ProviderModelSpec,
+  type SettingsStore,
+} from '../settings.js';
 import { getCatalogIndex, getProvider, isCatalogLoaded } from './catalog.js';
 import { createLanguageModel, listSupportedPackages, providerIsConfigured } from './registry.js';
+import { createPayloadFetch } from './request-payload.js';
 
 export interface ProviderCommandOutcome {
   notice: string;
@@ -22,9 +31,10 @@ const DEFAULT_NPM = '@ai-sdk/openai-compatible';
 const USAGE = [
   'Usage:',
   '/provider add <id> --url <endpoint> [--npm <package>] [--model <id>]...  add or extend a custom provider',
+  '  optional: --payload <json> merged into request bodies, --context <tokens>, --output <tokens>, --effort low,high',
   '/provider list  configured providers, their models, and key counts (never key values)',
   '/provider check <id>[/<model>] [--ping]  build the model; --ping also sends one tiny request',
-  '/provider remove <id>  drop its settings; keys stay until `ranite keys remove <id>`',
+  '/provider remove <id>  drop its settings and its keys',
 ].join('\n');
 
 export function isProviderCommand(text: string): boolean {
@@ -42,7 +52,9 @@ function tokenize(text: string): string[] {
       else current += char;
       continue;
     }
-    if (char === '"' || char === "'") {
+    // A quote opens a quoted run only at a token boundary; anywhere else it is
+    // literal, so compact JSON like {"reasoning_effort":"low"} survives intact.
+    if ((char === '"' || char === "'") && current === '') {
       quote = char;
       continue;
     }
@@ -81,18 +93,44 @@ function providerLine(id: string, settings: SettingsStore): string {
 async function addProvider(settings: SettingsStore, tokens: string[]): Promise<ProviderCommandOutcome> {
   const id = tokens[2];
   if (!id || !PROVIDER_ID.test(id)) return fail('Add needs a provider id: /provider add <id> --url <endpoint> --model <id>');
+  const valueFlags = ['--url', '--npm', '--model', '--payload', '--effort', '--context', '--output'];
   let url: string | undefined;
   let npm: string | undefined;
+  let payload: Record<string, unknown> | undefined;
+  let context: number | undefined;
+  let output: number | undefined;
+  let efforts: string[] | undefined;
   const models: string[] = [];
   for (let index = 3; index < tokens.length; index += 1) {
     const flag = tokens[index];
     const value = tokens[index + 1];
-    if (flag === '--url' || flag === '--npm' || flag === '--model') {
+    if (valueFlags.includes(flag)) {
       if (!value || value.startsWith('--')) return fail(`${flag} needs a value.`);
       index += 1;
       if (flag === '--url') url = value;
       else if (flag === '--npm') npm = value;
-      else models.push(value);
+      else if (flag === '--model') models.push(value);
+      else if (flag === '--effort') {
+        efforts = value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        if (efforts.length === 0) return fail('--effort needs at least one value, e.g. --effort low,high');
+      } else if (flag === '--payload') {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(value);
+        } catch {
+          return fail('--payload must be valid JSON (compact, or wrapped in single quotes), e.g. --payload {"reasoning_effort":"low"}');
+        }
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('--payload must be a JSON object.');
+        payload = parsed as Record<string, unknown>;
+      } else {
+        const count = Number(value);
+        if (!Number.isSafeInteger(count) || count < 1) return fail(`${flag} must be a positive whole number of tokens.`);
+        if (flag === '--context') context = count;
+        else output = count;
+      }
       continue;
     }
     return fail(`Unknown option: ${flag}\n${USAGE}`);
@@ -102,14 +140,40 @@ async function addProvider(settings: SettingsStore, tokens: string[]): Promise<P
   if (models.length === 0) return fail('Add at least one model: --model <id>');
 
   const runtime = npm ?? DEFAULT_NPM;
-  upsertProvider(settings, id, { enabled: true, url, npm: runtime });
-  for (const model of models) rememberProviderModel(settings, id, model);
+  upsertProvider(settings, id, { enabled: true, url, npm: runtime, ...(payload ? { payload } : {}) });
+  for (const model of models) {
+    rememberProviderModel(settings, id, model);
+    const spec: ProviderModelSpec = { ...(settings.providers[id]?.modelSpecs?.[model] ?? {}) };
+    let changed = false;
+    if (context !== undefined) {
+      spec.context = context;
+      changed = true;
+    }
+    if (output !== undefined) {
+      spec.output = output;
+      changed = true;
+    }
+    if (efforts !== undefined) {
+      spec.reasoning = { efforts };
+      changed = true;
+    }
+    if (changed) {
+      upsertProvider(settings, id, { modelSpecs: { ...(settings.providers[id]?.modelSpecs ?? {}), [model]: spec } });
+    }
+  }
   saveSettings(settings);
 
   const known = listSupportedPackages().includes(runtime);
+  const specBits = [
+    context !== undefined ? `context ${context}` : null,
+    output !== undefined ? `output ${output}` : null,
+    efforts ? `efforts ${efforts.join('/')}` : null,
+  ].filter(Boolean);
   const notes = [
     `Added ${id}: ${url} via ${runtime}`,
     `models: ${models.join(', ')}`,
+    specBits.length ? `specs: ${specBits.join(', ')}` : null,
+    payload ? `payload keys: ${Object.keys(payload).join(', ')} (merged into every request body)` : null,
     known ? undefined : 'The runtime package is not bundled; it installs on first use.',
     'Keys (if the endpoint wants one) live outside settings: ranite keys add ' + id,
   ].filter(Boolean);
@@ -149,8 +213,17 @@ async function checkProvider(settings: SettingsStore, tokens: string[], ping: bo
   if (!state.keys.length && Object.keys(state.options ?? {}).length === 0 && !state.npm) {
     notes.push('No credential yet: ranite keys add ' + id);
   }
+  const spec = state.modelSpecs?.[modelId];
+  const payloadKeys = [...new Set([...Object.keys(state.payload ?? {}), ...Object.keys(spec?.payload ?? {})])];
+  const specBits = [
+    spec?.context ? `context ${spec.context}` : null,
+    spec?.output ? `output ${spec.output}` : null,
+    spec?.reasoning?.efforts?.length ? `efforts ${spec.reasoning.efforts.join('/')}` : null,
+    payloadKeys.length ? `payload: ${payloadKeys.join(', ')}` : null,
+  ].filter(Boolean);
+  if (specBits.length > 0) notes.push(`specs: ${specBits.join(', ')}`);
 
-  const built = await createLanguageModel(id, modelId, state);
+  const built = await createLanguageModel(id, modelId, state, createPayloadFetch(state, modelId));
   if (!built.ok) return fail(`${id} / ${modelId} cannot be built: ${built.error.reason}`);
   notes.push(`build ok${state.npm || state.url ? '' : ' (catalog provider)'}`);
   if (!ping) {

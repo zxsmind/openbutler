@@ -18,9 +18,11 @@ import {
   reasoningSupportStatus,
   resolveReasoningVariant,
   routingProviderOptions,
+  settingsEffortVariants,
   supportsImageToolResult,
   withReasoningVisibility,
 } from './provider/registry.js';
+import { createPayloadFetch } from './provider/request-payload.js';
 import { loadSettings, rememberProviderModel, saveSettings, type ApprovalMode } from './settings.js';
 import type { RetryEvent } from './provider/retry.js';
 import type { AgentEnvironment } from './agent-session.js';
@@ -86,10 +88,16 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   const retryRelay: { handler: ((event: RetryEvent) => void) | null } = { handler: null };
   const reportRetry = (event: RetryEvent) => retryRelay.handler?.(event);
 
-  const resolved = await createLanguageModel(providerId, modelId, provider, undefined, reportRetry);
+  const resolved = await createLanguageModel(providerId, modelId, provider, createPayloadFetch(provider, modelId), reportRetry);
   if (!resolved.ok) throw new Error(resolved.error.reason);
   const reasoningCatalog = findReasoningCatalogMatch(providerId, modelId, resolved.resolved);
-  const reasoningVariants = listReasoningVariants(resolved.resolved, reasoningCatalog.model);
+  const catalogVariants = listReasoningVariants(resolved.resolved, reasoningCatalog.model);
+  const reasoningVariants = [
+    ...catalogVariants,
+    ...settingsEffortVariants(resolved.resolved, provider.modelSpecs?.[modelId]?.reasoning?.efforts ?? []).filter(
+      (variant) => !catalogVariants.some((existing) => existing.id === variant.id),
+    ),
+  ];
 
   // The permission reviewer may run on a different provider/model than the main
   // one, so a model that is unreliable at forced tool calls can be swapped out
@@ -109,6 +117,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       settings.autoReviewProvider,
       settings.autoReviewModel,
       settings.providers[settings.autoReviewProvider],
+      createPayloadFetch(settings.providers[settings.autoReviewProvider], settings.autoReviewModel),
     );
     if (!built.ok) throw new Error(built.error.reason);
     reviewResolved = built.resolved;
@@ -176,8 +185,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       modelName: resolved.resolved.displayName,
       providerId,
       modelId,
-      contextWindowTokens: reasoningCatalog.model?.limit?.context ?? null,
-      outputLimitTokens: reasoningCatalog.model?.limit?.output ?? null,
+      contextWindowTokens: reasoningCatalog.model?.limit?.context ?? provider.modelSpecs?.[modelId]?.context ?? null,
+      outputLimitTokens: reasoningCatalog.model?.limit?.output ?? provider.modelSpecs?.[modelId]?.output ?? null,
       supportsVision: modelSupportsVision(providerId, modelId, activeResolved),
       supportsImageToolResult: supportsImageToolResult(resolved.resolved, modelId),
       disableImageInput: () => {
@@ -271,10 +280,16 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         if (!defaultModelIsUsable(nextSettings)) {
           throw new Error(`Model ${nextModelId} is not available for tool calls.`);
         }
-        const next = await createLanguageModel(nextProviderId, nextModelId, nextProvider, undefined, reportRetry);
+        const next = await createLanguageModel(nextProviderId, nextModelId, nextProvider, createPayloadFetch(nextProvider, nextModelId), reportRetry);
         if (!next.ok) throw new Error(next.error.reason);
         const nextCatalog = findReasoningCatalogMatch(nextProviderId, nextModelId, next.resolved);
-        const nextVariants = listReasoningVariants(next.resolved, nextCatalog.model);
+        const nextCatalogVariants = listReasoningVariants(next.resolved, nextCatalog.model);
+        const nextVariants = [
+          ...nextCatalogVariants,
+          ...settingsEffortVariants(next.resolved, nextProvider.modelSpecs?.[nextModelId]?.reasoning?.efforts ?? []).filter(
+            (variant) => !nextCatalogVariants.some((existing) => existing.id === variant.id),
+          ),
+        ];
         const nextInputModalities = modelInputModalities(nextProviderId, nextModelId, next.resolved);
         const nextRegistry = createRegistry(nextInputModalities);
         saveSettings(nextSettings);
@@ -288,8 +303,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         runtime.modelName = next.resolved.displayName;
         runtime.providerId = nextProviderId;
         runtime.modelId = nextModelId;
-        runtime.contextWindowTokens = nextCatalog.model?.limit?.context ?? null;
-        runtime.outputLimitTokens = nextCatalog.model?.limit?.output ?? null;
+        runtime.contextWindowTokens = nextCatalog.model?.limit?.context ?? nextProvider.modelSpecs?.[nextModelId]?.context ?? null;
+        runtime.outputLimitTokens = nextCatalog.model?.limit?.output ?? nextProvider.modelSpecs?.[nextModelId]?.output ?? null;
         runtime.supportsVision = modelSupportsVision(nextProviderId, nextModelId, next.resolved);
         runtime.supportsImageToolResult = supportsImageToolResult(next.resolved, nextModelId);
         runtime.reasoningVariants = nextVariants;

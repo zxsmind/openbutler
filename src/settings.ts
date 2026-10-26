@@ -48,6 +48,22 @@ export interface ProviderState {
    * them, it only places them under the namespace the gateway expects.
    */
   routing?: Record<string, unknown>;
+  /** Extra JSON fields merged into every request body this provider sends. */
+  payload?: Record<string, unknown>;
+  /** Facts about this provider's own models that the catalog does not carry. */
+  modelSpecs?: Record<string, ProviderModelSpec>;
+}
+
+/** Settings-side description of one custom model: what the catalog would have said. */
+export interface ProviderModelSpec {
+  /** Context window in tokens; the runtime falls back to this when the catalog has no entry. */
+  context?: number;
+  /** Output tokens the model accepts. */
+  output?: number;
+  /** Effort values the reasoning selector may offer for this model. */
+  reasoning?: { efforts?: string[] };
+  /** Extra JSON fields merged into requests for this model; overrides the provider payload. */
+  payload?: Record<string, unknown>;
 }
 
 /** MCP credentials are environment-variable names, never secret values. */
@@ -167,7 +183,7 @@ const KNOWN_KEYS = new Set([
   'telegram',
   'team',
 ]);
-const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options', 'routing']);
+const KNOWN_PROVIDER_KEYS = new Set(['enabled', 'keys', 'models', 'url', 'npm', 'options', 'routing', 'payload', 'modelSpecs']);
 
 /**
  * Rebuilds a provider state from an existing one plus a patch, carrying every
@@ -371,6 +387,45 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
   if (raw.routing !== undefined) {
     const routing = providerOptions(raw.routing, `providers.${id}.routing`);
     if (Object.keys(routing).length > 0) state.routing = routing;
+  }
+  if (raw.payload !== undefined) {
+    const payload = providerOptions(raw.payload, `providers.${id}.payload`);
+    if (Object.keys(payload).length > 0) state.payload = payload;
+  }
+  if (raw.modelSpecs !== undefined) {
+    if (!isRecord(raw.modelSpecs)) throw new Error(`providers.${id}.modelSpecs must be a mapping`);
+    const specs: Record<string, ProviderModelSpec> = {};
+    const specKeys = ['context', 'output', 'reasoning', 'payload'];
+    for (const [modelId, rawSpec] of Object.entries(raw.modelSpecs)) {
+      if (!modelId.trim() || modelId.length > 512)
+        throw new Error(`providers.${id}.modelSpecs requires non-empty model IDs under 512 characters.`);
+      if (!isRecord(rawSpec)) throw new Error(`providers.${id}.modelSpecs.${modelId} must be a mapping`);
+      for (const key of Object.keys(rawSpec)) {
+        if (!specKeys.includes(key))
+          throw new Error(`providers.${id}.modelSpecs.${modelId}.${key} is not a model spec ranite knows (known: ${specKeys.join(', ')})`);
+      }
+      const spec: ProviderModelSpec = {};
+      for (const key of ['context', 'output'] as const) {
+        const value = rawSpec[key];
+        if (value === undefined) continue;
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
+          throw new Error(`providers.${id}.modelSpecs.${modelId}.${key} must be a positive whole number of tokens.`);
+        spec[key] = value;
+      }
+      if (rawSpec.reasoning !== undefined) {
+        if (!isRecord(rawSpec.reasoning)) throw new Error(`providers.${id}.modelSpecs.${modelId}.reasoning must be a mapping`);
+        const efforts = stringArray(rawSpec.reasoning.efforts, `providers.${id}.modelSpecs.${modelId}.reasoning.efforts`)
+          .map((value) => value.trim())
+          .filter(Boolean);
+        if (efforts.length > 0) spec.reasoning = { efforts: [...new Set(efforts)] };
+      }
+      if (rawSpec.payload !== undefined) {
+        const payload = providerOptions(rawSpec.payload, `providers.${id}.modelSpecs.${modelId}.payload`);
+        if (Object.keys(payload).length > 0) spec.payload = payload;
+      }
+      specs[modelId] = spec;
+    }
+    if (Object.keys(specs).length > 0) state.modelSpecs = specs;
   }
   return state;
 }

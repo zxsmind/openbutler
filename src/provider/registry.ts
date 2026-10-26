@@ -806,6 +806,29 @@ export function listReasoningVariants(provider: ResolvedProvider, model: Catalog
   return variants;
 }
 
+/**
+ * Effort variants for a model declared in settings, where no catalog entry
+ * carries reasoning options. Same shape as the catalog path, so the selector
+ * and the request wire treat both kinds alike.
+ */
+export function settingsEffortVariants(provider: ResolvedProvider, efforts: readonly string[]): ReasoningVariant[] {
+  const key = providerOptionsKey(provider);
+  if (!key) return [];
+  const variants: ReasoningVariant[] = [];
+  for (const effort of efforts) {
+    const id = effort.trim();
+    if (!id || id === 'default' || variants.some((variant) => variant.id === id)) continue;
+    const options = effortOptions(provider.npm, id);
+    if (!options) continue;
+    variants.push({
+      id,
+      label: id === 'none' ? 'Off' : capitalize(id),
+      providerOptions: { [key]: options } as Record<string, Record<string, JSONValue>>,
+    });
+  }
+  return variants;
+}
+
 function providerOptionsKey(provider: ResolvedProvider): string | null {
   return reasoningAdapter(provider.npm)?.optionsKey(provider) ?? null;
 }

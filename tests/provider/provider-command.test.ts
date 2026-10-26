@@ -80,6 +80,36 @@ describe('/provider add', () => {
     expect(settings.loadSettings().providers.q.url).toBe('https://api.example.com/v1');
   });
 
+  it('stores payload and model specs from flags', async () => {
+    const { settings, command } = await load();
+    const outcome = await command.runProviderCommand(
+      '/provider add lab --url https://lab.example/v1 --model swift --context 131072 --output 8192 --effort low,high --payload {"reasoning_effort":"low"}',
+    );
+
+    expect(outcome.tone).toBe('info');
+    expect(outcome.notice).toContain('specs: context 131072, output 8192, efforts low/high');
+    expect(outcome.notice).toContain('payload keys: reasoning_effort');
+
+    const stored = settings.loadSettings();
+    expect(stored.providers.lab.payload).toEqual({ reasoning_effort: 'low' });
+    expect(stored.providers.lab.modelSpecs?.swift).toEqual({
+      context: 131072,
+      output: 8192,
+      reasoning: { efforts: ['low', 'high'] },
+    });
+  });
+
+  it('refuses payload that is not a JSON object', async () => {
+    const { command } = await load();
+    const badJson = await command.runProviderCommand('/provider add x --url https://api.example/v1 --model swift --payload {nope}');
+    expect(badJson.tone).toBe('error');
+    expect(badJson.notice).toContain('--payload must be valid JSON');
+
+    const notObject = await command.runProviderCommand('/provider add x --url https://api.example/v1 --model swift --payload [1]');
+    expect(notObject.tone).toBe('error');
+    expect(notObject.notice).toContain('--payload must be a JSON object');
+  });
+
   it('refuses an endpoint without a model, a bad id, or an unknown flag', async () => {
     const { settings, command } = await load();
     const noModel = await command.runProviderCommand('/provider add x --url https://api.example/v1');
