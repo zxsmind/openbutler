@@ -2,7 +2,7 @@ import type { InboxRequest } from './inbox.js';
 import type { ParentMessageInput } from './worker-records.js';
 import { realpathSync, statSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
-import { getCatalogIndex } from './provider/catalog.js';
+import { getCatalogIndex, getCatalogRevision } from './provider/catalog.js';
 import {
   createLanguageModel,
   defaultModelIsUsable,
@@ -20,17 +20,32 @@ import {
   routingProviderOptions,
   settingsEffortVariants,
   supportsImageToolResult,
+  type ResolvedProvider,
   withReasoningVisibility,
 } from './provider/registry.js';
 import { createPayloadFetch } from './provider/request-payload.js';
-import { loadSettings, rememberProviderModel, saveSettings, type ApprovalMode } from './settings.js';
+import {
+  loadSettings,
+  providerModelRouting,
+  rememberProviderModel,
+  saveSettings,
+  type ApprovalMode,
+  type SettingsStore,
+} from './settings.js';
 import type { RetryEvent } from './provider/retry.js';
 import type { AgentEnvironment } from './agent-session.js';
 import type { UsageRecordInput } from './usage/recorder.js';
 import type { SubagentRequest } from './tools/subagent.js';
+import type { McpConnectionManager } from './tools/mcp.js';
 
 export interface CreateAgentRuntimeOptions {
   workspaceRoot?: string;
+  /** Restore a conversation's model without changing the machine's defaults. */
+  initialModel?: { providerId: string; modelId: string };
+  /** Interactive chats open before external tools connect; the first turn prepares them. */
+  deferMcp?: boolean;
+  /** Borrowed from the daemon; closing a chat never closes shared transports. */
+  mcpManager?: McpConnectionManager;
   onMcpError?: (serverId: string, message: string) => void;
   onMcpConnected?: (serverId: string, toolCount: number) => void;
   backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string, senderSessionId: string | undefined) => Promise<unknown>;
@@ -58,8 +73,8 @@ export interface CreateAgentRuntimeOptions {
 /** Creates the shared model/tool runtime without depending on a terminal UI. */
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}): Promise<AgentEnvironment> {
   const settings = loadSettings();
-  const providerId = settings.defaultProvider;
-  const modelId = settings.defaultModel;
+  const providerId = options.initialModel?.providerId ?? settings.defaultProvider;
+  const modelId = options.initialModel?.modelId ?? settings.defaultModel;
   const provider = settings.providers[providerId];
   if (!providerId || !modelId || !provider?.enabled || !providerIsConfigured(providerId, provider)) {
     throw new Error('No ready default provider and model. Run `ranite setup` first.');
@@ -80,8 +95,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     }
   }
 
-  if (!defaultModelIsUsable(settings)) {
-    throw new Error('The default model is not verified for native tool calls. Choose a tool-capable model: ranite setup');
+  if (!defaultModelIsUsable({ ...settings, defaultProvider: providerId, defaultModel: modelId })) {
+    throw new Error('The default model is not ready. Configure its provider and model: ranite setup');
   }
   // Retry and key-rotation events surface through here so the session can show
   // them in the transcript; the handler is swapped per run.
@@ -99,46 +114,58 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     ),
   ];
 
-  // The permission reviewer may run on a different provider/model than the main
-  // one, so a model that is unreliable at forced tool calls can be swapped out
-  // without touching the session model. Resolved once at host start.
-  let reviewResolved: typeof resolved.resolved | null = null;
-  let reviewCatalogModel: typeof reasoningCatalog.model = null;
-  let reviewModel: LanguageModel | null = null;
-  let reviewRouting: ReturnType<typeof routingProviderOptions> = {};
-  if (settings.autoReviewProvider && settings.autoReviewModel) {
-    if (!modelIsUsable(settings, settings.autoReviewProvider, settings.autoReviewModel)) {
-      throw new Error(
-        `Auto-review model ${settings.autoReviewProvider}/${settings.autoReviewModel} is not usable. ` +
-          `Check its provider key and that the model supports native tool calls, or clear it with \`ranite permissions --review-model none\`.`,
-      );
-    }
+  async function loadReviewer(latest: SettingsStore): Promise<{
+    resolved: ResolvedProvider | null;
+    catalogModel: typeof reasoningCatalog.model;
+    model: LanguageModel | null;
+    routing: ReturnType<typeof routingProviderOptions>;
+  }> {
+    if (!latest.autoReviewProvider || !latest.autoReviewModel) return { resolved: null, catalogModel: null, model: null, routing: {} };
+    if (!modelIsUsable(latest, latest.autoReviewProvider, latest.autoReviewModel))
+      throw new Error('The configured auto-review provider/model is not ready.');
     const built = await createLanguageModel(
-      settings.autoReviewProvider,
-      settings.autoReviewModel,
-      settings.providers[settings.autoReviewProvider],
-      createPayloadFetch(settings.providers[settings.autoReviewProvider], settings.autoReviewModel),
+      latest.autoReviewProvider,
+      latest.autoReviewModel,
+      latest.providers[latest.autoReviewProvider],
+      createPayloadFetch(latest.providers[latest.autoReviewProvider], latest.autoReviewModel),
     );
     if (!built.ok) throw new Error(built.error.reason);
-    reviewResolved = built.resolved;
-    reviewCatalogModel = findReasoningCatalogMatch(settings.autoReviewProvider, settings.autoReviewModel, built.resolved).model;
-    reviewModel = built.model;
-    reviewRouting = routingProviderOptions(built.resolved, settings.providers[settings.autoReviewProvider]?.routing);
+    return {
+      resolved: built.resolved,
+      catalogModel: findReasoningCatalogMatch(latest.autoReviewProvider, latest.autoReviewModel, built.resolved).model,
+      model: built.model,
+      routing: routingProviderOptions(
+        built.resolved,
+        providerModelRouting(latest.providers[latest.autoReviewProvider], latest.autoReviewModel),
+      ),
+    };
   }
+  const reviewerConfig = (latest: SettingsStore) =>
+    JSON.stringify([
+      latest.autoReviewProvider,
+      latest.autoReviewModel,
+      latest.autoReviewProvider ? latest.providers[latest.autoReviewProvider] : undefined,
+      getCatalogRevision(),
+    ]);
+  let reviewer = await loadReviewer(settings);
+  let appliedReviewerConfig = reviewerConfig(settings);
   let workspaceRoot = canonicalWorkspaceRoot(options.workspaceRoot ?? process.cwd());
   const { ToolRegistry } = await import('./tools/registry.js');
   let memoryIndex = new MemoryIndex(workspaceRoot);
   let workspaceSwitch = Promise.resolve();
   let activeInputModalities = modelInputModalities(providerId, modelId, resolved.resolved);
   let mcp: Awaited<ReturnType<(typeof import('./tools/mcp.js'))['connectMcpServers']>> | null = null;
+  let mcpReady = options.mcpManager ? false : options.deferMcp !== true;
 
   try {
     const [{ connectMcpServers }, { createToolCatalogue }] = await Promise.all([import('./tools/mcp.js'), import('./tools/catalog.js')]);
-    mcp = await connectMcpServers(settings.mcpServers, {
-      onError: options.onMcpError ?? (() => {}),
-      onConnected: options.onMcpConnected ?? (() => {}),
-      inputModalities: () => activeInputModalities,
-    });
+    mcp =
+      options.mcpManager ??
+      (await connectMcpServers(mcpReady ? settings.mcpServers : {}, {
+        onError: options.onMcpError ?? (() => {}),
+        onConnected: options.onMcpConnected ?? (() => {}),
+        inputModalities: () => activeInputModalities,
+      }));
     function createRegistry(inputModalities: readonly string[], scopeRoot = workspaceRoot, scopeMemoryIndex = memoryIndex) {
       const registry = new ToolRegistry();
       for (const definition of createToolCatalogue({
@@ -175,10 +202,64 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     let activeResolved = resolved.resolved;
     let activeCatalog = reasoningCatalog;
     let activeVariants = reasoningVariants;
-    let activeRouting = routingProviderOptions(resolved.resolved, provider.routing);
+    let activeRouting = routingProviderOptions(resolved.resolved, providerModelRouting(provider, modelId));
+    const modelConfig = (latest: SettingsStore) =>
+      JSON.stringify([runtime.providerId, runtime.modelId, latest.providers[runtime.providerId], getCatalogRevision()]);
+    let appliedModelConfig = JSON.stringify([providerId, modelId, provider, getCatalogRevision()]);
+    let settingsReload = Promise.resolve();
+    let appliedMcpRevision = mcp.revision;
+    let runtimeClosed = false;
+    async function applyModel(nextSettings: SettingsStore, nextProviderId: string, nextModelId: string) {
+      const nextProvider = nextSettings.providers[nextProviderId];
+      try {
+        await getCatalogIndex();
+      } catch (error) {
+        if (!nextProvider?.npm) throw error;
+      }
+      if (!modelIsUsable(nextSettings, nextProviderId, nextModelId))
+        throw new Error(`Provider ${nextProviderId} is disabled or not configured.`);
+      const next = await createLanguageModel(
+        nextProviderId,
+        nextModelId,
+        nextProvider,
+        createPayloadFetch(nextProvider, nextModelId),
+        reportRetry,
+      );
+      if (!next.ok) throw new Error(next.error.reason);
+      const nextCatalog = findReasoningCatalogMatch(nextProviderId, nextModelId, next.resolved);
+      const nextCatalogVariants = listReasoningVariants(next.resolved, nextCatalog.model);
+      const nextVariants = [
+        ...nextCatalogVariants,
+        ...settingsEffortVariants(next.resolved, nextProvider.modelSpecs?.[nextModelId]?.reasoning?.efforts ?? []).filter(
+          (variant) => !nextCatalogVariants.some((existing) => existing.id === variant.id),
+        ),
+      ];
+      const nextInputModalities = modelInputModalities(nextProviderId, nextModelId, next.resolved);
+      const nextRegistry = createRegistry(nextInputModalities);
+
+      activeResolved = next.resolved;
+      activeCatalog = nextCatalog;
+      activeVariants = nextVariants;
+      activeRouting = routingProviderOptions(next.resolved, providerModelRouting(nextProvider, nextModelId));
+      activeInputModalities = nextInputModalities;
+      runtime.model = next.model;
+      runtime.modelName = next.resolved.displayName;
+      runtime.providerId = nextProviderId;
+      runtime.modelId = nextModelId;
+      runtime.contextWindowTokens = nextCatalog.model?.limit?.context ?? nextProvider.modelSpecs?.[nextModelId]?.context ?? null;
+      runtime.outputLimitTokens = nextCatalog.model?.limit?.output ?? nextProvider.modelSpecs?.[nextModelId]?.output ?? null;
+      runtime.supportsVision = modelSupportsVision(nextProviderId, nextModelId, next.resolved);
+      runtime.supportsImageToolResult = supportsImageToolResult(next.resolved, nextModelId);
+      runtime.reasoningVariants = nextVariants;
+      runtime.reasoningMetadataSource = nextCatalog.inferred ? nextCatalog.sourceProviderId : null;
+      runtime.reasoningSupport = reasoningSupportStatus(next.resolved, nextCatalog.model);
+      runtime.reasoningDefault = resolveReasoningVariant(nextVariants, nextSettings.reasoning ?? 'default').id;
+      runtime.registry = nextRegistry;
+      appliedModelConfig = modelConfig(nextSettings);
+    }
     const runtime: AgentEnvironment = {
       model: resolved.model,
-      ...(reviewModel ? { reviewModel } : {}),
+      ...(reviewer.model ? { reviewModel: reviewer.model } : {}),
       get workspaceRoot() {
         return workspaceRoot;
       },
@@ -230,10 +311,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       },
       getReviewProviderOptions: () =>
         mergeProviderOptions(
-          reviewResolved
-            ? (minimalReasoningOptions(reviewResolved, reviewCatalogModel) ?? {})
+          reviewer.resolved
+            ? (minimalReasoningOptions(reviewer.resolved, reviewer.catalogModel) ?? {})
             : (minimalReasoningOptions(activeResolved, activeCatalog.model) ?? {}),
-          reviewResolved ? reviewRouting : activeRouting,
+          reviewer.resolved ? reviewer.routing : activeRouting,
         ),
       registry: createRegistry(activeInputModalities),
       ...(options.recordUsage ? { recordUsage: options.recordUsage } : {}),
@@ -268,56 +349,61 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         await run;
       },
       selectModel: async (nextProviderId, nextModelId) => {
-        const nextSettings = loadSettings();
-        const nextProvider = nextSettings.providers[nextProviderId];
-        if (!nextProvider?.enabled || !providerIsConfigured(nextProviderId, nextProvider)) {
-          throw new Error(`Provider ${nextProviderId} needs an enabled API key.`);
+        const select = settingsReload.then(async () => {
+          if (runtimeClosed) throw new Error('The runtime is closed.');
+          const latest = loadSettings();
+          await applyModel(latest, nextProviderId, nextModelId);
+          rememberProviderModel(latest, latest.defaultProvider, latest.defaultModel);
+          rememberProviderModel(latest, nextProviderId, nextModelId);
+          latest.defaultProvider = nextProviderId;
+          latest.defaultModel = nextModelId;
+          saveSettings(latest);
+        });
+        settingsReload = select.catch(() => {});
+        await select;
+      },
+      prepareForTurn: async () => {
+        if (mcpReady) return;
+        mcpReady = true;
+        try {
+          await runtime.reloadSettings!(true);
+        } catch (error) {
+          mcpReady = false;
+          throw error;
         }
-        rememberProviderModel(nextSettings, nextSettings.defaultProvider, nextSettings.defaultModel);
-        rememberProviderModel(nextSettings, nextProviderId, nextModelId);
-        nextSettings.defaultProvider = nextProviderId;
-        nextSettings.defaultModel = nextModelId;
-        if (!defaultModelIsUsable(nextSettings)) {
-          throw new Error(`Model ${nextModelId} is not available for tool calls.`);
-        }
-        const next = await createLanguageModel(nextProviderId, nextModelId, nextProvider, createPayloadFetch(nextProvider, nextModelId), reportRetry);
-        if (!next.ok) throw new Error(next.error.reason);
-        const nextCatalog = findReasoningCatalogMatch(nextProviderId, nextModelId, next.resolved);
-        const nextCatalogVariants = listReasoningVariants(next.resolved, nextCatalog.model);
-        const nextVariants = [
-          ...nextCatalogVariants,
-          ...settingsEffortVariants(next.resolved, nextProvider.modelSpecs?.[nextModelId]?.reasoning?.efforts ?? []).filter(
-            (variant) => !nextCatalogVariants.some((existing) => existing.id === variant.id),
-          ),
-        ];
-        const nextInputModalities = modelInputModalities(nextProviderId, nextModelId, next.resolved);
-        const nextRegistry = createRegistry(nextInputModalities);
-        saveSettings(nextSettings);
-
-        activeResolved = next.resolved;
-        activeCatalog = nextCatalog;
-        activeVariants = nextVariants;
-        activeRouting = routingProviderOptions(next.resolved, nextProvider.routing);
-        activeInputModalities = nextInputModalities;
-        runtime.model = next.model;
-        runtime.modelName = next.resolved.displayName;
-        runtime.providerId = nextProviderId;
-        runtime.modelId = nextModelId;
-        runtime.contextWindowTokens = nextCatalog.model?.limit?.context ?? nextProvider.modelSpecs?.[nextModelId]?.context ?? null;
-        runtime.outputLimitTokens = nextCatalog.model?.limit?.output ?? nextProvider.modelSpecs?.[nextModelId]?.output ?? null;
-        runtime.supportsVision = modelSupportsVision(nextProviderId, nextModelId, next.resolved);
-        runtime.supportsImageToolResult = supportsImageToolResult(next.resolved, nextModelId);
-        runtime.reasoningVariants = nextVariants;
-        runtime.reasoningMetadataSource = nextCatalog.inferred ? nextCatalog.sourceProviderId : null;
-        runtime.reasoningSupport = reasoningSupportStatus(next.resolved, nextCatalog.model);
-        runtime.reasoningDefault = resolveReasoningVariant(nextVariants, nextSettings.reasoning ?? 'default').id;
-        runtime.registry = nextRegistry;
+      },
+      reloadSettings: (reloadTools = false) => {
+        const reload = settingsReload.then(async () => {
+          if (runtimeClosed) return;
+          const latest = loadSettings();
+          // Validate/build before publishing new model state. An invalid edit never
+          // overwrites the files or silently falls back to removed credentials.
+          const nextReviewerConfig = reviewerConfig(latest);
+          const nextReviewer = nextReviewerConfig === appliedReviewerConfig ? reviewer : await loadReviewer(latest);
+          if (modelConfig(latest) !== appliedModelConfig) await applyModel(latest, runtime.providerId, runtime.modelId);
+          reviewer = nextReviewer;
+          appliedReviewerConfig = nextReviewerConfig;
+          if (reviewer.model) runtime.reviewModel = reviewer.model;
+          else delete runtime.reviewModel;
+          runtime.reasoningDefault = resolveReasoningVariant(activeVariants, latest.reasoning ?? 'default').id;
+          runtime.showReasoningDefault = latest.showReasoning !== false;
+          runtime.approvalMode = latest.approvalMode;
+          const toolsChanged = reloadTools && mcpReady && (await mcp!.reload(latest.mcpServers));
+          if (toolsChanged || mcp!.revision !== appliedMcpRevision) {
+            runtime.registry = createRegistry(activeInputModalities);
+            appliedMcpRevision = mcp!.revision;
+          }
+        });
+        settingsReload = reload.catch(() => {});
+        return reload;
       },
       close: async () => {
+        runtimeClosed = true;
+        await settingsReload;
         try {
           await memoryIndex.close();
         } finally {
-          await mcp?.close();
+          if (!options.mcpManager) await mcp?.close();
         }
       },
     };
@@ -326,7 +412,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     try {
       await memoryIndex.close();
     } finally {
-      await mcp?.close();
+      if (!options.mcpManager) await mcp?.close();
     }
     throw error;
   }

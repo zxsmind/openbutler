@@ -17,7 +17,7 @@ export function watchSettingsFiles(
   filenames: readonly string[],
   onChange: () => void,
   log: (message: string) => void,
-  debounceMs = 2000,
+  debounceMs = 200,
 ): SettingsWatcher {
   const wanted = new Set(filenames.map((name) => basename(name)));
   let watcher: FSWatcher | null = null;
