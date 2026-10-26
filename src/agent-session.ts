@@ -28,8 +28,8 @@ import { loadSettings, type ApprovalMode } from './settings.js';
 import { autoReviewFingerprint, reviewToolRequest, type AutoReviewOptions, type AutoReviewResult } from './auto-review.js';
 import type { ToolApprovalOutcome, ToolCallRequest, ToolRegistry, ToolUserQuestion } from './tools/registry.js';
 import { ToolInputPreview } from './tool-preview.js';
-import { redactSensitive, redactSensitiveText } from './sensitive-data.js';
-import { DEFAULT_SESSION_LIST_LIMIT } from './tools/session-list.js';
+import { classifySensitiveEntry, redactSensitive, redactSensitiveText } from './sensitive-data.js';
+import { toolDisplayCommand as displayToolCommand } from './tool-display.js';
 import { reportSessionActivity } from './session-registry.js';
 import { sameReplyRoute, type TurnCommunication } from './communication.js';
 import { isUnsupportedImageInputError, omitUnsupportedImageInputs } from './image.js';
@@ -513,6 +513,11 @@ export class AgentSessionController implements AgentSessionClient {
     this.lastContextEstimate = session.contextEstimateTokens;
     this.contextUsageBaseline = session.contextTokens;
     this.contextGrowthThisTurn = session.contextGrowthTokens;
+      entries: session.entries.map((entry) => {
+        if (entry.kind !== 'tool' || entry.toolTitle !== undefined || !entry.tool) return entry;
+        const title = this.runtime.registry.getDisplayTitle(entry.tool);
+        return title !== undefined ? { ...entry, toolTitle: title } : entry;
+      }),
     this.sessionHasUserMessage = session.entries.some((entry) => entry.kind === 'user');
     this.pendingApproval = null;
     this.pendingApprovalId = null;
@@ -814,18 +819,32 @@ export class AgentSessionController implements AgentSessionClient {
   private onToolStart(request: ToolCallRequest, toolCallId?: string): void {
     this.flushEventAssistantText();
     this.flushStreamedEntries();
-    const command = toolDisplayCommand(request);
+    const input = toolDisplayInput(request.input);
     this.reportTurnProgress({ kind: 'tool-start', tool: toolIdentity(request) });
     const tool = toolIdentity(request);
     const preview = toolCallId ? this.previewToolEntries.get(toolCallId) : undefined;
     if (preview) {
       this.previewToolEntries.delete(toolCallId!);
-      const entry: Extract<SessionEntry, { kind: 'tool' }> = { kind: 'tool', command, result: '', running: true, tool };
+      const entry: Extract<SessionEntry, { kind: 'tool' }> = {
+        kind: 'tool',
+        input,
+        result: '',
+        running: true,
+        tool,
+        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
+      };
       this.runningToolEntry = { request, entry };
       this.replaceEntry(preview.entry, entry);
       return;
     }
-    const entry: Extract<SessionEntry, { kind: 'tool' }> = { kind: 'tool', command, result: '', running: true, tool };
+    const entry: Extract<SessionEntry, { kind: 'tool' }> = {
+      kind: 'tool',
+      input,
+      result: '',
+      running: true,
+      tool,
+      ...(request.title !== undefined ? { toolTitle: request.title } : {}),
+    };
     this.runningToolEntry = { request, entry };
     this.addEntry(entry);
   }
@@ -842,7 +861,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.runningToolEntry = null;
       this.replaceEntry(running.entry, {
         kind: 'tool',
-        command: running.entry.command,
+        input: running.entry.input ?? toolDisplayInput(request.input),
         result: formatted.text || 'No output',
         running: false,
         tool,
@@ -856,7 +875,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.previewToolEntries.delete(toolCallId!);
       this.replaceEntry(preview.entry, {
         kind: 'tool',
-        command: preview.entry.command,
+        input: toolDisplayInput(request.input),
         result: formatted.text || 'No output',
         tool,
         ...(preview.entry.at === undefined ? {} : { durationMs: Date.now() - preview.entry.at }),
@@ -866,12 +885,13 @@ export class AgentSessionController implements AgentSessionClient {
     }
     this.addEntry({
       kind: 'tool',
-      command: toolDisplayCommand(request),
+      input: toolDisplayInput(request.input),
       result: formatted.text || 'No output',
       tool,
       ...(workerSession === undefined ? {} : { session: workerSession }),
     });
   }
+        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
 
   private onToolPreviewStart(info: { toolCallId: string; providerId: string; name: string }): void {
     // Commit buffered text but keep the assistant message open: providers can keep streaming text
@@ -879,12 +899,14 @@ export class AgentSessionController implements AgentSessionClient {
     this.flushStreamedDeltas();
     const entry: Extract<SessionEntry, { kind: 'tool' }> = {
       kind: 'tool',
-      command: toolDisplayName(info.providerId, info.name),
+      command: info.title ?? toolDisplayName(info.providerId, info.name),
+      ...(info.title !== undefined ? { toolTitle: info.title } : {}),
       result: '',
       preparing: true,
       tool: toolIdentity(info),
     };
     this.previewToolEntries.set(info.toolCallId, { entry, preview: new ToolInputPreview(), providerId: info.providerId, name: info.name });
+        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
     this.addEntry(entry);
   }
 
@@ -892,9 +914,10 @@ export class AgentSessionController implements AgentSessionClient {
     const preview = this.previewToolEntries.get(info.toolCallId);
     if (!preview) return;
     preview.preview.push(info.inputTextDelta);
-    const command = toolPreviewCommand(preview.providerId, preview.name, preview.preview.fields);
+    const command = toolPreviewCommand(preview.providerId, preview.name, preview.preview.fields, preview.entry.toolTitle);
     const previous = preview.entry;
     if (command === previous.command) return;
+      ...(request.title !== undefined ? { toolTitle: request.title } : {}),
     const entry: Extract<SessionEntry, { kind: 'tool' }> = { ...previous, command };
     preview.entry = entry;
     this.replaceEntry(previous, entry);
@@ -904,9 +927,9 @@ export class AgentSessionController implements AgentSessionClient {
     const preview = this.previewToolEntries.get(info.toolCallId);
     if (!preview) return;
     const previous = preview.entry;
-    const command = toolDisplayCommand({ providerId: preview.providerId, name: preview.name, input: info.input });
-    if (command === previous.command) return;
-    const entry: Extract<SessionEntry, { kind: 'tool' }> = { ...previous, command };
+    const input = toolDisplayInput(info.input);
+    const { command: _preview, ...rest } = previous;
+    const entry: Extract<SessionEntry, { kind: 'tool' }> = { ...rest, input };
     preview.entry = entry;
     this.replaceEntry(previous, entry);
   }
@@ -1998,126 +2021,19 @@ function workerSessionId(request: Pick<ToolCallRequest, 'providerId' | 'name'>, 
 }
 
 export function toolDisplayCommand(request: Pick<ToolCallRequest, 'providerId' | 'name' | 'input'>): string {
-  if (request.providerId === 'host') {
-    const input = request.input;
-    switch (request.name) {
-      case 'inbox':
-        return `Inbox ${String(input.action ?? 'list')}${typeof input.source === 'string' ? ` · ${input.source}` : ''}`;
-      case 'execute_command':
-        if (typeof input.command === 'string') return input.command;
-        break;
-      case 'file_read': {
-        if (typeof input.path !== 'string') break;
-        const offset = typeof input.offset === 'number' ? input.offset : 1;
-        const range =
-          typeof input.offset === 'number' || typeof input.limit === 'number'
-            ? `:${offset}-${typeof input.limit === 'number' ? offset + input.limit - 1 : '…'}`
-            : '';
-        return `Read ${input.path}${range}`;
-      }
-      case 'file_write': {
-        if (typeof input.path !== 'string') break;
-        return `Write ${input.path}`;
-      }
-      case 'file_edit': {
-        if (typeof input.path !== 'string') break;
-        return `Edit ${input.path}`;
-      }
-      case 'glob': {
-        if (typeof input.pattern !== 'string') break;
-        const source = typeof input.path === 'string' ? ` in ${input.path}` : '';
-        return `Glob ${input.pattern}${source}`;
-      }
-      case 'grep': {
-        if (typeof input.pattern !== 'string') break;
-        const source = typeof input.path === 'string' ? ` in ${input.path}` : '';
-        return `Grep ${input.pattern}${source}`;
-      }
-      case 'question': {
-        const question = clipOneLine(input.question, 80);
-        if (question === undefined) break;
-        const options = Array.isArray(input.options) ? input.options.filter((option): option is string => typeof option === 'string') : [];
-        const shown = options
-          .map((option) => clipOneLine(option, 24))
-          .filter((option): option is string => option !== undefined)
-          .join(' · ')
-          .slice(0, 60);
-        return shown ? `Ask "${question}" [${shown}]` : `Ask "${question}"`;
-      }
-      case 'memory_search': {
-        const query = clipOneLine(input.query, 60);
-        if (query === undefined) break;
-        return `Search memory "${query}"`;
-      }
-      case 'session_list': {
-        const scope = input.scope === 'workspace' ? 'workspace' : 'all';
-        const limit = typeof input.limit === 'number' ? input.limit : DEFAULT_SESSION_LIST_LIMIT;
-        return `Sessions ${scope} · ${limit}`;
-      }
-      case 'session_search': {
-        const query = clipOneLine(input.query, 60);
-        if (query === undefined) break;
-        return `Search sessions "${query}"`;
-      }
-      case 'session_read': {
-        if (typeof input.session !== 'string' || !input.session) break;
-        const offset = typeof input.offset === 'number' ? input.offset : 1;
-        const range =
-          typeof input.offset === 'number' || typeof input.limit === 'number'
-            ? `:${offset}-${typeof input.limit === 'number' ? offset + input.limit - 1 : '…'}`
-            : '';
-        return `Read session ${input.session.slice(0, 8)}${range}`;
-      }
-      case 'session_message': {
-        if (typeof input.session !== 'string' || !input.session) break;
-        const text = clipOneLine(input.text, 60);
-        return text === undefined ? `Message ${input.session.slice(0, 8)}` : `Message ${input.session.slice(0, 8)} "${text}"`;
-      }
-      case 'parent_message': {
-        const text = clipOneLine(input.text, 80);
-        if (text === undefined) break;
-        return `Note "${text}"`;
-      }
-      case 'subagent': {
-        const mode = input.mode === 'explorer' ? 'explorer' : 'executor';
-        const task = typeof input.task === 'string' ? input.task.replace(/\s+/g, ' ').trim() : '';
-        return `subagent ${mode}${task ? ` · ${task.length > 140 ? `${task.slice(0, 140)}…` : task}` : ''}`;
-      }
-      case 'subagent_poll': {
-        if (typeof input.session !== 'string' || !input.session) break;
-        return `Poll ${input.session.slice(0, 8)}`;
-      }
-      case 'subagent_stop': {
-        if (typeof input.session !== 'string' || !input.session) break;
-        return `Stop ${input.session.slice(0, 8)}`;
-      }
-      case 'schedule': {
-        if (typeof input.action !== 'string') break;
-        const id = typeof input.scheduleId === 'string' && input.scheduleId ? ` ${input.scheduleId.slice(0, 8)}` : '';
-        return `Schedule ${input.action}${id}`;
-      }
-      case 'mcp_manage': {
-        return [request.name, input.action, input.serverId].filter((part) => typeof part === 'string').join(' ');
-      }
-    }
-  }
-  return `${request.providerId}/${request.name} ${displayInputSummary(request.input)}`;
+  return displayToolCommand({ ...request, input: redactSensitive(request.input) as Record<string, unknown> });
 }
 
-const MAX_DISPLAY_INPUT_CHARS = 300;
-
-/** A bounded, redacted one-line rendering of an opaque tool input for the transcript. */
-function displayInputSummary(input: Record<string, unknown>): string {
-  const summary = JSON.stringify(redactSensitive(input));
-  return summary.length > MAX_DISPLAY_INPUT_CHARS ? `${summary.slice(0, MAX_DISPLAY_INPUT_CHARS)}…` : summary;
-}
-
-/** A redacted, whitespace-collapsed one-liner for transcript labels; undefined when absent. */
-function clipOneLine(value: unknown, maxChars: number): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const single = redactSensitiveText(value).replace(/\s+/g, ' ').trim();
-  if (!single) return undefined;
-  return single.length > maxChars ? `${single.slice(0, maxChars)}…` : single;
+/** Complete input, redacted once before it enters the transcript. */
+export function toolDisplayInput(input: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(
+    JSON.stringify(input, (key, value: unknown) => {
+      const kind = classifySensitiveEntry(key, value);
+      if (kind === 'secret') return '[redacted]';
+      if (kind === 'media') return `[media payload omitted; ${(value as string).length} chars]`;
+      return typeof value === 'string' ? redactSensitiveText(value) : value;
+    }),
+  ) as Record<string, unknown>;
 }
 
 function toolDisplayName(providerId: string, name: string): string {
@@ -2125,7 +2041,12 @@ function toolDisplayName(providerId: string, name: string): string {
 }
 
 /** Best available one-line label from the fields a provider has streamed so far. */
-export function toolPreviewCommand(providerId: string, name: string, fields: readonly { key: string; value: string }[]): string {
+export function toolPreviewCommand(
+  providerId: string,
+  name: string,
+  fields: readonly { key: string; value: string }[],
+  title?: string,
+): string {
   const input: Record<string, unknown> = {};
   for (const field of fields) input[field.key] = field.value;
   if (providerId === 'host' && name === 'execute_command' && typeof input.command === 'string') return input.command;
@@ -2215,6 +2136,7 @@ export function formatToolResult(request: Pick<ToolCallRequest, 'providerId' | '
     return { outcome: typeof result.status === 'string' ? result.status : 'result', text: result.message };
   }
   return formatExecOutput(result);
+  if (title !== undefined) return title;
 }
 
 /** Content-first display text for host tool results; undefined defers to the generic rules. */

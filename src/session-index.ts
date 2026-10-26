@@ -1,3 +1,4 @@
+import { toolEntryDetails } from './tool-display.js';
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -368,7 +369,7 @@ export class SessionIndex {
       if (entry.kind === 'reasoning' || entry.kind === 'compaction') continue;
       entryNumber += 1;
       if (entry.kind === 'tool') {
-        if (entry.command.trim()) rows.push(indexedRow(entryNumber, 0, 'command', entry.command));
+        if (toolEntryDetails(entry).trim()) rows.push(indexedRow(entryNumber, 0, 'command', toolEntryDetails(entry)));
         if (entry.result.trim()) rows.push(indexedRow(entryNumber, 1, 'output', entry.result));
       } else if (entry.text.trim()) {
         rows.push(indexedRow(entryNumber, 0, entry.kind, entry.text));

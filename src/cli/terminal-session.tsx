@@ -1,3 +1,4 @@
+import { toolEntryCommand, toolEntryDetails } from '../tool-display.js';
 import { Transform } from 'node:stream';
 import { Box, measureElement, render, Text, useApp, useBoxMetrics, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -1092,8 +1093,8 @@ export function SessionScreen({
     width,
   ]);
 
-  const mouseState = useRef({ entries, width, pending, approvalContentNeedsExpand, finishApproval });
-  mouseState.current = { entries, width, pending, approvalContentNeedsExpand, finishApproval };
+  const mouseState = useRef({ entries, width, pending, approvalContentNeedsExpand, finishApproval, expandedTools });
+  mouseState.current = { entries, width, pending, approvalContentNeedsExpand, finishApproval, expandedTools };
 
   const closeSubagentView = useCallback(() => {
     const client = subagentClientRef.current;
@@ -1218,6 +1219,11 @@ export function SessionScreen({
         if (subagentCall(entry) === null) continue;
         const bounds = measureElement(element);
         const top = bounds.y - scrollTopRef.current;
+        // The input toggles disclosure; the result still opens the worker view.
+        const inputRows = state.expandedTools.has(index)
+          ? estimateTranscriptEntryHeight({ ...entry, result: '', running: false, preparing: false }, state.width, true) - 1
+          : 1;
+        if (entry.input && y < top + inputRows) continue;
         if (x >= bounds.x && x < bounds.x + bounds.width && y >= top && y < top + bounds.height) {
           void openSubagentViewRef.current(index);
           return;
@@ -2731,7 +2737,7 @@ function displayableCommand(command: string): string {
 function subagentCall(entry: Entry | undefined): Extract<Entry, { kind: 'tool' }> | null {
   if (!entry || entry.kind !== 'tool') return null;
   if (entry.tool !== undefined) return entry.tool === 'host:subagent' ? entry : null;
-  return /^subagent (explorer|executor)\b/.test(entry.command) ? entry : null;
+  return /^subagent (explorer|executor)\b/.test(toolEntryCommand(entry)) ? entry : null;
 }
 
 /** The worker session id from a subagent-family entry: the entry field first, then the legacy JSON result. */
@@ -2759,7 +2765,7 @@ function toolCommandReserve(entry: Extract<Entry, { kind: 'tool' }>): number {
 }
 
 function toolNeedsExpand(entry: Extract<Entry, { kind: 'tool' }>, width: number): boolean {
-  const command = displayableCommand(entry.command).replace(/\n/g, ' ↵ ');
+  const command = displayableCommand(toolEntryCommand(entry)).replace(/\n/g, ' ↵ ');
   const result = displayableCommand(entry.result).trimEnd();
   const outputLines = result.split(/\r?\n/);
   const contentWidth = Math.max(8, width - toolCommandReserve(entry));
@@ -2945,12 +2951,21 @@ export function estimateTranscriptEntryHeight(
   }
   if (entry.kind === 'tool') {
     const command = displayableCommand(entry.command).replace(/\n/g, ' ↵ ');
+    const command = displayableCommand(showFullDetails ? toolEntryDetails(entry) : toolEntryCommand(entry));
+    if (toolActivity(entry).active)
+      return (
+        wrappedRows(
+          showFullDetails ? command : clipTerminalWidth(command.replace(/\n/g, ' ↵ '), width - toolCommandReserve(entry)),
+          width - 2,
+        ) + 1
+      );
+    const result = displayableCommand(entry.result).trimEnd();
     if (toolActivity(entry).active) return wrappedRows(clipTerminalWidth(command, width - toolCommandReserve(entry)), width - 2) + 1;
     const result = displayableCommand(entry.result).trimEnd();
     const showFullDetails = expandedTool || !mouseSupported;
     const preview = showFullDetails ? result : toolOutputPreview(result, width - 6);
     return (
-      wrappedRows(showFullDetails ? command : clipTerminalWidth(command, width - 6), width - 2) +
+      wrappedRows(showFullDetails ? command : clipTerminalWidth(command.replace(/\n/g, ' ↵ '), width - 6), width - 2) +
       (preview ? wrappedRows(preview, width - 4) + 1 : 0) +
       1
     );
@@ -3094,11 +3109,11 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   }
 
   if (entry.kind === 'tool') {
-    const command = displayableCommand(entry.command);
+    const showFullDetails = expanded || !mouseSupported;
+    const command = displayableCommand(showFullDetails ? toolEntryDetails(entry) : toolEntryCommand(entry));
     const oneLineCommand = command.replace(/\n/g, ' ↵ ');
     const result = displayableCommand(entry.result).trimEnd();
     const activity = toolActivity(entry);
-    const showFullDetails = expanded || !mouseSupported;
     const commandLimit = Math.max(8, width - (activity.active && !showFullDetails ? toolCommandReserve(entry) : 6));
     return (
       <Box ref={toolRef} flexDirection="column" width="100%" marginBottom={1} flexShrink={0} backgroundColor={tokens.surface}>

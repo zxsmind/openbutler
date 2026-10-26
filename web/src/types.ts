@@ -12,11 +12,13 @@ export interface Entry extends TurnCompletion {
   result?: string;
   /** Client-only source ranges received through incremental patches. Snapshots
    * and paged history have no entrance animation. Never sent to the server. */
+  input?: Record<string, unknown>;
   streamReveal?: import('./stream-reveal.js').StreamRange[];
   tool?: string;
   running?: boolean;
   preparing?: boolean;
   tone?: 'info' | 'warn' | 'error';
+  toolTitle?: string;
   durationMs?: number;
   eventId?: string;
   turnId?: string;

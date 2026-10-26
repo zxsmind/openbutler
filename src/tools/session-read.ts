@@ -1,3 +1,4 @@
+import { toolEntryDetails } from '../tool-display.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { savedSessionFilePath } from '../session-paths.js';
@@ -208,7 +209,7 @@ function compactionText(entry: Extract<TranscriptEntry, { kind: 'compaction' }>)
 
 function projectEntry(entry: TranscriptEntry, index: number): { value: Record<string, unknown>; cost: number; truncated: boolean } {
   if (entry.kind === 'tool') {
-    const command = truncateText(redactSensitiveText(entry.command), MAX_TOOL_COMMAND_CHARS);
+    const command = truncateText(redactSensitiveText(toolEntryDetails(entry)), MAX_TOOL_COMMAND_CHARS);
     const result = truncateText(redactSensitiveText(entry.result), MAX_TOOL_OUTPUT_CHARS);
     return {
       value: {

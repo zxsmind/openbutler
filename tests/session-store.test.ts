@@ -136,3 +136,24 @@ it('keeps the compaction marker through save and load', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('persists full tool input once and still loads legacy command entries', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ranite-tool-input-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-tool-input-'))
+    throw new Error('Unsafe fixture path.');
+  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.resetModules();
+  try {
+    const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
+    const entries = [
+      { kind: 'tool' as const, tool: 'host:file_write', input: { path: 'a.ts', content: 'long input '.repeat(1000) }, result: 'Done' },
+      { kind: 'tool' as const, command: 'legacy command', result: 'legacy result' },
+    ];
+    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries }, { allowEmpty: true });
+    expect(loadSavedSession(saved.id)!.entries).toEqual(entries);
+    expect(loadSavedSession(saved.id)!.entries[0]).not.toHaveProperty('command');
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,5 @@
 import type { Entry } from './types.js';
+import { toolEntryCommand } from '../../src/tool-display.js';
 export { reasoningSentences, thoughtHeadline } from './reasoning-headline.js';
 
 export interface Turn {
@@ -213,7 +214,7 @@ const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|avif)\b/i;
 /** A tool call's identity is `provider:name`; the display command carries the path. */
 export function classifyTool(entry: Entry): ToolCategory {
   const [provider = '', name = ''] = (entry.tool ?? '').toLowerCase().split(':');
-  const command = entry.command ?? '';
+  const command = toolEntryCommand(entry);
   if (provider === 'host') {
     if (name === 'execute_command') return 'command';
     if (name === 'file_read') {
@@ -276,10 +277,10 @@ export type GroupSignal = { kind: 'headline' | 'command' | 'summary'; text: stri
 export function groupSignal(entries: readonly Entry[], headline: string): GroupSignal {
   const tools = entries.filter((entry) => entry.kind === 'tool');
   const running = [...tools].reverse().find((entry) => entry.running === true || entry.preparing === true);
-  if (running) return { kind: 'command', text: running.command || running.tool || 'tool' };
+  if (running) return { kind: 'command', text: toolEntryCommand(running) };
   if (headline) return { kind: 'headline', text: headline };
   const last = tools[tools.length - 1];
-  if (last) return { kind: 'command', text: last.command || last.tool || 'tool' };
+  if (last) return { kind: 'command', text: toolEntryCommand(last) };
   return { kind: 'summary', text: groupSummary(entries) };
 }
 
@@ -314,7 +315,7 @@ export function isShellTool(entry: Entry): boolean {
 /** Short, stable label for a tool call: the verb plus its target. */
 export function stepLabel(entry: Entry): { verb: string; target: string } {
   if (entry.kind === 'reasoning') return { verb: 'Thought', target: '' };
-  const command = entry.command ?? entry.tool ?? 'tool';
+  const command = toolEntryCommand(entry);
   const space = command.indexOf(' ');
   if (space === -1) return { verb: command, target: '' };
   return { verb: command.slice(0, space), target: command.slice(space + 1) };

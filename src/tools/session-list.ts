@@ -10,7 +10,8 @@ const sessionListEffect = {
 } as const;
 
 const MAX_SESSION_LIST_LIMIT = 50;
-export const DEFAULT_SESSION_LIST_LIMIT = 20;
+export { DEFAULT_SESSION_LIST_LIMIT } from '../tool-display.js';
+import { DEFAULT_SESSION_LIST_LIMIT } from '../tool-display.js';
 
 /** Lists the rolling metadata of every saved session without reading any transcript body. */
 export function createSessionListTool(workspaceRoot: string): ToolDefinition {

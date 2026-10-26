@@ -55,6 +55,8 @@ export interface ToolUserQuestion {
 export interface ToolDefinition {
   providerId: string;
   name: string;
+  /** Human display title supplied by the native tool or MCP server. */
+  title?: string;
   description: string;
   inputSchema: Record<string, unknown>;
   maxInputChars?: number;
@@ -94,6 +96,7 @@ export interface ToolCallRequest {
   requestId: string;
   providerId: string;
   name: string;
+  title?: string;
   input: Record<string, unknown>;
   effect: ToolEffect;
   timeoutSeconds?: number;
@@ -124,6 +127,10 @@ export type ToolApprovalResponse = boolean | ToolApprovalOutcome;
 /** Registry is the single path from native/MCP tool providers to model calls and policy. */
 export class ToolRegistry {
   private readonly definitions = new Map<string, ToolDefinition>();
+
+  getDisplayTitle(identity: string): string | undefined {
+    return this.definitions.get(identity)?.title;
+  }
 
   register(definition: ToolDefinition): void {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(definition.providerId)) {
@@ -181,7 +188,7 @@ export class ToolRegistry {
      * call while it is still being written. Callbacks are advisory only.
      */
     preview?: {
-      onStart?: (info: { toolCallId: string; providerId: string; name: string }) => void;
+      onStart?: (info: { toolCallId: string; providerId: string; name: string; title?: string }) => void;
       onDelta?: (info: { toolCallId: string; inputTextDelta: string }) => void;
       onAvailable?: (info: { toolCallId: string; input: Record<string, unknown> }) => void;
     };
@@ -236,6 +243,7 @@ export class ToolRegistry {
         requestId: randomUUID(),
         providerId: definition.providerId,
         name: definition.name,
+        ...(definition.title !== undefined ? { title: definition.title } : {}),
         input,
         effect,
         timeoutSeconds,
@@ -508,7 +516,12 @@ export class ToolRegistry {
         inputSchema: jsonSchema<Record<string, unknown>>(withToolTimeoutSchema(modelInputSchema) as Parameters<typeof jsonSchema>[0]),
         onInputStart: ({ toolCallId }) => {
           try {
-            options.preview?.onStart?.({ toolCallId, providerId: definition.providerId, name: definition.name });
+            options.preview?.onStart?.({
+              toolCallId,
+              providerId: definition.providerId,
+              name: definition.name,
+              ...(definition.title !== undefined ? { title: definition.title } : {}),
+            });
           } catch {
             /* previews never affect execution */
           }

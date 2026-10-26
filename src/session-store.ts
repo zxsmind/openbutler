@@ -88,6 +88,7 @@ type SessionEntryBody =
       tool?: string;
       session?: string;
       durationMs?: number;
+      toolTitle?: string;
       outcome?: string;
     };
 
@@ -574,7 +575,8 @@ function isSessionEntry(value: unknown): value is SessionEntry {
   if (!isRecord(value)) return false;
   if (value.kind === 'tool')
     return (
-      typeof value.command === 'string' &&
+      (typeof value.command === 'string' || (isRecord(value.input) && typeof value.tool === 'string')) &&
+      (value.input === undefined || isRecord(value.input)) &&
       typeof value.result === 'string' &&
       (value.running === undefined || typeof value.running === 'boolean') &&
       (value.preparing === undefined || typeof value.preparing === 'boolean') &&
@@ -582,6 +584,7 @@ function isSessionEntry(value: unknown): value is SessionEntry {
       (value.session === undefined || typeof value.session === 'string')
     );
   if (value.kind === 'user')
+      (value.toolTitle === undefined || typeof value.toolTitle === 'string') &&
     return (
       typeof value.text === 'string' &&
       (value.source === undefined || (USER_ENTRY_SOURCES as readonly string[]).includes(String(value.source))) &&

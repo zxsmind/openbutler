@@ -88,3 +88,32 @@ describe('visible row window', () => {
     }
   });
 });
+
+describe('tool input disclosure', () => {
+  it('shows the complete input only when expanded, including during execution', async () => {
+    const entry: SessionEntry = {
+      kind: 'tool',
+      tool: 'host:file_write',
+      input: { path: 'a.ts', content: 'start ' + 'body '.repeat(100) + 'END_OF_INPUT' },
+      result: '',
+      running: true,
+    };
+    const collapsed = await renderLines(frame(entryElement(entry)));
+    expect(collapsed.join('\n')).toContain('Write a.ts');
+    expect(collapsed.join('\n')).not.toContain('END_OF_INPUT');
+    const expanded = await renderLines(
+      frame(
+        createElement(TranscriptEntry, {
+          entry,
+          index: 0,
+          width: WIDTH,
+          expanded: true,
+          mouseSupported: true,
+          setToolRef: () => {},
+          tokens,
+        }),
+      ),
+    );
+    expect(expanded.join('\n')).toContain('END_OF_INPUT');
+  });
+});

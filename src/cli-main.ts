@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { toolEntryDetails } from './tool-display.js';
 /**
  * Ranite CLI.
  *
@@ -663,7 +664,7 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
         if (wasDone === undefined) {
           if (printedText) process.stdout.write('\n\n');
           ui.section('Tool');
-          ui.line(entry.command);
+          ui.line(toolEntryDetails(entry));
           if (!entry.running) ui.line(entry.result);
         } else if (!wasDone && !entry.running) {
           ui.line(entry.result);

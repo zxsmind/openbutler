@@ -1,8 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { formatToolResult, toolDisplayCommand, toolPreviewCommand } from '../src/agent-session.js';
+import { formatToolResult, toolDisplayCommand, toolDisplayInput, toolPreviewCommand } from '../src/agent-session.js';
+import { toolEntryCommand, toolEntryDetails } from '../src/tool-display.js';
 
 const host = (name: string, input: Record<string, unknown> = {}) => ({ providerId: 'host', name, input });
 const display = (name: string, value: unknown) => formatToolResult({ providerId: 'host', name }, value).text;
+
+describe('full tool input disclosure', () => {
+  it('shows supplied MCP titles verbatim in every call state', () => {
+    for (const state of [{ preparing: true }, { running: true }, {}]) {
+      expect(toolEntryCommand({ tool: 'mcp-athena:athena_search', toolTitle: 'Search the web', ...state })).toBe('Search the web');
+      expect(toolEntryCommand({ tool: 'mcp-athena:athena_read_contents', toolTitle: 'Read web pages', input: {}, ...state })).toBe(
+        'Read web pages',
+      );
+    }
+    const title = '  Exact  title\nwith spacing  ';
+    expect(toolEntryCommand({ tool: 'mcp-test:unknown', toolTitle: title, running: true })).toBe(title);
+    expect(toolPreviewCommand('mcp-test', 'unknown', [], title)).toBe(title);
+    expect(toolEntryCommand({ tool: 'mcp-test:unknown', command: 'original', running: true })).toBe('original');
+  });
+  it('derives a short label while retaining every input field and array item', () => {
+    const input = { text: 'long input '.repeat(100), items: Array.from({ length: 250 }, (_, i) => i), password: 'hidden' };
+    const entry = { tool: 'mcp:thing', input: toolDisplayInput(input) };
+    expect(toolEntryCommand(entry).length).toBeLessThan(320);
+    expect(JSON.parse(toolEntryDetails(entry))).toEqual({ ...input, password: '[redacted]' });
+    expect(entry).not.toHaveProperty('command');
+  });
+
+  it('keeps write contents and complete shell commands in expanded details', () => {
+    const content = 'first line\n'.repeat(100) + 'LAST LINE';
+    const entry = { tool: 'host:file_write', input: toolDisplayInput({ path: 'a.ts', content }) };
+    expect(toolEntryCommand(entry)).toBe('Write a.ts');
+    expect(JSON.parse(toolEntryDetails(entry)).content).toBe(content);
+    const command = 'echo ' + 'argument '.repeat(100);
+    const shell = { tool: 'host:execute_command', input: toolDisplayInput({ command, timeout: 30 }) };
+    expect(toolEntryCommand(shell)).toBe(command);
+    expect(JSON.parse(toolEntryDetails(shell))).toEqual({ command, timeout: 30 });
+    expect(toolEntryDetails({ command: 'legacy command' })).toBe('legacy command');
+  });
+});
 
 describe('tool display commands', () => {
   it('names reads, writes, and edits with their paths', () => {
