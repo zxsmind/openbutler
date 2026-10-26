@@ -301,8 +301,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   let teamPollInFlight = false;
   /** Team-scoped message ids already signalled to an unfinished run. */
   const teamPendingWakeIds = new Set<string>();
-  /** Returned inbox messages are distinct from messages still needing acknowledgement. */
-  const teamReadMessageIds = new Set<string>();
+  const teamMessageWasRead = (key: string) => Boolean(ledger.getState(`inbox:read:Team:${key}`));
   const agentInbox = createInbox();
   /** Single owner of locally queued outbound messages. */
   const teamDelivery = new TeamDelivery(openTeamConnection);
@@ -382,15 +381,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       name: 'Telegram',
       list: async (sessionId) => {
         if (isWorker(sessionId)) return { items: [] };
-        const read = new Set(parseOwnerInboxReadIds());
         return {
           items: ledger
             .ownerInboxNotifications()
-            .filter(belongsToOwner)
+            .filter((event) => belongsToOwner(event) && ownerInboxIsUnread(event))
             .map((event) => ({
               reference: event.id,
               receivedAt: event.receivedAt,
-              state: read.has(event.id) ? ('read' as const) : ('unread' as const),
+              state: 'unread' as const,
             })),
         };
       },
@@ -421,11 +419,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return withTeamChannel(async (channel, connection) => {
           const page = await channel.inbox();
           return {
-            items: page.messages.map((message) => ({
-              reference: teamReference(connection.key, message.msgId),
-              receivedAt: new Date(message.createdAt).toISOString(),
-              state: teamReadMessageIds.has(`${connection.key}:${message.msgId}`) ? ('read' as const) : ('unread' as const),
-            })),
+            items: page.messages
+              .filter((message) => !teamMessageWasRead(`${connection.key}:${message.msgId}`))
+              .map((message) => ({
+                reference: teamReference(connection.key, message.msgId),
+                receivedAt: new Date(message.createdAt).toISOString(),
+                state: 'unread' as const,
+              })),
             remaining: Math.max(0, page.count - page.messages.length),
           };
         });
@@ -435,10 +435,10 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return withTeamChannel(async (channel, connection) => {
           const ids = new Set(teamIds(references, connection.key));
           const page = await channel.inbox();
-          return page.messages
+          const results = page.messages
             .filter((message) => ids.has(message.msgId))
             .map((message) => {
-              teamReadMessageIds.add(`${connection.key}:${message.msgId}`);
+              ledger.setState(`inbox:read:Team:${connection.key}:${message.msgId}`, new Date().toISOString());
               return {
                 reference: teamReference(connection.key, message.msgId),
                 content: {
@@ -658,8 +658,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   /**
    * Signal each pending DM while allowing later arrivals into the same live run.
    * Only the poll is single-flight. Message ids suppress duplicate signals until
-   * their run settles; unacknowledged messages can then wake again, even after a
-   * successful run that read only part of the inbox.
+   * their run settles; only unread messages can wake again after the reminder
+   * interval. Successful reads consume notifications independently of replies.
    */
   async function pollTeamInbox(): Promise<void> {
     if (closing || teamPollInFlight) return;
@@ -669,7 +669,16 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     teamPollInFlight = true;
     try {
       const inbox = await withTeamChannel((channel) => channel.inbox());
-      const fresh = inbox.messages.filter((message) => !teamPendingWakeIds.has(`${teamKey}:${message.msgId}`));
+      const consumed = inbox.messages.filter((message) => teamMessageWasRead(`${teamKey}:${message.msgId}`));
+      if (consumed.length) await withTeamChannel((channel) => channel.ack(consumed.map((message) => message.msgId)));
+      const fresh = inbox.messages.filter((message) => {
+        const key = `${teamKey}:${message.msgId}`;
+        return (
+          !teamMessageWasRead(key) &&
+          !teamPendingWakeIds.has(key) &&
+          Date.now() >= Number(ledger.getState(`inbox:remind:Team:${key}`) ?? '0')
+        );
+      });
       if (fresh.length === 0) return;
       const root =
         custodianWorkspace?.runtime.workspaceRoot ?? canonicalWorkspaceRoot(loadSettings().defaultWorkspaceRoot ?? process.cwd());
@@ -693,7 +702,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
                 // A tool batch may have read these DMs while this wake waited in the queue.
                 const candidates = fresh.filter((message) => {
                   const key = `${teamKey}:${message.msgId}`;
-                  return alreadyRead.has(key) || !teamReadMessageIds.has(key);
+                  return !teamMessageWasRead(key);
                 });
                 if (candidates.length === 0) return null;
                 const currentInbox = await withTeamChannel((channel) => channel.inbox());
@@ -701,9 +710,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
                 const pending = new Set(currentInbox.messages.map((message) => message.msgId));
                 const relevant = candidates.filter((message) => {
                   const key = `${teamKey}:${message.msgId}`;
-                  return pending.has(message.msgId) && (alreadyRead.has(key) || !teamReadMessageIds.has(key));
+                  return pending.has(message.msgId) && !teamMessageWasRead(key);
                 });
                 if (relevant.length === 0) return null;
+                for (const message of relevant)
+                  ledger.setState(`inbox:remind:Team:${teamKey}:${message.msgId}`, String(Date.now() + INBOX_REMINDER_MS));
                 return inboxNotice('Team', relevant.length);
               },
               images: [],
@@ -1076,34 +1087,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     if (closing) throw new Error('Ranite host is shutting down.');
 
     const loading = (async () => {
-      const runtime = await (options.runtimeFactory ?? createAgentRuntime)({
-        workspaceRoot: scopeRoot,
-        onMcpError: (serverId, message) => options.log(`MCP server ${serverId}: ${message}`),
-        onMcpConnected: (serverId, toolCount) => options.log(`MCP server ${serverId} connected (${toolCount} tools).`),
-        // Accounting lives with the ledger, which this host owns: one writer, every request.
-        recordUsage: (input, id) => void recordUsageRow(ledger, input, id),
-        backgroundManage: executeBackground,
-        inbox: (request, sessionId) => agentInbox.execute(request, sessionId),
-        ownerMessageSend: executeOwnerMessage,
-
-        teamDelivery: executeTeamDelivery,
-        teamSend: executeTeamSend,
-
-        teamGroup: readTeamGroup,
-        teamHistory: readTeamHistory,
-        teamStatus: readTeamStatus,
-        teamSendFile: sendTeamFile,
-        teamReceiveFile: receiveTeamFile,
-        teamFiles: listTeamFiles,
-        teamProfile: (input) => executePeerOperation('profile', input),
-        teamWork: (input) => executePeerOperation('work', input),
-        teamRemember: executeTeamRemember,
-        sessionMessage: deliverSessionMessage,
-        subagent: spawnSubagent,
-        parentMessage: storeWorkerNote,
-
-        subagentStop: stopWorker,
-      });
+      const runtime = await createSessionRuntime(scopeRoot);
       if (closing) {
         await runtime.close();
         throw new Error('Ranite host shut down while the custodian runtime was loading.');
@@ -1640,11 +1624,23 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     if (stored && !ledger.getState(`owner-inbox:reply:${stored.id}`)) enqueueOwnerInboxWake(stored);
   }
 
+  function ownerInboxIsUnread(event: ObservedEventRow): boolean {
+    return (
+      event.source === 'owner-inbox' &&
+      ['pending', 'failed', 'interrupted'].includes(event.status) &&
+      !ledger.getState(`owner-inbox:read:${event.id}`) &&
+      !ledger.getState(`owner-inbox:reply:${event.id}`) &&
+      !parseOwnerInboxReadIds().includes(event.id)
+    );
+  }
+
   function enqueueOwnerInboxWake(inbox: ObservedEventRow): void {
-    if (inbox.source !== 'owner-inbox' || ledger.getState(`owner-inbox:reply:${inbox.id}`)) return;
-    // Already handed to the agent: a wake can only repeat a notification it has
-    // read, once per start, forever. A message nobody has read still wakes.
-    if (inbox.status === 'delivered' || parseOwnerInboxReadIds().includes(inbox.id)) return;
+    if (!ownerInboxIsUnread(inbox)) return;
+    const due = Number(ledger.getState(`owner-inbox:remind:${inbox.id}`) ?? '0');
+    if (Date.now() < due) {
+      scheduleEventRetry(due);
+      return;
+    }
     // Nothing to deliver: no words and no attachment is not a message at all.
     if (!String(inbox.payload.text ?? '').trim() && !Array.isArray(inbox.payload.attachments)) return;
     const workspaceRoot = inbox.workspaceRoot ?? loadSettings().telegram?.workspaceRoot;
@@ -1746,7 +1742,10 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           activeEvents.delete(event.id);
           activeEventSources.delete(event.id);
           busyEventSessions.delete(busyKey);
-          if (!closing) pumpEvents();
+          if (!closing) {
+            ensureOwnerInboxWakes();
+            pumpEvents();
+          }
         });
       activeEvents.set(event.id, work);
       activeEventSources.set(event.id, lane);
@@ -1885,12 +1884,16 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       else if (controller.getSnapshot().session.id !== parentId)
         deferWorkerEvent(event, 30_000, 'The original parent is no longer selected.');
       else if (result?.skipped) deferWorkerEvent(event, 1000, 'Waiting for the parent tool result to be saved.');
-      else if (error)
-        deferWorkerEvent(event, controller.automaticWakeHeld ? 0 : Math.min(300_000, 1000 * 2 ** Math.min(event.attempts, 8)), error);
-      else ledger.setEventState(event.id, 'delivered');
+      else if (error) deferWorkerEvent(event, controller.automaticWakeHeld ? 0 : INBOX_REMINDER_MS, error);
+      else deferWorkerEvent(event, INBOX_REMINDER_MS, 'The subagent notification is still unread.');
     } catch (error) {
       if (closing) ledger.setEventState(event.id, 'pending', 'Host stopped before parent delivery completed.');
-      else deferWorkerEvent(event, controller.automaticWakeHeld ? 0 : 5000, error instanceof Error ? error.message : String(error));
+      else
+        deferWorkerEvent(
+          event,
+          controller.automaticWakeHeld ? 0 : INBOX_REMINDER_MS,
+          error instanceof Error ? error.message : String(error),
+        );
     }
   }
 
@@ -1955,6 +1958,19 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         images: [],
         eventId: event.id,
         communication: remote ? { source: 'inbox' } : { source: 'schedule' },
+        ...(remote
+          ? {
+              beforeDelivery: async () => {
+                const unread = recoveryInboxIds.filter((id) => {
+                  const item = ledger.getEvent(id);
+                  return item && ownerInboxIsUnread(item);
+                });
+                if (!unread.length) return null;
+                for (const id of unread) ledger.setState(`owner-inbox:remind:${id}`, String(Date.now() + INBOX_REMINDER_MS));
+                return inboxNotice('Telegram', unread.length);
+              },
+            }
+          : {}),
         ...(remote ? { workspaceRoot: root } : {}),
         ...(schedule
           ? {
@@ -1976,14 +1992,16 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const turnResult = controller.takeEventRunResult(event.id);
     const error = turnResult ? turnResult.error : controller.getLastRunError();
     ledger.setEventState(event.id, error ? 'failed' : 'delivered', error ?? undefined);
-    if (turnResult?.replyHandledByEventId) {
-      ledger.setState(`event:reply-owner:${event.id}`, turnResult.replyHandledByEventId);
-      if (remote && isRecovery) finishOwnerInboxRecovery(event);
-      else if (remote && error !== 'Run cancelled.') queueOwnerInboxRecovery(event, root);
-      return;
+    if (turnResult?.replyHandledByEventId) ledger.setState(`event:reply-owner:${event.id}`, turnResult.replyHandledByEventId);
+    if (remote && error !== 'Run cancelled.') {
+      for (const id of recoveryInboxIds) {
+        const inbox = ledger.getEvent(id);
+        if (!inbox || !ownerInboxIsUnread(inbox)) continue;
+        const due = Math.max(Date.now() + INBOX_REMINDER_MS, Number(ledger.getState(`owner-inbox:remind:${id}`) ?? '0'));
+        ledger.setState(`owner-inbox:remind:${id}`, String(due));
+        scheduleEventRetry(due);
+      }
     }
-    if (remote && isRecovery) finishOwnerInboxRecovery(event);
-    else if (remote && error !== 'Run cancelled.') queueOwnerInboxRecovery(event, root);
   }
 
   /** Finds a live controller currently holding a session, across every workspace and attachment. */
@@ -2535,7 +2553,10 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     eventRetryTimer = setTimeout(
       () => {
         eventRetryTimer = null;
-        if (!closing) pumpEvents();
+        if (!closing) {
+          ensureOwnerInboxWakes();
+          pumpEvents();
+        }
       },
       Math.max(0, at - Date.now()),
     );
@@ -2601,28 +2622,33 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       } else throw new Error('Only a read message from the current Telegram pairing may be acknowledged.');
     }
     const messages: OwnerInboxMessage[] = [];
+    const newlyRead: string[] = [];
     const events = selected
       ? selected
           .map((id) => ledger.getEvent(id))
-          .filter((event): event is ObservedEventRow =>
-            Boolean(event && event.source === 'owner-inbox' && !ledger.getState(`owner-inbox:reply:${event.id}`)),
-          )
+          .filter((event): event is ObservedEventRow => Boolean(event && event.source === 'owner-inbox'))
       : ledger.ownerInboxEvents(limit);
     for (const event of events) {
       if (event.payload.userId !== settings?.userId || event.payload.chatId !== settings?.chatId) {
         ledger.setEventState(event.id, 'ignored', 'The message belongs to a previous Telegram pairing.');
         continue;
       }
-      if (event.status !== 'pending') ledger.setEventState(event.id, 'pending');
-      if (!ledger.claimEvent(event.id)) continue;
+      const unread = ownerInboxIsUnread(event);
+      if (event.status === 'processing') continue;
+      if (unread) {
+        if (event.status !== 'pending') ledger.setEventState(event.id, 'pending');
+        if (!ledger.claimEvent(event.id)) continue;
+      }
       let text = typeof event.payload.text === 'string' ? event.payload.text : '';
       if (typeof event.payload.attachmentError === 'string')
         text += `${text ? '\n\n' : ''}[Attachment could not be read: ${event.payload.attachmentError}]`;
       const item: OwnerInboxMessage = { id: event.id, source: 'telegram', receivedAt: event.receivedAt, text };
       try {
         const files: FileAttachment[] = [];
-        if (Array.isArray(event.payload.attachments)) {
-          for (const value of event.payload.attachments) {
+        const archived = ledger.getState(`owner-inbox:attachments:${event.id}`);
+        const attachments: unknown = event.payload.attachments ?? (archived ? JSON.parse(archived) : undefined);
+        if (Array.isArray(attachments)) {
+          for (const value of attachments) {
             if (
               !isRecord(value) ||
               typeof value.path !== 'string' ||
@@ -2649,19 +2675,21 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           const owner = typeof event.payload.sessionId === 'string' ? event.payload.sessionId : readerSessionId;
           if (!owner) throw new Error('No session is bound to this attachment.');
           files.push(storeAttachment(owner, await readFile(path), image.filename, image.mediaType));
+          ledger.setState(`owner-inbox:attachments:${event.id}`, JSON.stringify(files));
         }
         if (files.length) item.attachments = files;
       } catch (error) {
         item.text += `${item.text ? '\n\n' : ''}[Attachment unavailable: ${error instanceof Error ? error.message : String(error)}]`;
       }
       messages.push(item);
-      ledger.setEventState(event.id, 'delivered');
+      if (unread) {
+        ledger.setState(`owner-inbox:read:${event.id}`, new Date().toISOString());
+        ledger.setEventState(event.id, 'delivered');
+        newlyRead.push(event.id);
+      }
     }
     const previouslyRead = parseOwnerInboxReadIds();
-    ledger.setState(
-      'owner-inbox:read-for-response',
-      JSON.stringify([...new Set([...previouslyRead, ...messages.map((message) => message.id)])]),
-    );
+    ledger.setState('owner-inbox:read-for-response', JSON.stringify([...new Set([...previouslyRead, ...newlyRead])]));
     return { type: 'owner-inbox', messages };
   }
 
