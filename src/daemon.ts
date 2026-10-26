@@ -234,6 +234,136 @@ export async function restartDaemon(_legacyWorkspaceScope?: string): Promise<Dae
   return startDaemon();
 }
 
+/** The optional web server `ranite daemon start --web` opens: its own pid record so stop reaches it. */
+function webPidPath(): string {
+  return getDataPath('web.pid');
+}
+
+type WebPidRecord = { pid: number; startedAt: string; port: number; host: string };
+
+function readWebPidRecord(): WebPidRecord | null {
+  const path = webPidPath();
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const record = JSON.parse(raw) as Partial<WebPidRecord>;
+    if (typeof record.pid !== 'number' || !processIsAlive(record.pid)) {
+      // A dead process is stale state, not a running server.
+      try {
+        unlinkSync(path);
+      } catch {
+        /* another reader already removed it */
+      }
+      return null;
+    }
+    if (typeof record.startedAt !== 'string' || typeof record.port !== 'number' || typeof record.host !== 'string') return null;
+    return record as WebPidRecord;
+  } catch {
+    return null;
+  }
+}
+
+/** Mirrors how the daemon itself is launched, so the web child runs the same code vintage as this CLI. */
+export function webSpawnArgs(entry: string, port: number): string[] {
+  const webCommand = [entry, 'web', '--port', String(port)];
+  return /\.tsx?$/i.test(entry) ? ['--import', import.meta.resolve('tsx'), ...webCommand] : webCommand;
+}
+
+/**
+ * Starts the browser server as a detached service and waits until it answers.
+ * An already-running tracked server is returned as-is: the boot command stays
+ * idempotent the way `startDaemon` is.
+ */
+export async function startWebProcess(entry: string | undefined, port: number, host: string): Promise<WebPidRecord> {
+  const existing = readWebPidRecord();
+  if (existing) return existing;
+  if (!entry) throw new Error('Could not locate the Ranite CLI entry point.');
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error(`Invalid --port value "${port}". Use a number between 1 and 65535.`);
+  const logPath = getDataPath('daemon.log');
+  const logFd = openSync(logPath, 'a', 0o600);
+  const logOffset = fstatSync(logFd).size;
+  let child;
+  try {
+    child = spawn(process.execPath, webSpawnArgs(entry, port), {
+      env: { ...process.env },
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      windowsHide: true,
+    });
+  } finally {
+    closeSync(logFd);
+  }
+  const childExit: { value: { code: number | null; signal: NodeJS.Signals | null } | null } = { value: null };
+  child.once('exit', (code, signal) => {
+    childExit.value = { code, signal };
+  });
+  await new Promise<void>((resolveSpawn, rejectSpawn) => {
+    child.once('error', rejectSpawn);
+    child.once('spawn', () => resolveSpawn());
+  });
+  child.unref();
+  const record: WebPidRecord = { pid: child.pid!, startedAt: new Date().toISOString(), port, host };
+  writeFileSync(webPidPath(), JSON.stringify(record), { mode: 0o600 });
+  const pollHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (childExit.value) {
+      const logTail = readDaemonLogSince(logPath, logOffset);
+      const { code, signal } = childExit.value;
+      throw new Error(
+        `The web server exited before becoming ready${code === null ? ` (${signal ?? 'unknown signal'})` : ` (exit code ${code})`}.${logTail ? `\n${logTail}` : ''}`,
+      );
+    }
+    try {
+      const response = await fetch(`http://${pollHost}:${port}/`, { signal: AbortSignal.timeout(1_000), redirect: 'manual' });
+      if (response.status < 500) return record;
+    } catch {
+      /* not listening yet */
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new Error(`The web server did not become ready within ${DAEMON_START_TIMEOUT_MS / 1_000} seconds.`);
+}
+
+/** Stops the tracked web process; only a verified Ranite web child is signalled. */
+export async function stopWebProcess(): Promise<boolean> {
+  const path = webPidPath();
+  const record = readWebPidRecord();
+  if (!record) return false;
+  const liveCommand = await readProcessCommandLine(record.pid);
+  const isRaniteWeb = Boolean(liveCommand && /\bweb\b/.test(liveCommand) && /cli\.(?:js|ts)/.test(liveCommand));
+  if (!isRaniteWeb) return false;
+  try {
+    process.kill(record.pid, 'SIGTERM');
+  } catch {
+    /* already gone */
+  }
+  if (!(await waitForProcessExit(record.pid, 5_000))) {
+    try {
+      process.kill(record.pid, 'SIGKILL');
+    } catch {
+      /* already gone */
+    }
+    await waitForProcessExit(record.pid, 5_000);
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* already removed */
+  }
+  return true;
+}
+
+/** The tracked web process, pruned when it is no longer alive. */
+export function webProcessStatus(): WebPidRecord | null {
+  return readWebPidRecord();
+}
+
 /** Internal child-process entry point for `ranite daemon run`. */
 export async function runDaemonProcess(): Promise<void> {
   const startLock = await acquireDaemonStartLock();

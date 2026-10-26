@@ -5,7 +5,7 @@ import type { Parsed } from './args.js';
 import { hostVintageMismatchWarning, requireBackgroundHost } from '../daemon.js';
 import { DEFAULT_WEB_HOST, DEFAULT_WEB_PORT, startWebServer, type WebServer } from '../web/server.js';
 
-function readPort(parsed: Parsed): number {
+export function readPort(parsed: Parsed): number {
   const raw = parsed.flags.get('port');
   if (!raw) return DEFAULT_WEB_PORT;
   const port = Number(raw);

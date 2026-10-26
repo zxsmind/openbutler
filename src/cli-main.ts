@@ -19,7 +19,10 @@ import {
   restartDaemon,
   runDaemonProcess,
   startDaemon,
+  startWebProcess,
   stopDaemon,
+  stopWebProcess,
+  webProcessStatus,
 } from './daemon.js';
 import {
   autostartDescription,
@@ -84,7 +87,10 @@ function usage(): void {
       'ranite permissions [workspace|auto-review|full-access]',
       'Choose the tool approval mode; --review-timeout <seconds> tunes auto-review.',
     ],
-    ['ranite daemon', 'Start, inspect, stop, or toggle automatic startup of the background host.'],
+    [
+      'ranite daemon',
+      'Start, inspect, stop, or toggle automatic startup of the background host; start --web also opens the browser client.',
+    ],
     ['ranite usage', 'Show recorded token use and cost: --days, --session, --model, --json.'],
     ['ranite logs', 'Read the machine log: --lines, --level, --event, --json.'],
     ['ranite stop', 'Stop the background host.'],
@@ -1511,7 +1517,7 @@ async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Pr
   }
 }
 
-async function runDaemonCommand(action: string, sub?: string): Promise<void> {
+async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): Promise<void> {
   if (action === 'run') {
     await runDaemonProcess();
     return;
@@ -1562,6 +1568,15 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     ui.kv('Workspaces', String(status.workspaceCount));
     if (status.entry) ui.kv('Host entry', `${status.entry} (${hostVintage(status.entry)})`);
     ui.info('It stays alive after this terminal closes. Stop it with `ranite daemon stop`.');
+    const wantsWeb = parsed?.booleans.has('web') === true || parsed?.flags.get('web') === 'true';
+    if (wantsWeb && parsed) {
+      const { DEFAULT_WEB_HOST } = await import('./web/server.js');
+      const { readPort } = await import('./cli/web.js');
+      const port = readPort(parsed);
+      const host = parsed.flags.get('hostname') ?? DEFAULT_WEB_HOST;
+      const web = await startWebProcess(process.argv[1], port, host);
+      ui.success(`Web server running (pid ${web.pid}) at http://${host}:${web.port}`);
+    }
     return;
   }
   if (action === 'status') {
@@ -1580,6 +1595,8 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     ui.kv('Workspaces', String(status.workspaceCount));
     if (status.entry) ui.kv('Host entry', `${status.entry} (${hostVintage(status.entry)})`);
     ui.kv('Connected clients', String(status.connectedClients));
+    const webStatus = webProcessStatus();
+    if (webStatus) ui.kv('Web server', `pid ${webStatus.pid} (port ${webStatus.port})`);
     ui.kv('Schedules', String(status.schedules ?? 0));
     if (status.telegram) ui.kv('Telegram', `${status.telegram.state}${status.telegram.paired ? ' / paired' : ''}`);
     if (status.legacy) ui.warn('This host uses an older protocol. Stop it before attaching with this Ranite version.');
@@ -1587,11 +1604,15 @@ async function runDaemonCommand(action: string, sub?: string): Promise<void> {
     return;
   }
   if (action === 'stop') {
+    const webStopped = await stopWebProcess();
     if (await stopDaemon()) ui.success('Background host stopped.');
     else ui.info('Background host is not running.');
+    if (webStopped) ui.success('Web server stopped.');
     return;
   }
-  throw new Error('Usage: ranite daemon [start|status|stop|install|uninstall|autostart [on|off|status]|autostart-status]');
+  throw new Error(
+    'Usage: ranite daemon [start [--web [--port N]]|status|stop|install|uninstall|autostart [on|off|status]|autostart-status]',
+  );
 }
 
 async function main(): Promise<void> {
@@ -1670,11 +1691,11 @@ async function main(): Promise<void> {
       return;
     }
     case 'daemon': {
-      await runDaemonCommand(parsed.words[0] ?? 'status', parsed.words[1]);
+      await runDaemonCommand(parsed.words[0] ?? 'status', parsed.words[1], parsed);
       return;
     }
     case 'stop': {
-      await runDaemonCommand('stop');
+      await runDaemonCommand('stop', undefined, parsed);
       return;
     }
     case 'restart': {
