@@ -72,7 +72,14 @@ import {
   type WorkerNoteKind,
 } from './worker-records.js';
 import { TelegramAdapter, TelegramApiError, splitTelegramText } from './telegram.js';
-import { resolveApprovalFanout, resolveOwnerNotificationRoute, type OwnerInboxMessage, type OwnerReplyRoute } from './communication.js';
+import {
+  LOCAL_CLIENT_KINDS,
+  resolveApprovalFanout,
+  resolveOwnerNotificationRoute,
+  type LocalClientKind,
+  type OwnerInboxMessage,
+  type OwnerReplyRoute,
+} from './communication.js';
 import { TELEGRAM_SETUP_TEST_MESSAGE } from './telegram-setup.js';
 import { isToolRequestWhitelisted } from './tool-permissions.js';
 import { selectIdleWorkspacesToEvict, type IdleWorkspaceCandidate } from './workspace-eviction.js';
@@ -166,6 +173,9 @@ interface PrivateSessionHost {
 }
 
 interface ClientAttachment {
+  /** A fixed chat binding; changing the visible chat opens another attachment. */
+  interactive?: boolean;
+  clientKind: LocalClientKind;
   workspace: WorkspaceHost;
   controller: AgentSessionController;
   privateSessionId: string | null;
@@ -201,6 +211,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   const ledger = new ActivityLedger();
   const workspaces = new Map<string, WorkspaceHost>();
   const workspaceLoads = new Map<string, Promise<WorkspaceHost>>();
+  const chatLoads = new Map<string, Promise<WorkspaceHost>>();
   const sockets = new Set<Socket>();
   const attachments = new Map<Socket, ClientAttachment>();
   const custodianRoot = getDataPath('custodian');
@@ -913,13 +924,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     await telegram?.close();
     for (const socket of sockets) socket.destroy();
     sockets.clear();
-    for (const workspace of workspaces.values()) {
-      workspace.controller.stop({ preserveWakePolicy: true });
-      for (const session of workspace.privateSessions.values()) session.controller.stop({ preserveWakePolicy: true });
-    }
-    custodianWorkspace?.controller.stop({ preserveWakePolicy: true });
     stopWatchingSettingsFiles();
-    await Promise.allSettled([...workspaceLoads.values(), ...(custodianLoading ? [custodianLoading] : [])]);
+    await Promise.allSettled([...workspaceLoads.values(), ...chatLoads.values(), ...(custodianLoading ? [custodianLoading] : [])]);
     try {
       if (custodianWorkspace) {
         custodianWorkspace.unsubscribe();
@@ -1033,6 +1039,35 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     });
     workspaces.set(key, workspace);
     return workspace;
+  }
+
+  async function openChat(
+    scopeRoot: string,
+    sessionId?: string,
+    projectId?: string | null,
+  ): Promise<{ workspace: WorkspaceHost; controller: AgentSessionController; privateSessionId: string | null }> {
+    if (closing) throw new Error('Ranite host is shutting down.');
+    const live = sessionId ? findLiveSessionById(sessionId) : null;
+    if (live) {
+      const privateSessionId = live.main
+        ? null
+        : ([...live.workspace.privateSessions].find(([, session]) => session.controller === live.controller)?.[0] ?? null);
+      return { workspace: live.workspace, controller: live.controller, privateSessionId };
+    }
+    const key = `chat:${sessionId ?? randomUUID()}`;
+    let pending = chatLoads.get(key);
+    if (!pending) {
+      const saved = sessionId ? loadSavedSession(sessionId, null) : null;
+      if (sessionId && !saved) throw new Error('Chat not found.');
+      pending = createWorkspace(scopeRoot, key, { saved, ...(projectId !== undefined ? { projectId } : {}) });
+      chatLoads.set(key, pending);
+    }
+    try {
+      const workspace = await pending;
+      return { workspace, controller: workspace.controller, privateSessionId: null };
+    } finally {
+      if (chatLoads.get(key) === pending) chatLoads.delete(key);
+    }
   }
 
   async function getCustodianWorkspace(scopeRoot: string): Promise<WorkspaceHost> {
@@ -3068,12 +3103,58 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return;
       }
       if (request.action === 'attach') {
+        if (request.clientKind !== undefined && !LOCAL_CLIENT_KINDS.some((kind) => kind === request.clientKind))
+          throw new Error('clientKind must be terminal or web.');
+        const clientKind = request.clientKind === 'web' ? 'web' : 'terminal';
         const path = requireString(request.workspaceRoot, 'workspaceRoot', MAX_WORKSPACE_PATH_BYTES);
         if (!isAbsolute(path)) throw new Error('workspaceRoot must be an absolute path.');
         if (request.custodian !== undefined && typeof request.custodian !== 'boolean') throw new Error('custodian must be a boolean.');
         if (request.isolatedSession !== undefined && typeof request.isolatedSession !== 'boolean')
           throw new Error('isolatedSession must be a boolean.');
         const scopeRoot = canonicalWorkspaceRoot(path);
+        if (request.chatSessionId !== undefined || request.newChatSession !== undefined) {
+          if (request.newChatSession !== undefined && request.newChatSession !== true) throw new Error('newChatSession must be true.');
+          if (request.chatSessionId !== undefined && request.newChatSession === true)
+            throw new Error('Choose an existing chat or a new chat.');
+          if (
+            request.custodian !== undefined ||
+            request.isolatedSession !== undefined ||
+            request.scheduleId !== undefined ||
+            request.workerSessionId !== undefined ||
+            request.runningWorkerOf !== undefined
+          )
+            throw new Error('A chat attachment cannot also select a custodian, worker, or background session.');
+          if (request.projectId !== undefined && request.projectId !== null && typeof request.projectId !== 'string')
+            throw new Error('Invalid project ID.');
+          const targetId = request.chatSessionId === undefined ? undefined : requireString(request.chatSessionId, 'chatSessionId', 64);
+          const target = await openChat(scopeRoot, targetId, request.projectId as string | null | undefined);
+          if (socket.destroyed) return;
+          const prior = attachments.get(socket);
+          if (prior) detachClient(prior, socket);
+          const privateSession = target.privateSessionId ? target.workspace.privateSessions.get(target.privateSessionId) : null;
+          if (privateSession) {
+            if (privateSession.cleanupTimer) clearTimeout(privateSession.cleanupTimer);
+            privateSession.cleanupTimer = null;
+            privateSession.clients.add(socket);
+          } else target.workspace.clients.add(socket);
+          target.workspace.lastActivityAt = Date.now();
+          attachments.set(socket, {
+            ...target,
+            clientKind,
+            scopeRoot,
+            interactive: true,
+            ...(workers.has(target.controller.getSnapshot().session.id) ? { readOnly: true } : {}),
+          });
+          writeResponse(socket, request.id, true, {
+            sessionAttachments: true,
+            workspaceKey: target.workspace.root,
+            clientKind,
+            snapshot: toSnapshotData(target.controller.getSnapshot()),
+            runtime: toRuntimeView(target.controller.runtime),
+            savedSessions: target.controller.listSessions(),
+          } satisfies AttachResult);
+          return;
+        }
         const legacyCustodian =
           request.custodian === undefined &&
           request.isolatedSession !== true &&
@@ -3126,6 +3207,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         if (privateSession) privateSession.clients.add(socket);
         else workspace.clients.add(socket);
         attachments.set(socket, {
+          clientKind,
           workspace,
           controller,
           privateSessionId: privateMapId,
@@ -3135,6 +3217,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           ...(readOnly ? { readOnly: true } : {}),
         });
         const result: AttachResult = {
+          sessionAttachments: true,
+          clientKind,
           snapshot: toSnapshotData(controller.getSnapshot()),
           runtime: toRuntimeView(workspace.runtime, scopeRoot),
           savedSessions: controller.listSessions(),
@@ -3169,8 +3253,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           const parsedMessage = parseQueuedMessage(request.message);
           const message: QueuedMessage = {
             ...parsedMessage,
-            communication: { source: 'terminal', replyTo: { channel: 'terminal' } },
-            ...(attachment.custodian ? { workspaceRoot: attachment.scopeRoot } : {}),
+            communication: { source: attachment.clientKind, replyTo: { channel: 'terminal' } },
+            ...(attachment.custodian || attachment.interactive ? { workspaceRoot: attachment.scopeRoot } : {}),
           };
           const preferences = parsePreferences(request.preferences);
           void controller.sendMessage(message, preferences).catch((error: unknown) => {
@@ -3264,6 +3348,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
               session.clients.add(socket);
             } else targetWorkspace.clients.add(socket);
             attachments.set(socket, {
+              clientKind: attachment.clientKind,
               workspace: targetWorkspace,
               controller: activeController,
               privateSessionId: activePrivate?.[0] ?? null,
@@ -3473,6 +3558,7 @@ function stripConversation(
 
 function toRuntimeView(runtime: AgentEnvironment, workspaceRoot = runtime.workspaceRoot): RuntimeViewData {
   return {
+    supportsSessionAttachments: true,
     supportsProjects: Boolean(runtime.selectWorkspaceRoot),
     workspaceRoot,
     modelName: runtime.modelName,
