@@ -398,6 +398,30 @@ export function rememberProviderModel(settings: SettingsStore, providerId: strin
   provider.models = [...(provider.models ?? []), normalized];
 }
 
+/** Creates or extends one provider entry; the schema owns the field list (withProviderFields). */
+export function upsertProvider(settings: SettingsStore, id: string, patch: Partial<ProviderState>): ProviderState {
+  const next = withProviderFields(settings.providers[id], patch);
+  settings.providers[id] = next;
+  if (!settings.providerOrder.includes(id)) settings.providerOrder.push(id);
+  return next;
+}
+
+/**
+ * Removes a provider's settings entry, its order slot, and a default that named
+ * it. The next save rebuilds the secret store without it, so its keys go too:
+ * removing a provider removes its credentials with it.
+ */
+export function removeProvider(settings: SettingsStore, id: string): boolean {
+  if (!(id in settings.providers)) return false;
+  delete settings.providers[id];
+  settings.providerOrder = settings.providerOrder.filter((entry) => entry !== id);
+  if (settings.defaultProvider === id) {
+    settings.defaultProvider = '';
+    settings.defaultModel = '';
+  }
+  return true;
+}
+
 export function defaultSettings(): SettingsStore {
   return {
     providers: {},

@@ -1,9 +1,12 @@
-import { withProviderFields, rememberProviderModel, saveSettings, type ProviderState, type SettingsStore } from '../settings.js';
+import { rememberProviderModel, saveSettings, type SettingsStore } from '../settings.js';
 import { listToolCapableModels } from '../provider/registry.js';
 import { isCatalogLoaded } from '../provider/catalog.js';
 import { providerIsConfigured } from '../provider/registry.js';
 
 export { defaultModelIsUsable } from '../provider/registry.js';
+// Settings mutations live beside the settings they mutate; re-exported so the
+// interactive command surface keeps one import site.
+export { removeProvider, upsertProvider } from '../settings.js';
 
 /**
  * Mutations for the interactive `ranite config` command.
@@ -59,26 +62,6 @@ export function summarizeProviders(settings: SettingsStore): ProviderSummary[] {
       url: state.url ?? '',
     };
   });
-}
-
-export function upsertProvider(settings: SettingsStore, id: string, patch: Partial<ProviderState>): ProviderState {
-  // The schema owns the field list; see withProviderFields for why the caller
-  // must not enumerate it here.
-  const next = withProviderFields(settings.providers[id], patch);
-  settings.providers[id] = next;
-  if (!settings.providerOrder.includes(id)) settings.providerOrder.push(id);
-  return next;
-}
-
-export function removeProvider(settings: SettingsStore, id: string): boolean {
-  if (!(id in settings.providers)) return false;
-  delete settings.providers[id];
-  settings.providerOrder = settings.providerOrder.filter((entry) => entry !== id);
-  if (settings.defaultProvider === id) {
-    settings.defaultProvider = '';
-    settings.defaultModel = '';
-  }
-  return true;
 }
 
 /**

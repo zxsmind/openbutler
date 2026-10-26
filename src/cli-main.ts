@@ -503,8 +503,15 @@ async function runListModels(parsed: Parsed): Promise<void> {
   }
   await getCatalogIndex();
   const rows = parsed.flags.has('provider') ? [parsed.flags.get('provider')!] : configured;
-  const models = listToolCapableModels(rows, settings.providers);
-  ui.section(`Models that can call tools (${models.length})`);
+  const catalogModels = listToolCapableModels(rows, settings.providers);
+  // A custom provider has no catalog list to offer; its saved model ids are the
+  // list. Shown beside catalog rows so an added model is never invisible.
+  const seen = new Set(catalogModels.map((entry) => `${entry.providerId}/${entry.model}`));
+  const customModels = rows
+    .flatMap((providerId) => (settings.providers[providerId]?.models ?? []).map((model) => ({ providerId, model })))
+    .filter((entry) => !seen.has(`${entry.providerId}/${entry.model}`));
+  const models = [...catalogModels, ...customModels];
+  ui.section(`Models that can call tools (${catalogModels.length}) plus ${customModels.length} saved custom model(s)`);
 
   const filter = (parsed.flags.get('filter') ?? '').toLowerCase();
   const shown = filter ? models.filter((entry) => `${entry.providerId}/${entry.model}`.toLowerCase().includes(filter)) : models;
@@ -1247,7 +1254,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
   }
   ui.info('Done. Message the bot any time; it shares one thread with this terminal.');
   ui.info(
-    'In the chat: /approvals re-sends pending approvals, /stop stops the current run, /clear starts a new chat, /sessions lists the last 10 chats.',
+    'In the chat: /approvals re-sends pending approvals, /stop stops the current run, /clear starts a new chat, /sessions lists the last 10 chats, /provider adds or checks a provider.',
   );
 }
 

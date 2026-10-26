@@ -23,6 +23,7 @@ import { ensureHostOwnedRoots } from './host-owned-paths.js';
 import { consumeApproval, recordDeniedAction } from './review-overrides.js';
 import type { ReasoningSupport, ReasoningVariant } from './provider/registry.js';
 import { geminiToolSchemaSanitizer } from './provider/gemini-schema.js';
+import { isProviderCommand, runProviderCommand } from './provider/provider-command.js';
 import { loadSettings, type ApprovalMode } from './settings.js';
 import { autoReviewFingerprint, reviewToolRequest, type AutoReviewOptions, type AutoReviewResult } from './auto-review.js';
 import type { ToolApprovalOutcome, ToolCallRequest, ToolRegistry, ToolUserQuestion } from './tools/registry.js';
@@ -1235,6 +1236,12 @@ export class AgentSessionController implements AgentSessionClient {
     if (!automatic && this.automaticWakeHeld) {
       this.session = { ...this.session, automaticWakeHeld: false };
       if (this.options.onAutomaticWakeReady) queueMicrotask(this.options.onAutomaticWakeReady);
+    }
+    // `/provider ...` is host configuration, not chat: consumed here so every
+    // channel behaves the same and the model never interprets it. A message
+    // carrying images is left alone; attachments must not vanish silently.
+    if (message.images.length === 0 && isProviderCommand(message.text)) {
+      return runProviderCommand(message.text).then((outcome) => this.addNotice(outcome.notice, outcome.tone));
     }
     if (message.images.length > 0) {
       message = {

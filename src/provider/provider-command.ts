@@ -1,0 +1,219 @@
+/**
+ * The `/provider` chat command: add, list, check, and remove providers from any
+ * channel that can reach the session (terminal, web, Telegram), without the
+ * agent interpreting the text. The terminal UI keeps its interactive picker for
+ * a bare `/provider`; this module owns the argument form the host consumes.
+ *
+ * Nothing here ever prints key material: lists and checks report counts only,
+ * and `remove` touches settings, never the secret store.
+ */
+import { loadSettings, rememberProviderModel, removeProvider, saveSettings, upsertProvider, type SettingsStore } from '../settings.js';
+import { getCatalogIndex, getProvider, isCatalogLoaded } from './catalog.js';
+import { createLanguageModel, listSupportedPackages, providerIsConfigured } from './registry.js';
+
+export interface ProviderCommandOutcome {
+  notice: string;
+  tone: 'info' | 'warn' | 'error';
+}
+
+const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const DEFAULT_NPM = '@ai-sdk/openai-compatible';
+
+const USAGE = [
+  'Usage:',
+  '/provider add <id> --url <endpoint> [--npm <package>] [--model <id>]...  add or extend a custom provider',
+  '/provider list  configured providers, their models, and key counts (never key values)',
+  '/provider check <id>[/<model>] [--ping]  build the model; --ping also sends one tiny request',
+  '/provider remove <id>  drop its settings; keys stay until `ranite keys remove <id>`',
+].join('\n');
+
+export function isProviderCommand(text: string): boolean {
+  return /^\/provider(?:\s|$)/.test(text.trim());
+}
+
+/** Splits a command line on whitespace, keeping double- or single-quoted runs intact. */
+function tokenize(text: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  for (const char of text) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) tokens.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function fail(notice: string): ProviderCommandOutcome {
+  return { notice, tone: 'error' };
+}
+
+function providerLine(id: string, settings: SettingsStore): string {
+  const state = settings.providers[id];
+  if (!state) return `${id}: not found`;
+  const custom = Boolean(state.npm) || Boolean(state.url);
+  const configured = providerIsConfigured(id, state);
+  const models = state.models?.length ? state.models.join(', ') : '(no model)';
+  const parts = [
+    `${id}${custom ? ' [custom]' : ''}${state.enabled ? '' : ' [disabled]'}`,
+    configured ? 'ready' : 'needs a key',
+    `models: ${models}`,
+    `keys: ${state.keys.length}`,
+  ];
+  if (state.url) parts.push(state.url);
+  if (settings.defaultProvider === id) parts.push(`default: ${settings.defaultModel || '(unset)'}`);
+  return parts.join(' — ');
+}
+
+async function addProvider(settings: SettingsStore, tokens: string[]): Promise<ProviderCommandOutcome> {
+  const id = tokens[2];
+  if (!id || !PROVIDER_ID.test(id)) return fail('Add needs a provider id: /provider add <id> --url <endpoint> --model <id>');
+  let url: string | undefined;
+  let npm: string | undefined;
+  const models: string[] = [];
+  for (let index = 3; index < tokens.length; index += 1) {
+    const flag = tokens[index];
+    const value = tokens[index + 1];
+    if (flag === '--url' || flag === '--npm' || flag === '--model') {
+      if (!value || value.startsWith('--')) return fail(`${flag} needs a value.`);
+      index += 1;
+      if (flag === '--url') url = value;
+      else if (flag === '--npm') npm = value;
+      else models.push(value);
+      continue;
+    }
+    return fail(`Unknown option: ${flag}\n${USAGE}`);
+  }
+  if (!url) return fail(`Add needs an endpoint: --url <endpoint> (no /chat/completions suffix; the runtime adds it).\n${USAGE}`);
+  if (!/^https?:\/\//.test(url)) return fail('The endpoint must be an http(s) URL.');
+  if (models.length === 0) return fail('Add at least one model: --model <id>');
+
+  const runtime = npm ?? DEFAULT_NPM;
+  upsertProvider(settings, id, { enabled: true, url, npm: runtime });
+  for (const model of models) rememberProviderModel(settings, id, model);
+  saveSettings(settings);
+
+  const known = listSupportedPackages().includes(runtime);
+  const notes = [
+    `Added ${id}: ${url} via ${runtime}`,
+    `models: ${models.join(', ')}`,
+    known ? undefined : 'The runtime package is not bundled; it installs on first use.',
+    'Keys (if the endpoint wants one) live outside settings: ranite keys add ' + id,
+  ].filter(Boolean);
+  return { notice: notes.join('\n'), tone: 'info' };
+}
+
+function listProviders(settings: SettingsStore): ProviderCommandOutcome {
+  const ids = [...settings.providerOrder, ...Object.keys(settings.providers)].filter(
+    (id, index, all) => id in settings.providers && all.indexOf(id) === index,
+  );
+  if (ids.length === 0) return { notice: 'No providers yet. Add one: /provider add <id> --url <endpoint> --model <id>', tone: 'warn' };
+  return { notice: ids.map((id) => providerLine(id, settings)).join('\n'), tone: 'info' };
+}
+
+async function checkProvider(settings: SettingsStore, tokens: string[], ping: boolean): Promise<ProviderCommandOutcome> {
+  const target = tokens[2];
+  if (!target) return fail('Check needs a provider: /provider check <id>[/<model>] [--ping]');
+  const [id, explicitModel] = target.split('/');
+  const state = settings.providers[id];
+  if (!state) return fail(`${id} is not configured. Add it first: /provider add ${id} --url <endpoint> --model <id>`);
+  const modelId = explicitModel ?? state.models?.[0];
+  if (!modelId) return fail(`${id} has no model. Add one: /provider add ${id} --url ${state.url ?? '<endpoint>'} --model <id>`);
+
+  const notes: string[] = [`${id} / ${modelId}${state.enabled ? '' : ' (disabled)'}`];
+  // Custom endpoints build from settings alone; only a catalog provider needs
+  // the models.dev index, fetched here (and tolerated offline).
+  if (!state.npm && !state.url) {
+    try {
+      await getCatalogIndex();
+    } catch {
+      // Offline degrades the catalog check below; the build still reports truth.
+    }
+  }
+  if (isCatalogLoaded() && !getProvider(id) && !state.npm && !state.url) {
+    return fail(`${id} has no runtime package and no endpoint, so no model can be built for it.`);
+  }
+  if (!state.keys.length && Object.keys(state.options ?? {}).length === 0 && !state.npm) {
+    notes.push('No credential yet: ranite keys add ' + id);
+  }
+
+  const built = await createLanguageModel(id, modelId, state);
+  if (!built.ok) return fail(`${id} / ${modelId} cannot be built: ${built.error.reason}`);
+  notes.push(`build ok${state.npm || state.url ? '' : ' (catalog provider)'}`);
+  if (!ping) {
+    notes.push('Add --ping to send one tiny request.');
+    return { notice: notes.join('\n'), tone: 'info' };
+  }
+  const model = built.model;
+  if (typeof model === 'string') return fail(`${id} / ${modelId} resolved to a model id, not a model instance.`);
+
+  const startedAt = Date.now();
+  try {
+    const result = await model.doGenerate({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK only.' }] }],
+      maxOutputTokens: 64,
+    });
+    const usage = result.usage;
+    // reasoningTokens exists on the current usage shape; the union also carries
+    // the older shape, so read it defensively.
+    const reasoning = (usage as { reasoningTokens?: number }).reasoningTokens;
+    const usageBits = [
+      `in ${usage.inputTokens ?? '?'}`,
+      `out ${usage.outputTokens ?? '?'}`,
+      ...(reasoning ? [`reasoning ${reasoning}`] : []),
+    ].join(' / ');
+    notes.push(`ping ok in ${Date.now() - startedAt}ms — ${usageBits}`);
+    return { notice: notes.join('\n'), tone: 'info' };
+  } catch (error) {
+    const status =
+      typeof (error as { statusCode?: unknown })?.statusCode === 'number' ? ` (${(error as { statusCode: number }).statusCode})` : '';
+    notes.push(`ping failed${status} in ${Date.now() - startedAt}ms — ${error instanceof Error ? error.message : String(error)}`);
+    return { notice: notes.join('\n'), tone: 'error' };
+  }
+}
+
+function removeProviderCommand(settings: SettingsStore, tokens: string[]): ProviderCommandOutcome {
+  const id = tokens[2];
+  if (!id || !PROVIDER_ID.test(id)) return fail('Remove needs a provider id: /provider remove <id>');
+  const state = settings.providers[id];
+  if (!state) return fail(`${id} is not configured.`);
+  const keyCount = state.keys.length;
+  removeProvider(settings, id);
+  // saveSettings rebuilds the secret store from memory, so the removed provider's
+  // keys go with it — that is this command's contract, and the notice says so
+  // instead of leaving a silent credential behind (a keys-only entry would also
+  // re-enter settings on the next load).
+  saveSettings(settings);
+  const notes = [`Removed ${id} from settings.`];
+  if (keyCount > 0) notes.push(`Also cleared ${keyCount} key(s) from the secret store.`);
+  return { notice: notes.join('\n'), tone: 'info' };
+}
+
+/** Runs one `/provider ...` line and returns the notice the session should show. */
+export async function runProviderCommand(text: string): Promise<ProviderCommandOutcome> {
+  try {
+    const tokens = tokenize(text.trim());
+    const action = tokens[1];
+    const settings = loadSettings();
+    if (action === 'add') return await addProvider(settings, tokens);
+    if (action === 'list') return listProviders(settings);
+    if (action === 'check') return await checkProvider(settings, tokens, tokens.includes('--ping'));
+    if (action === 'remove') return removeProviderCommand(settings, tokens);
+    return { notice: action ? `Unknown /provider action: ${action}\n${USAGE}` : USAGE, tone: action ? 'error' : 'warn' };
+  } catch (error) {
+    return fail(`The provider command failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
