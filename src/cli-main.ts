@@ -15,6 +15,7 @@ import {
   hostVintage,
   hostVintageMismatchWarning,
   requestHost,
+  requireBackgroundHost,
   restartDaemon,
   runDaemonProcess,
   startDaemon,
@@ -629,8 +630,8 @@ async function defaultModelReady(): Promise<boolean> {
 async function runQuestion(question: string, workspaceRoot: string): Promise<void> {
   if (!(await defaultModelReady())) throw new Error('Configure a default model first: ranite setup');
 
-  const hostStatus = await startDaemon();
-  const vintageWarning = hostVintageMismatchWarning(process.argv[1], hostStatus?.entry);
+  const hostStatus = await requireBackgroundHost();
+  const vintageWarning = hostVintageMismatchWarning(process.argv[1], hostStatus.entry);
   if (vintageWarning) ui.warn(vintageWarning);
   const controller = await connectDaemonSession(workspaceRoot, { isolatedSession: true });
   const runtime = controller.runtime;
@@ -770,24 +771,10 @@ async function runSession(workspaceRoot: string): Promise<void> {
   }
 
   ui.kv('Workspace', workspaceRoot);
-  const alreadyRunning = await getDaemonStatus();
-  if (alreadyRunning && !alreadyRunning.legacy && !alreadyRunning.unresponsive) {
-    ui.info(`Background host running (pid ${alreadyRunning.pid}).`);
-  } else {
-    const starting = ui.spinner({ text: 'Starting background host…', discardStdin: false }).start();
-    try {
-      const status = await startDaemon();
-      starting.succeed(`Background host ready (pid ${status.pid}).`);
-    } catch (error) {
-      starting.fail('Background host failed to start.');
-      throw error;
-    }
-  }
-  {
-    const hostStatus = await getDaemonStatus();
-    const warning = hostVintageMismatchWarning(process.argv[1], hostStatus?.entry);
-    if (warning) ui.warn(warning);
-  }
+  const hostStatus = await requireBackgroundHost();
+  ui.info(`Background host running (pid ${hostStatus.pid}).`);
+  const warning = hostVintageMismatchWarning(process.argv[1], hostStatus.entry);
+  if (warning) ui.warn(warning);
   ui.kv(
     'Automatic startup',
     isAutostartInstalled() ? `installed (${autostartDescription()})` : 'not installed (enable with `ranite daemon autostart on`)',
@@ -1016,7 +1003,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
   if (action === 'log') {
     const scheduleId = parsed.words[1];
     if (!scheduleId) throw new Error('Usage: ranite schedule log <id>');
-    await startDaemon();
+    await requireBackgroundHost();
     const result = (await requestHost('schedule.manage', {
       input: { action: 'log', scheduleId },
     })) as {
@@ -1042,7 +1029,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
     const id = parsed.words[1];
     const schedule = schedules.find((candidate) => candidate.id === id);
     if (!schedule) throw new Error('Schedule does not exist.');
-    await startDaemon();
+    await requireBackgroundHost();
     const client = await connectDaemonSession(schedule.workspaceRoot, { scheduleId: schedule.id });
     try {
       const { runTerminalSession } = await import('./cli/terminal-session.js');
@@ -1083,7 +1070,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
     commandWorkspaceRoot = resolveWorkspace(chosenRoot);
     input.schedule = { ...scheduleRecord, workspaceRoot: commandWorkspaceRoot };
   }
-  await startDaemon();
+  await requireBackgroundHost();
   const result = (await requestHost('schedule.manage', {
     input,
     ...(commandWorkspaceRoot ? { workspaceRoot: commandWorkspaceRoot } : {}),
@@ -1203,11 +1190,8 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
   }
 
   let tg: TelegramStatus | null;
-  if (!(await getDaemonStatus())) {
-    await startDaemon();
-  } else {
-    await requestHost('settings.reload');
-  }
+  await requireBackgroundHost();
+  await requestHost('settings.reload');
   tg = await settledTelegramState();
   if (tg?.error && /missing in the host process/.test(tg.error)) {
     let restart = process.stdin.isTTY !== true;
@@ -1369,7 +1353,7 @@ async function runTelegram(parsed: Parsed): Promise<void> {
   }
   if (action === 'pair') {
     if (!loadSettings().telegram?.enabled) throw new Error('Configure Telegram first: ranite telegram setup');
-    await startDaemon();
+    await requireBackgroundHost();
     await requestHost('settings.reload');
     const result = (await requestHost('telegram.pair')) as { code: string; expiresAt: string; username: string | null };
     ui.info('Open your bot and send this one-time pairing command:');
@@ -1508,7 +1492,7 @@ async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Pr
   if (kind === 'events' && parsed.words[0] === 'retry') {
     const eventId = parsed.words[1];
     if (!eventId) throw new Error('Provide an event id to retry.');
-    await startDaemon();
+    await requireBackgroundHost();
     ui.line(JSON.stringify(await requestHost('events.retry', { eventId }), null, 2));
     return;
   }

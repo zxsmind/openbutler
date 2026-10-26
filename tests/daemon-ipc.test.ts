@@ -743,12 +743,6 @@ describe('shared host and session IPC', () => {
   });
 
   it('reattaches the existing client and restores its saved session after an unexpected host disconnect', async () => {
-    daemonStart.run.mockResolvedValue({
-      pid: 9001,
-      startedAt: new Date().toISOString(),
-      workspaceCount: 0,
-      connectedClients: 0,
-    });
     const attached = await client();
     const sessionId = attached.getSnapshot().session.id;
     await attached.sendMessage({ text: 'Persist this task before disconnect.', images: [] }, preferences);
@@ -773,7 +767,7 @@ describe('shared host and session IPC', () => {
       { timeout: 5_000, interval: 25 },
     );
     expect(attached.getSnapshot().session.id).toBe(sessionId);
-    expect(daemonStart.run).toHaveBeenCalledWith();
+    expect(daemonStart.run).not.toHaveBeenCalled();
     expect(
       attached
         .getSnapshot()

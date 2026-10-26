@@ -106,6 +106,20 @@ export function hostVintageMismatchWarning(clientEntry: string | undefined | nul
   return `Code vintage mismatch: this client runs ${label(client)} but the background host runs ${label(host)}. Run \`ranite restart\` here to relaunch the host from this client.`;
 }
 
+/**
+ * A client attaches to a running host; only the daemon commands may start one.
+ * The friendly failure replaces the silent auto-start clients used to do, so the
+ * boot verb stays visible and its code vintage stays deliberate.
+ */
+export async function requireBackgroundHost(): Promise<DaemonStatus> {
+  const status = await getDaemonStatus();
+  if (!status) throw new Error('The background host is not running. Start it with `ranite daemon start`.');
+  if (status.legacy) throw new Error('An older Ranite host is still running. Stop it with `ranite daemon stop`, then start Ranite again.');
+  if (status.unresponsive)
+    throw new Error(`The background host process ${status.pid} does not answer IPC health checks. Recover it with \`ranite restart\`.`);
+  return status;
+}
+
 export async function requestHost(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
   const response = await requestDaemon(action, payload, 45_000);
   if (!response.ok) throw new Error(response.error ?? 'Ranite host request failed.');

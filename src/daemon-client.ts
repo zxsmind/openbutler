@@ -12,7 +12,7 @@ import type {
   ApprovalDecision,
   QueuedMessage,
 } from './agent-session.js';
-import { getDaemonEndpoint, startDaemon } from './daemon.js';
+import { getDaemonEndpoint } from './daemon.js';
 import {
   DAEMON_PROTOCOL_VERSION,
   MAX_DAEMON_FRAME_BYTES,
@@ -500,7 +500,6 @@ class DaemonSessionClient implements AgentSessionClient {
     while (!this.closed && !this.intentionalShutdown) {
       let socket: Socket | null = null;
       try {
-        await startDaemon();
         socket = await connectSocket();
         if (this.closed || this.intentionalShutdown) {
           socket.destroy();
