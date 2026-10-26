@@ -80,11 +80,6 @@
   color: #96979a;
   font-size: inherit;
 }
-.project-selector__empty {
-  margin: 12px 10px;
-  color: #939498;
-  font-size: 12px;
-}
 .project-selector__actions {
   border-top: 1px solid #ececed;
   margin: 4px 7px 0;
@@ -244,11 +239,6 @@
   margin: 8px 0 0;
   font-size: 11px;
   color: #85868b;
-}
-.create-project__error {
-  margin: 10px 0 0;
-  color: #ad3636;
-  font-size: 12px;
 }
 .create-project__footer {
   display: flex;

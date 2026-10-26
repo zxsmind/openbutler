@@ -3,6 +3,7 @@ import { Dropdown, type DropdownItem } from '../components/selection/dropdown.js
 import { Icon } from '../components/icon.js';
 import { IconButton } from '../components/ui.js';
 import { ComposerRail } from '../components/composer-rail.js';
+import { Feedback } from '../components/feedback.js';
 import type { ProjectController } from './use-projects.js';
 import './projects.css';
 
@@ -50,9 +51,9 @@ export function ProjectSelector({ controller, onCreate }: { controller: ProjectC
         items.length
           ? undefined
           : () => (
-              <p className="project-selector__empty">
+              <Feedback layout="compact" tone={loading ? 'loading' : error ? 'error' : 'neutral'}>
                 {loading ? 'Loading projects…' : error ? 'Projects could not be loaded.' : query ? 'No project found.' : 'No projects yet.'}
-              </p>
+              </Feedback>
             )
       }
       footer={

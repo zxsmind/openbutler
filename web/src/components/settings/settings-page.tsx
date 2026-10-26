@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../icon.js';
+import { Feedback } from '../feedback.js';
 import './settings-page.css';
 
 export interface SettingsSectionDef {
@@ -79,11 +80,7 @@ export function SettingsView({
               </li>
             ))}
           </ul>
-          {matches.length === 0 ? (
-            <p className="settings-nav__empty" role="status">
-              No settings found.
-            </p>
-          ) : null}
+          {matches.length === 0 ? <Feedback layout="compact">No settings found.</Feedback> : null}
         </div>
         <button type="button" className="settings-nav__back" onClick={onClose}>
           <Icon name="arrow-left" size={16} /> Back to chat

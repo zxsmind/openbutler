@@ -131,35 +131,6 @@
   gap: 8px;
 }
 
-.settings-status {
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid #e9eaee;
-  border-radius: 12px;
-  background: #fafbfc;
-  color: #6d717a;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.settings-status--ok {
-  border-color: #d7e9df;
-  background: #f6fbf8;
-  color: #3d7a5c;
-}
-
-.settings-status--warn {
-  border-color: #f0e4cd;
-  background: #fffbf2;
-  color: #8a6a2b;
-}
-
-.settings-status--error {
-  border-color: #f2d9dd;
-  background: #fff7f8;
-  color: #a63a4b;
-}
-
 .settings-disclosure {
   border: 1px solid #e9eaee;
   border-radius: 14px;

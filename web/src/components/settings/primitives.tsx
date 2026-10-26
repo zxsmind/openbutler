@@ -5,6 +5,7 @@
  * sections share. Everything visual lives here so sections only describe data.
  */
 import type { ReactNode } from 'react';
+import { Feedback } from '../feedback.js';
 import './primitives.css';
 
 export function SettingsPage({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
@@ -88,11 +89,19 @@ export function SettingsDisclosure({ title, description, children }: { title: st
   );
 }
 
-export function SettingsStatus({ tone = 'muted', children }: { tone?: 'ok' | 'warn' | 'error' | 'muted'; children: ReactNode }) {
+export function SettingsStatus({
+  tone = 'muted',
+  children,
+  action,
+}: {
+  tone?: 'ok' | 'warn' | 'error' | 'muted';
+  children: ReactNode;
+  action?: { label: string; onClick: () => void };
+}) {
   return (
-    <p className={`settings-status settings-status--${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
+    <Feedback tone={tone === 'ok' ? 'success' : tone === 'muted' ? 'neutral' : tone === 'warn' ? 'warning' : 'error'} action={action}>
       {children}
-    </p>
+    </Feedback>
   );
 }
 

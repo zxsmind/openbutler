@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Feedback } from './feedback.js';
 import { Icon } from './icon.js';
 import type { ModelSelectionView } from '../model-selection.js';
 import type { ModelChoice } from '../types.js';
@@ -89,12 +90,9 @@ export function ModelSelector({
       }
       footer={
         error ? (
-          <div className="composer-model-selector__error" role="alert">
+          <Feedback tone="error" layout="compact" action={{ label: text.retry, onClick: onRetry }}>
             {error}
-            <button onClick={onRetry} type="button">
-              {text.retry}
-            </button>
-          </div>
+          </Feedback>
         ) : undefined
       }
       renderContent={
@@ -151,12 +149,12 @@ export function ModelSelector({
                   />
                 </div>
               ) : (
-                <div className="composer-model-selector__detail" role="status">
+                <Feedback layout="compact" tone="loading">
                   {text.loading}
-                </div>
+                </Feedback>
               )
           : items.length === 0
-            ? () => <div className="composer-model-selector__detail">{projection?.copy.empty}</div>
+            ? () => <Feedback layout="compact">{projection?.copy.empty}</Feedback>
             : undefined
       }
       renderTrigger={({ ref, open: expanded, toggle }) => {

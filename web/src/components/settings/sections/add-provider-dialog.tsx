@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { addProvider, fetchProviderCatalog } from '../../../api.js';
 import { Dialog } from '../../dialog.js';
 import { Icon } from '../../icon.js';
+import { Feedback } from '../../feedback.js';
 import { IconButton } from '../../ui.js';
 import type { ModelCatalogRow, ProviderCatalogRow } from '../../../types.js';
 import './models.css';
@@ -127,8 +128,16 @@ export function AddProviderDialog({
               onChange={(event) => setQuery(event.target.value)}
             />
             <div className="add-provider__list" role="listbox" aria-label="Providers">
-              {providers === null && !error ? <p className="add-provider__note">Loading providers…</p> : null}
-              {providers !== null && matches.length === 0 ? <p className="add-provider__note">No provider matches.</p> : null}
+              {providers === null && !error ? (
+                <Feedback layout="state" tone="loading">
+                  Loading providers…
+                </Feedback>
+              ) : null}
+              {providers !== null && matches.length === 0 ? (
+                <Feedback layout="state" title="No providers found">
+                  Try a different search.
+                </Feedback>
+              ) : null}
               {matches.map((row) => (
                 <button
                   key={row.providerId}
@@ -205,11 +214,7 @@ export function AddProviderDialog({
           />
         </label>
 
-        {error ? (
-          <p className="add-provider__error" role="alert">
-            {error}
-          </p>
-        ) : null}
+        {error ? <Feedback tone="error">{error}</Feedback> : null}
 
         <footer className="add-provider__footer">
           <button type="button" className="add-provider__cancel" onClick={onClose} disabled={pending}>

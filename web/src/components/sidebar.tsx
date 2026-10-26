@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Project, SessionInfo } from '../types.js';
 import { Button, Icon, IconButton } from './ui.js';
+import { Feedback } from './feedback.js';
 interface SidebarProps {
   inert?: boolean;
   sessions: SessionInfo[];
@@ -41,6 +42,7 @@ export function Sidebar(props: SidebarProps) {
       onClick={() => props.onSelect(session.id)}
     >
       <span className="session-name">{session.title || 'New chat'}</span>
+      {session.running ? <span className="session-running" role="img" aria-label="Agent running" title="Agent running" /> : null}
     </button>
   );
   return (
@@ -80,32 +82,32 @@ export function Sidebar(props: SidebarProps) {
             </Button>
           ) : null}
           {props.projectsLoading && !props.projects.length ? (
-            <p className="sidebar-message" role="status">
+            <Feedback tone="loading" layout="compact">
               Loading projects…
-            </p>
+            </Feedback>
           ) : null}
           {props.projectsError ? (
-            <p className="sidebar-message" role="alert">
-              Projects could not be loaded.<Button onClick={props.onRetryProjects}>Try again</Button>
-            </p>
+            <Feedback tone="error" layout="compact" action={{ label: 'Try again', onClick: props.onRetryProjects }}>
+              Projects could not be loaded.
+            </Feedback>
           ) : null}
           {!props.projectsLoading && !props.projectsError && !props.projects.length ? (
-            <p className="sidebar-message">No projects yet.</p>
+            <Feedback layout="compact">No projects yet.</Feedback>
           ) : null}
         </div>
         <h2 className="section-label recent-label">Recent</h2>
         <nav className="session-list" aria-label="Recent chats">
           {props.loading && !list.length ? (
-            <p className="sidebar-message" role="status">
+            <Feedback tone="loading" layout="compact">
               Loading chats…
-            </p>
+            </Feedback>
           ) : null}
           {props.error ? (
-            <div className="sidebar-message">
-              Chats could not be loaded.<Button onClick={props.onRetry}>Try again</Button>
-            </div>
+            <Feedback tone="error" layout="compact" action={{ label: 'Try again', onClick: props.onRetry }}>
+              Chats could not be loaded.
+            </Feedback>
           ) : null}
-          {!props.loading && !props.error && !list.length ? <p className="sidebar-message">No chats yet</p> : null}
+          {!props.loading && !props.error && !list.length ? <Feedback layout="compact">No chats yet.</Feedback> : null}
           {list.map((session) => chat(session))}
         </nav>
       </div>

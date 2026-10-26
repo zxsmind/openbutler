@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '../types.js';
 import { Icon, IconButton } from './ui.js';
+import { Feedback } from './feedback.js';
 export function SearchDialog({
   sessions,
   disabled,
@@ -75,7 +76,11 @@ export function SearchDialog({
               </span>
             </button>
           ))}
-          {!results.length ? <p className="sidebar-message">No chat found.</p> : null}
+          {!results.length ? (
+            <Feedback layout="state" title="No chats found">
+              Try a different search.
+            </Feedback>
+          ) : null}
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { pickProjectFolder, validateProjectFolder } from '../api.js';
 import { Dialog } from '../components/dialog.js';
 import { Icon } from '../components/icon.js';
 import { IconButton } from '../components/ui.js';
+import { Feedback } from '../components/feedback.js';
 import { Dropdown } from '../components/selection/dropdown.js';
 import type { ProjectController } from './use-projects.js';
 import './projects.css';
@@ -157,11 +158,7 @@ export function CreateProjectDialog({ controller, onClose }: { controller: Proje
         {folders.length > 1 ? (
           <p className="create-project__hint">Commands run in the first folder. The other folders also provide sources for the project.</p>
         ) : null}
-        {error ? (
-          <p className="create-project__error" role="alert">
-            {error}
-          </p>
-        ) : null}
+        {error ? <Feedback tone="error">{error}</Feedback> : null}
         <footer className="create-project__footer">
           <button type="button" className="create-project__cancel" onClick={close} disabled={pending || picking}>
             Cancel

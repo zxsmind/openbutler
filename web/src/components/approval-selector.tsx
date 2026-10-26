@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { ApprovalMode } from '../types.js';
 import { Dropdown } from './selection/dropdown.js';
 import { Icon } from './ui.js';
+import { Feedback } from './feedback.js';
 import './selection/tokens.css';
 
 const modes: Array<{ id: ApprovalMode; label: string; description: string }> = [
@@ -36,7 +37,13 @@ export function ApprovalSelector({
       itemSelectionMode="single"
       closeOnSelect={false}
       header={{ title: 'Safety and approval' }}
-      footer={error ? <span role="alert">{error}</span> : undefined}
+      footer={
+        error ? (
+          <Feedback tone="error" layout="compact">
+            {error}
+          </Feedback>
+        ) : undefined
+      }
       items={modes.map((mode) => ({
         ...mode,
         selected: mode.id === value,

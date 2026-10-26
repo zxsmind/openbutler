@@ -92,11 +92,8 @@ export function UsageSettings() {
     <SettingsPage title="Usage">
       <SettingsSection title="Overview" action={<SettingsRange label="Usage period" options={RANGES} value={range} onChange={setRange} />}>
         {error ? (
-          <SettingsStatus tone="error">
-            {error}{' '}
-            <button type="button" className="settings-choice" onClick={() => setReload((value) => value + 1)}>
-              Try again
-            </button>
+          <SettingsStatus tone="error" action={{ label: 'Try again', onClick: () => setReload((value) => value + 1) }}>
+            {error}
           </SettingsStatus>
         ) : null}
         {loading ? <SettingsStatus>Reading recorded usage…</SettingsStatus> : null}
