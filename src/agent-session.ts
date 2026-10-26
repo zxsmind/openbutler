@@ -504,6 +504,11 @@ export class AgentSessionController implements AgentSessionClient {
     this.session = {
       ...session,
       keyPositions: session.keyPositions ?? {},
+      entries: session.entries.map((entry) => {
+        if (entry.kind !== 'tool' || entry.toolTitle !== undefined || !entry.tool) return entry;
+        const title = this.runtime.registry.getDisplayTitle(entry.tool);
+        return title !== undefined ? { ...entry, toolTitle: title } : entry;
+      }),
       ...(session.workspaceRoot === undefined && typeof this.sessionWorkspaceScope === 'string'
         ? { workspaceRoot: this.sessionWorkspaceScope }
         : {}),
@@ -515,11 +520,6 @@ export class AgentSessionController implements AgentSessionClient {
     this.lastContextEstimate = session.contextEstimateTokens;
     this.contextUsageBaseline = session.contextTokens;
     this.contextGrowthThisTurn = session.contextGrowthTokens;
-      entries: session.entries.map((entry) => {
-        if (entry.kind !== 'tool' || entry.toolTitle !== undefined || !entry.tool) return entry;
-        const title = this.runtime.registry.getDisplayTitle(entry.tool);
-        return title !== undefined ? { ...entry, toolTitle: title } : entry;
-      }),
     this.sessionHasUserMessage = session.entries.some((entry) => entry.kind === 'user');
     this.pendingApproval = null;
     this.pendingApprovalId = null;
@@ -882,6 +882,7 @@ export class AgentSessionController implements AgentSessionClient {
         result: formatted.text || 'No output',
         running: false,
         tool,
+        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
         ...(running.entry.at === undefined ? {} : { durationMs: Date.now() - running.entry.at }),
         ...(workerSession === undefined ? {} : { session: workerSession }),
       });
@@ -895,6 +896,7 @@ export class AgentSessionController implements AgentSessionClient {
         input: toolDisplayInput(request.input),
         result: formatted.text || 'No output',
         tool,
+        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
         ...(preview.entry.at === undefined ? {} : { durationMs: Date.now() - preview.entry.at }),
         ...(workerSession === undefined ? {} : { session: workerSession }),
       });
@@ -905,12 +907,12 @@ export class AgentSessionController implements AgentSessionClient {
       input: toolDisplayInput(request.input),
       result: formatted.text || 'No output',
       tool,
+      ...(request.title !== undefined ? { toolTitle: request.title } : {}),
       ...(workerSession === undefined ? {} : { session: workerSession }),
     });
   }
-        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
 
-  private onToolPreviewStart(info: { toolCallId: string; providerId: string; name: string }): void {
+  private onToolPreviewStart(info: { toolCallId: string; providerId: string; name: string; title?: string }): void {
     // Commit buffered text but keep the assistant message open: providers can keep streaming text
     // after a tool call begins, and it belongs to the same message. Closing here split it in two.
     this.flushStreamedDeltas();
@@ -923,7 +925,6 @@ export class AgentSessionController implements AgentSessionClient {
       tool: toolIdentity(info),
     };
     this.previewToolEntries.set(info.toolCallId, { entry, preview: new ToolInputPreview(), providerId: info.providerId, name: info.name });
-        ...(request.title !== undefined ? { toolTitle: request.title } : {}),
     this.addEntry(entry);
   }
 
@@ -934,7 +935,6 @@ export class AgentSessionController implements AgentSessionClient {
     const command = toolPreviewCommand(preview.providerId, preview.name, preview.preview.fields, preview.entry.toolTitle);
     const previous = preview.entry;
     if (command === previous.command) return;
-      ...(request.title !== undefined ? { toolTitle: request.title } : {}),
     const entry: Extract<SessionEntry, { kind: 'tool' }> = { ...previous, command };
     preview.entry = entry;
     this.replaceEntry(previous, entry);
