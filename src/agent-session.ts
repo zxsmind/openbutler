@@ -1246,6 +1246,17 @@ export class AgentSessionController implements AgentSessionClient {
     });
   }
 
+  private finishTurn(turnId: string | undefined, cancelled: boolean): void {
+    if (!turnId) return;
+    const entry = this.session.entries.find((entry) => entry.kind === 'user' && entry.turnId === turnId);
+    if (entry)
+      this.replaceEntry(entry, {
+        ...entry,
+        turnOutcome: cancelled ? 'cancelled' : this.runError ? 'failed' : 'completed',
+        turnEndedAt: Date.now(),
+      });
+  }
+
   sendMessage(message: QueuedMessage, preferences: AgentTurnPreferences): Promise<void> {
     return this.enqueueMessage(message, preferences, false);
   }
@@ -1382,6 +1393,7 @@ export class AgentSessionController implements AgentSessionClient {
     reportSessionActivity(this.session.id, true);
     this.publish();
     let activeTurn: QueuedTurn | null = initialTurn;
+    let runTurnId: string | undefined;
     let steeredTurns: QueuedTurn[] = [];
     const settleSteeredTurns = (ownerEventId: string | undefined) => {
       for (const turn of steeredTurns.splice(0)) {
@@ -1453,6 +1465,8 @@ export class AgentSessionController implements AgentSessionClient {
         this.streamedAssistantEntry = null;
         this.streamedReasoningEntry = null;
         if (!currentTurn.entryAdded) this.addUserEntry(current);
+        else this.activeTurnId = currentTurn.turnId;
+        runTurnId = this.activeTurnId;
         this.conversation.push(userMessage);
         if (this.conversationArchive.length > 0) this.conversationArchive.push(userMessage);
         const conversationAtRunStart = [...this.conversation];
@@ -1733,6 +1747,8 @@ export class AgentSessionController implements AgentSessionClient {
         this.activeEventOutputs = null;
         this.activeEventAssistantText = '';
         this.activeTurnProgress = undefined;
+        this.finishTurn(runTurnId, abortController.signal.aborted);
+        runTurnId = undefined;
         currentTurn.resolve();
         settleSteeredTurns(current.eventId);
         activeTurn = null;
@@ -1764,6 +1780,7 @@ export class AgentSessionController implements AgentSessionClient {
         activeTurn = null;
       }
     } finally {
+      this.finishTurn(runTurnId, abortController.signal.aborted);
       if (this.approvalResolver) this.approveToolCall('deny');
       if (this.questionResolver) this.answerQuestion(null);
       this.settleToolPreviews();
