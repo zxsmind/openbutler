@@ -161,7 +161,7 @@ describe('grep', () => {
   it('returns structured literal matches with 1-based line numbers', async () => {
     await writeFile(join(workspace, 'code.ts'), 'first\nconst VALUE = 1;\n// VALUE again\n', 'utf8');
     const tool = createGrepTool(workspace);
-    const result = (await tool.execute!({ pattern: 'VALUE' }, undefined, undefined)) as {
+    const result = (await tool.execute!({ pattern: 'VALUE', regex: false }, undefined, undefined)) as {
       matches: Array<{ line: number; text: string }>;
       matchCount: number;
     };
@@ -185,6 +185,23 @@ describe('grep', () => {
     expect(filtered.matches).toHaveLength(1);
     expect(filtered.matches[0]!.path.endsWith('b.md')).toBe(true);
     expect(filtered.truncated).toBe(true);
+  });
+
+  it('treats pattern as a regular expression by default and matches literally on regex false', async () => {
+    await writeFile(join(workspace, 'default-mode.txt'), 'a|b\naxb\n', 'utf8');
+    const tool = createGrepTool(workspace);
+    const asRegex = (await tool.execute!({ pattern: 'a|b', glob: '*.txt' }, undefined, undefined)) as {
+      matchCount: number;
+      regex: boolean;
+    };
+    expect(asRegex.regex).toBe(true);
+    expect(asRegex.matchCount).toBe(2);
+    const asLiteral = (await tool.execute!({ pattern: 'a|b', glob: '*.txt', regex: false }, undefined, undefined)) as {
+      matchCount: number;
+      regex: boolean;
+    };
+    expect(asLiteral.regex).toBe(false);
+    expect(asLiteral.matchCount).toBe(1);
   });
 
   it('skips binary files instead of failing the search', async () => {

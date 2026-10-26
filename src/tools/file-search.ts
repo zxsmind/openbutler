@@ -102,23 +102,23 @@ export function createGlobTool(workspaceRoot = process.cwd()): ToolDefinition {
   };
 }
 
-/** Searches text file contents for a literal string or regular expression. */
+/** Searches text file contents for a regular expression (the default) or a literal string. */
 export function createGrepTool(workspaceRoot = process.cwd()): ToolDefinition {
   return {
     providerId: 'host',
     name: 'grep',
     description:
-      'Search local text files for a string or regular expression and return matching lines as file, 1-based line number, and line text. Recursion skips `.git` and `node_modules`, ignores binary files, and never follows symlinks. `glob` filters candidate files (`*.ts`, `src/**/*.js`, a name without `/` matches at any depth). Matching is case-sensitive in both modes. Results are capped by `max_results` and a `truncated` flag reports when the cap was hit. Treat matches as pointers and read the cited range with file_read before relying on surrounding context or editing.',
+      'Search local text files for a string or regular expression and return matching lines as file, 1-based line number, and line text. `pattern` is a JavaScript regular expression by default; pass `regex: false` for a literal string. Recursion skips `.git` and `node_modules`, ignores binary files, and never follows symlinks. `glob` filters candidate files (`*.ts`, `src/**/*.js`, a name without `/` matches at any depth). Matching is case-sensitive in both modes. Results are capped by `max_results` and a `truncated` flag reports when the cap was hit. Treat matches as pointers and read the cited range with file_read before relying on surrounding context or editing.',
     inputSchema: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: 'Text to find; a JavaScript regular expression when `regex` is true.' },
+        pattern: { type: 'string', description: 'Regular expression to find; a literal string when `regex` is false.' },
         path: {
           type: 'string',
           description: 'Optional absolute or workspace-relative file or directory to search; defaults to the workspace root.',
         },
         glob: { type: 'string', description: 'Optional file filter such as `*.ts` or `src/**/*.js`.' },
-        regex: { type: 'boolean', description: 'Treat `pattern` as a regular expression instead of a literal string.' },
+        regex: { type: 'boolean', description: 'Defaults to true (regular expression); set false to match `pattern` as a literal string.' },
         max_results: {
           type: 'integer',
           minimum: 1,
@@ -145,8 +145,9 @@ export function createGrepTool(workspaceRoot = process.cwd()): ToolDefinition {
         return { status: 'invalid', error: `max_results must be between 1 and ${GREP_MAX_RESULTS}.` };
       }
       const limit = typeof requestedLimit === 'number' ? requestedLimit : GREP_DEFAULT_RESULTS;
+      const useRegex = input.regex !== false;
       let testLine: (line: string) => boolean;
-      if (input.regex === true) {
+      if (useRegex) {
         try {
           const expression = new RegExp(pattern);
           testLine = (line) => expression.test(line);
@@ -221,10 +222,10 @@ export function createGrepTool(workspaceRoot = process.cwd()): ToolDefinition {
         status: 'completed',
         path: root.slice(0, 512),
         pattern,
-        regex: input.regex === true,
         ...(glob ? { glob } : {}),
         matches,
         matchCount: matches.length,
+        regex: useRegex,
         filesSearched,
         truncated,
       };
