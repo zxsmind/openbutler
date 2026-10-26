@@ -8,12 +8,18 @@
   /* Section CSS reads these; they live on the surface so the whole tree inherits. */
   --settings-border: #e9eaee;
   --settings-muted: #7c8089;
-  position: absolute;
-  inset: 0;
+  /* The frame belongs to the shell: .app owns the gap and the columns own their
+     radius, so a top-level view is placed in that grid instead of positioned
+     against the viewport. Settings then keeps the same rounded card geometry as
+     the conversation at every breakpoint, and the gap is never duplicated here. */
+  position: relative;
+  grid-column: 1 / -1;
+  grid-row: 1;
   z-index: 30;
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
   background: #fff;
+  border: 1px solid #e6e9ef;
   border-radius: 14px;
   overflow: hidden;
 }

@@ -192,6 +192,9 @@ select:focus-visible,
   --sidebar-width: 0px;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  /* One viewport-sized row, floored at zero: an overlaid view (settings) may
+     carry tall content, and an auto row would grow past the frame with it. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
   padding: 8px 4px 4px 8px;
   overflow: hidden;
@@ -204,6 +207,7 @@ select:focus-visible,
   position: relative;
   z-index: 1;
   grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -262,6 +266,7 @@ select:focus-visible,
 .sidebar {
   position: relative;
   grid-column: 1;
+  grid-row: 1;
   width: 252px;
   min-height: 0;
   display: flex;
@@ -1303,6 +1308,10 @@ select:focus-visible,
   .workspace-surface,
   .sidebar-visible .workspace-surface {
     grid-column: 1;
+    border: 0;
+    border-radius: 0;
+  }
+  .settings-surface {
     border: 0;
     border-radius: 0;
   }
