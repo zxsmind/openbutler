@@ -68,6 +68,7 @@ export type QueuedMessage = {
 };
 
 export interface AgentSessionRuntimeView {
+  supportsSessionAttachments?: boolean;
   supportsProjects?: boolean;
   workspaceRoot: string;
   modelName: string;
@@ -105,6 +106,10 @@ export interface AgentEnvironment extends AgentSessionRuntimeView {
   recordUsage?: (input: UsageRecordInput, id: string) => void;
 
   selectModel: (providerId: string, modelId: string) => Promise<void>;
+  /** Connect deferred tools before capturing the first turn's tool catalogue. */
+  prepareForTurn?: () => Promise<void>;
+  /** Refresh model credentials/options at request boundaries; reconnect tools only when all shared sessions are idle. */
+  reloadSettings?: (reloadTools?: boolean) => Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -1415,6 +1420,9 @@ export class AgentSessionController implements AgentSessionClient {
         let archivedResponseCount = 0;
         do {
           refreshTools = false;
+          // Wait for an idle-time tool reconnect before capturing this turn's catalogue.
+          await this.runtime.prepareForTurn?.();
+          await this.runtime.reloadSettings?.();
           const schemaSanitizer = this.toolSchemaSanitizer();
           const tools = await this.runtime.registry.createModelTools({
             approve: (request, signal) => this.requestApproval(request, signal),
