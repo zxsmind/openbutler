@@ -1,3 +1,4 @@
+import { toolEntryCommand } from '../src/tool-display.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
@@ -11,7 +12,7 @@ import type { AgentEnvironment, AgentSessionClient } from '../src/agent-session.
 import type { DaemonHost } from '../src/daemon-host.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 
-const daemonStart = vi.hoisted(() => ({ run: vi.fn() }));
+const daemonStart = vi.hoisted(() => ({ run: vi.fn(), runtimeOptions: vi.fn() }));
 vi.mock('../src/daemon.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/daemon.js')>();
   return { ...actual, startDaemon: daemonStart.run };
@@ -31,6 +32,7 @@ let requestHost: (typeof import('../src/daemon.js'))['requestHost'];
 let model: MockLanguageModelV3;
 let registry: ToolRegistry;
 let fixtureVision = false;
+let fixtureSettingsReload: AgentEnvironment['reloadSettings'];
 const registrySeen = new WeakSet<ToolRegistry>();
 const sessionMessageSeen = new WeakSet<ToolRegistry>();
 const subagentSeen = new WeakSet<ToolRegistry>();
@@ -89,6 +91,7 @@ async function createFixtureHost(): Promise<DaemonHost> {
     requestStop: () => {},
     log: () => {},
     runtimeFactory: async (options) => {
+      daemonStart.runtimeOptions(options);
       const backgroundManage = options?.backgroundManage;
       if (options?.ownerMessageSend && !ownerMessageSendSeen.has(registry)) {
         const { createSendMessageToOwnerTool } = await import('../src/tools/owner-communication.js');
@@ -151,6 +154,7 @@ async function createFixtureHost(): Promise<DaemonHost> {
         getReviewProviderOptions: () => ({}),
         registry,
         selectModel: async () => {},
+        ...(fixtureSettingsReload ? { reloadSettings: fixtureSettingsReload } : {}),
         close: async () => {},
       };
       return runtime;
@@ -159,6 +163,7 @@ async function createFixtureHost(): Promise<DaemonHost> {
 }
 
 beforeEach(async () => {
+  fixtureSettingsReload = undefined;
   fixtureVision = false;
   root = mkdtempSync(join(tmpdir(), 'ranite-ipc-check-'));
   vi.stubEnv('RANITE_DATA_DIR', root);
@@ -196,7 +201,16 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 async function client(
-  options: { isolatedSession?: boolean; scheduleId?: string; workerSessionId?: string; runningWorkerOf?: string } = {},
+  options: {
+    chatSessionId?: string;
+    newChatSession?: boolean;
+    projectId?: string | null;
+    clientKind?: 'web' | 'terminal';
+    isolatedSession?: boolean;
+    scheduleId?: string;
+    workerSessionId?: string;
+    runningWorkerOf?: string;
+  } = {},
 ) {
   const result = await connect(root, options);
   clients.push(result);
@@ -235,6 +249,340 @@ async function replaceFixtureHost() {
 }
 
 describe('shared host and session IPC', () => {
+  it('runs independent web chats concurrently and stops only the addressed chat', async () => {
+    const { createProject } = await import('../src/projects/store.js');
+    const folderA = join(root, 'project-a');
+    const folderB = join(root, 'project-b');
+    mkdirSync(folderA);
+    mkdirSync(folderB);
+    const projectA = createProject({ name: 'Project A', folders: [folderA] });
+    const projectB = createProject({ name: 'Project B', folders: [folderB] });
+    model.doStream = async (options) => holdOpenWorkerStream(options.abortSignal);
+    const a = await client({ clientKind: 'web', newChatSession: true, projectId: projectA.id });
+    const b = await client({ clientKind: 'web', newChatSession: true, projectId: projectB.id });
+    const aId = a.getSnapshot().session.id;
+    const bId = b.getSnapshot().session.id;
+    expect(aId).not.toBe(bId);
+    await a.sendMessage({ text: 'Keep A running.', images: [] }, preferences);
+    await b.sendMessage({ text: 'Keep B running.', images: [] }, preferences);
+    await vi.waitFor(() => {
+      expect(a.isBusy).toBe(true);
+      expect(b.isBusy).toBe(true);
+      expect(a.runtime.workspaceRoot).toBe(folderA);
+      expect(b.runtime.workspaceRoot).toBe(folderB);
+    });
+    const aView = await client({ clientKind: 'web', chatSessionId: aId });
+    expect(aView.getSnapshot().session.id).toBe(aId);
+    expect(aView.isBusy).toBe(true);
+    await expect(aView.createNewSession()).rejects.toThrow('attachment');
+    aView.stop();
+    await vi.waitFor(() => expect(a.isBusy).toBe(false));
+    expect(b.isBusy, JSON.stringify(b.getSnapshot().session.entries)).toBe(true);
+    expect(b.getSnapshot().session.id).toBe(bId);
+    expect(b.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Keep A running.')).toBe(false);
+    await b.flushSave();
+    const catalog = await b.listSessions();
+    expect(catalog.find((session) => session.id === bId)?.running).toBe(true);
+    b.stop();
+    await vi.waitFor(() => expect(b.isBusy).toBe(false));
+  });
+
+  it('restores a closed rootless chat without changing the custodian conversation', async () => {
+    const owner = await client();
+    const hostMcp = daemonStart.runtimeOptions.mock.lastCall?.[0]?.mcpManager;
+    expect(hostMcp).toBeDefined();
+    const ownerId = owner.getSnapshot().session.id;
+    await owner.sendMessage({ text: 'Keep the owner conversation.', images: [] }, preferences);
+    await vi.waitFor(() => expect(owner.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant')).toBe(true));
+    await owner.flushSave();
+    const opened = await client({ newChatSession: true, clientKind: 'web' });
+    expect(daemonStart.runtimeOptions.mock.lastCall?.[0]?.mcpManager).toBe(hostMcp);
+    const id = opened.getSnapshot().session.id;
+    await opened.sendMessage({ text: 'Remember this conversation.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(
+        opened.getSnapshot().session.entries.some((entry) => entry.kind === 'assistant'),
+        JSON.stringify(opened.getSnapshot().session.entries),
+      ).toBe(true),
+    );
+    await opened.flushSave();
+    await replaceFixtureHost();
+    const restored = await client({ chatSessionId: id, clientKind: 'web' });
+    expect(daemonStart.runtimeOptions.mock.lastCall?.[0]?.mcpManager).toBeDefined();
+    expect(restored.getSnapshot().session.id).toBe(id);
+    expect(
+      restored.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Remember this conversation.'),
+    ).toBe(true);
+    const ownerAgain = await client();
+    expect(ownerAgain.getSnapshot().session.id).toBe(ownerId);
+  });
+  it('consumes Team notifications on read while retaining the canonical DM history', async () => {
+    const { TeamStore } = await import('../src/team/store.js');
+    const { startTeamServer } = await import('../src/team/server.js');
+    const { localChannel } = await import('../src/team/session.js');
+    const { hashTicket, makeTicket } = await import('../src/team/service.js');
+    const teamStore = new TeamStore(join(root, 'fixture-team.db'));
+    const now = Date.now();
+    teamStore.initHub('fixture-hub', 'fixture-team', 'Fixture', 'Hub', now);
+    teamStore.createJoinRequest('jr_fixture', 'Reader', 'fixture-code', now);
+    const ticket = makeTicket();
+    teamStore.decideJoin('jr_fixture', true, ticket, hashTicket(ticket), now);
+    teamStore.confirmTicket('jr_fixture');
+    const teamServer = await startTeamServer({ store: teamStore, bindAddress: '127.0.0.1', port: 0, allowLoopback: true });
+    const settings = await import('../src/settings.js');
+    const store = settings.defaultSettings();
+    store.team = {
+      role: 'member',
+      teamName: 'Fixture',
+      memberName: 'Reader',
+      hubHost: '127.0.0.1',
+      hubPort: Number(new URL(teamServer.url).port),
+      teamId: 'fixture-team',
+    };
+    settings.saveSettings(store);
+    settings.saveSecrets({ providers: {}, teamTicket: ticket });
+    try {
+      await requestHost('settings.reload');
+      const viewer = await client();
+      await localChannel(teamStore, 'Hub').send('Reader', 'Read once; retain history.');
+      const built = await registry.createModelTools({
+        approve: async () => true,
+        onResult: () => {},
+        sessionId: viewer.getSnapshot().session.id,
+      });
+      const execute = async (action: 'list' | 'read', ids?: string[]) =>
+        (await built.tools.inbox!.execute!(
+          { action, source: 'Team', ...(ids ? { ids } : {}) },
+          { toolCallId: 'team-read-fixture', messages: [] },
+        )) as { items: Array<{ id: string; content?: { text?: string } }> };
+      const pending = await execute('list');
+      expect(pending.items).toHaveLength(1);
+      expect((await execute('read', [pending.items[0]!.id])).items[0]?.content?.text).toBe('Read once; retain history.');
+      expect((await execute('list')).items).toEqual([]);
+      expect(teamStore.unreadDmCount('Reader')).toBe(0);
+      expect((await localChannel(teamStore, 'Reader').history({ scope: 'dm', peer: 'Hub' })).messages[0]?.body).toBe(
+        'Read once; retain history.',
+      );
+    } finally {
+      delete store.team;
+      settings.saveSettings(store);
+      await requestHost('settings.reload');
+      await teamServer.close();
+      teamStore.close();
+    }
+  });
+
+  it('consumes a Telegram notification on read across new chats and host restarts without requiring a reply', async () => {
+    const settings = await import('../src/settings.js');
+    expect(settings.getSettingsPath()).toBe(join(root, 'settings.yaml'));
+    const store = settings.defaultSettings();
+    store.telegram = { enabled: true, tokenEnv: 'UNSET_FIXTURE_INBOX_TOKEN', workspaceRoot: root, chatId: '42', userId: '7' };
+    settings.saveSettings(store);
+    let viewer = await client();
+    await host.receiveTelegramMessage(9001, 'Retain this message as history.');
+    type Event = { id: string; source: string; status: string; kind: string };
+    await vi.waitFor(async () => {
+      const events = (await requestHost('ledger.events')) as Event[];
+      expect(events.some((event) => event.kind === 'inbox.wakeup' && event.status === 'delivered')).toBe(true);
+    });
+    const executeInbox = async (action: 'list' | 'read', ids?: string[]) => {
+      const built = await registry.createModelTools({
+        approve: async () => true,
+        onResult: () => {},
+        sessionId: viewer.getSnapshot().session.id,
+      });
+      return (await built.tools.inbox!.execute!(
+        { action, source: 'Telegram', ...(ids ? { ids } : {}) },
+        { toolCallId: 'fixture-inbox', messages: [] },
+      )) as {
+        items: Array<{ id: string; content?: { messages?: Array<{ text: string }> } }>;
+      };
+    };
+    const listed = await executeInbox('list');
+    expect(listed.items).toHaveLength(1);
+    const id = listed.items[0]!.id;
+    expect((await executeInbox('read', [id])).items[0]?.content?.messages?.[0]?.text).toBe('Retain this message as history.');
+    expect((await executeInbox('list')).items).toEqual([]);
+    await viewer.createNewSession();
+    expect((await executeInbox('list')).items).toEqual([]);
+    registry = new ToolRegistry();
+    await replaceFixtureHost();
+    viewer = await client();
+    expect((await executeInbox('list')).items).toEqual([]);
+    expect((await executeInbox('read', [id])).items[0]?.content?.messages?.[0]?.text).toBe('Retain this message as history.');
+    expect((await executeInbox('list')).items).toEqual([]);
+    const events = (await requestHost('ledger.events')) as Event[];
+    expect(events.filter((event) => event.kind === 'inbox.wakeup')).toHaveLength(1);
+    expect(events.some((event) => event.kind === 'inbox.delivery-recovery')).toBe(false);
+  });
+
+  it('only reminds unread Telegram notifications after five minutes, preserving the cooldown across restarts', async () => {
+    const settings = await import('../src/settings.js');
+    const store = settings.defaultSettings();
+    store.telegram = { enabled: true, tokenEnv: 'UNSET_FIXTURE_REMINDER_TOKEN', workspaceRoot: root, chatId: '42', userId: '7' };
+    settings.saveSettings(store);
+    await client();
+    await host.receiveTelegramMessage(9002, 'Unread reminder fixture.');
+    type Event = { id: string; source: string; status: string; kind: string };
+    await vi.waitFor(async () => {
+      const events = (await requestHost('ledger.events')) as Event[];
+      expect(events.some((event) => event.kind === 'inbox.wakeup' && event.status === 'delivered')).toBe(true);
+    });
+    const { ActivityLedger } = await import('../src/activity-ledger.js');
+    const reader = new ActivityLedger(join(root, 'state.db'), { readOnly: true });
+    const events = (await requestHost('ledger.events')) as Event[];
+    const inboxId = events.find((event) => event.source === 'owner-inbox')!.id;
+    const due = Number(reader.getState(`owner-inbox:remind:${inboxId}`));
+    reader.close();
+    expect(due - Date.now()).toBeGreaterThan(290_000);
+    registry = new ToolRegistry();
+    await replaceFixtureHost();
+    expect(((await requestHost('ledger.events')) as Event[]).filter((event) => event.kind === 'inbox.wakeup')).toHaveLength(1);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(due + 1);
+    try {
+      registry = new ToolRegistry();
+      await replaceFixtureHost();
+      await vi.waitFor(async () =>
+        expect(((await requestHost('ledger.events')) as Event[]).filter((event) => event.kind === 'inbox.wakeup')).toHaveLength(2),
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('reloads live runtimes after file saves and defers tool reloads while a session is busy', async () => {
+    const reload = vi.fn(async (_tools?: boolean) => {});
+    fixtureSettingsReload = reload;
+    const viewer = await client();
+    const settings = await import('../src/settings.js');
+    expect(settings.getSettingsPath()).toBe(join(root, 'settings.yaml'));
+    const store = settings.loadSettings();
+    store.theme = 'Light';
+    settings.saveSettings(store);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledWith(true));
+    model.doStream = async (options) => holdOpenWorkerStream(options.abortSignal);
+    const running = viewer.sendMessage({ text: 'Keep this turn open.', images: [] }, preferences);
+    await vi.waitFor(() => expect(viewer.getSnapshot().busy).toBe(true));
+    reload.mockClear();
+    store.theme = 'Dark';
+    settings.saveSettings(store);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledWith(false));
+    expect(reload.mock.calls.some(([tools]) => tools === true)).toBe(false);
+    viewer.stop();
+    await running;
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledWith(true));
+  });
+
+  it('reloads live runtimes when another process replaces the model catalog', async () => {
+    const reload = vi.fn(async (_tools?: boolean) => {});
+    fixtureSettingsReload = reload;
+    await client();
+    for (const filename of ['catalog.ndjson', 'catalog-index.json']) {
+      reload.mockClear();
+      writeFileSync(join(root, filename), '{}');
+      await vi.waitFor(() => expect(reload).toHaveBeenCalledWith(true));
+    }
+  });
+
+  it('binds web and terminal source labels to the connection and persists them', async () => {
+    const web = await client({ clientKind: 'web' });
+    const terminal = await client();
+    await web.sendMessage(
+      {
+        text: 'Browser message.',
+        images: [],
+        communication: { source: 'telegram', replyTo: { channel: 'telegram', chatId: 'fake' } },
+      },
+      preferences,
+    );
+    await vi.waitFor(() =>
+      expect(web.getSnapshot().session.entries).toContainEqual(
+        expect.objectContaining({
+          kind: 'user',
+          text: 'Browser message.',
+          source: 'web',
+          turnOutcome: 'completed',
+        }),
+      ),
+    );
+    expect(JSON.stringify(model.doStreamCalls[0]!.prompt)).toContain('[Host context: owner message via web]');
+    expect(JSON.stringify(model.doStreamCalls[0]!.prompt)).not.toContain('owner message via Telegram');
+    await terminal.sendMessage({ text: 'Terminal message.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(terminal.getSnapshot().session.entries).toContainEqual(
+        expect.objectContaining({
+          kind: 'user',
+          text: 'Terminal message.',
+          source: 'terminal',
+          turnOutcome: 'completed',
+        }),
+      ),
+    );
+    expect(JSON.stringify(model.doStreamCalls[1]!.prompt.at(-1))).toContain('[Host context: owner message via terminal]');
+    await web.flushSave();
+    const { loadSavedSession } = await import('../src/session-store.js');
+    expect(loadSavedSession(web.getSnapshot().session.id)!.entries).toContainEqual(
+      expect.objectContaining({
+        kind: 'user',
+        text: 'Browser message.',
+        source: 'web',
+      }),
+    );
+  });
+
+  it('preserves web identity through live-session switching and reconnecting', async () => {
+    daemonStart.run.mockResolvedValue({ pid: 9001, startedAt: new Date().toISOString(), workspaceCount: 0, connectedClients: 0 });
+    const terminal = await client();
+    const web = await client({ clientKind: 'web' });
+    const isolated = await client({ isolatedSession: true });
+    const originalId = terminal.getSnapshot().session.id;
+    await web.loadSession(isolated.getSnapshot().session.id);
+    await web.sendMessage({ text: 'Web after switching.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(web.getSnapshot().session.entries).toContainEqual(
+        expect.objectContaining({
+          text: 'Web after switching.',
+          source: 'web',
+          turnOutcome: 'completed',
+        }),
+      ),
+    );
+    await web.loadSession(originalId);
+    await web.sendMessage({ text: 'Web before reconnect.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(web.getSnapshot().session.entries).toContainEqual(
+        expect.objectContaining({
+          text: 'Web before reconnect.',
+          source: 'web',
+          turnOutcome: 'completed',
+        }),
+      ),
+    );
+    await web.flushSave();
+    await requestHost('stop', { restart: true });
+    await replaceFixtureHost();
+    await vi.waitFor(
+      () =>
+        expect(
+          web
+            .getSnapshot()
+            .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the Ranite host.')),
+        ).toBe(true),
+      { timeout: 5_000, interval: 25 },
+    );
+    await web.sendMessage({ text: 'Web after reconnect.', images: [] }, preferences);
+    await vi.waitFor(() =>
+      expect(web.getSnapshot().session.entries).toContainEqual(
+        expect.objectContaining({
+          text: 'Web after reconnect.',
+          source: 'web',
+          turnOutcome: 'completed',
+        }),
+      ),
+    );
+    expect(JSON.stringify(model.doStreamCalls.at(-1)!.prompt.at(-1))).toContain('owner message via web');
+  }, 10_000);
+
   it('reads Telegram owner messages through the inbox tool and only sends replies through the explicit tool', async () => {
     const settings = await import('../src/settings.js');
     const store = settings.defaultSettings();
@@ -852,6 +1200,82 @@ describe('shared host and session IPC', () => {
     expect(list.schedules.find((candidate) => candidate.id === 'threaded')?.originSessionId).toBe(caller.getSnapshot().session.id);
   }, 10_000);
 
+  it('preserves an explicit separate schedule session and reuses it across runs and host restarts', async () => {
+    const caller = await client();
+    const callerId = caller.getSnapshot().session.id;
+    const schedule = {
+      id: 'separate-persistent',
+      name: 'Separate persistent',
+      enabled: true,
+      workspaceRoot: root,
+      originSessionId: '',
+      instruction: 'Report the run.',
+      trigger: { adapter: 'manual', options: {} },
+    };
+    const built = await registry.createModelTools({ approve: async () => true, onResult: () => {}, sessionId: callerId });
+    await built.tools.schedule!.execute!({ action: 'add', schedule }, { toolCallId: 'add-separate', messages: [] });
+    const settings = await import('../src/settings.js');
+    expect(settings.getSettingsPath()).toBe(join(root, 'settings.yaml'));
+    expect(settings.loadSettings().schedules.find((item) => item.id === schedule.id)?.originSessionId).toBe('');
+    let scheduled = await client({ scheduleId: schedule.id });
+    const scheduleSessionId = scheduled.getSnapshot().session.id;
+    expect(scheduleSessionId).not.toBe(callerId);
+    model.doStream = vi.fn(async () => textStream('Persistent schedule report.'));
+    const run = async (number: number) => {
+      await requestHost('schedule.manage', { input: { action: 'run', scheduleId: schedule.id }, workspaceRoot: root });
+      await vi.waitFor(async () => {
+        const result = (await requestHost('schedule.manage', { input: { action: 'list' }, workspaceRoot: root })) as {
+          schedules: Array<{ id: string; runtime: { runCount: number; status: string } }>;
+        };
+        const state = result.schedules.find((item) => item.id === schedule.id)!.runtime;
+        expect(state.runCount).toBe(number);
+        expect(state.status).toBe('idle');
+      });
+      expect(scheduled.getSnapshot().session.id).toBe(scheduleSessionId);
+      expect(
+        scheduled.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text.includes(`This is run #${number}.`)),
+      ).toBe(true);
+    };
+    await run(1);
+    await run(2);
+    expect(caller.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'schedule')).toBe(false);
+    registry = new ToolRegistry();
+    await replaceFixtureHost();
+    scheduled = await client({ scheduleId: schedule.id });
+    await run(3);
+    expect(
+      scheduled.getSnapshot().session.entries.filter((entry) => entry.kind === 'assistant' && entry.text === 'Persistent schedule report.'),
+    ).toHaveLength(3);
+  }, 10_000);
+
+  it.each(['', 'existing-origin'])('preserves the existing schedule affinity %j when a tool update omits it', async (originSessionId) => {
+    const caller = await client();
+    const schedule = {
+      id: 'preserve-affinity',
+      name: 'Preserve affinity',
+      enabled: true,
+      workspaceRoot: root,
+      originSessionId,
+      instruction: 'Original instruction.',
+      trigger: { adapter: 'manual', options: {} },
+    };
+    await requestHost('schedule.manage', { input: { action: 'add', schedule }, workspaceRoot: root });
+    const { originSessionId: _origin, ...updated } = schedule;
+    const built = await registry.createModelTools({
+      approve: async () => true,
+      onResult: () => {},
+      sessionId: caller.getSnapshot().session.id,
+    });
+    await built.tools.schedule!.execute!(
+      { action: 'update', schedule: { ...updated, instruction: 'Updated instruction.' } },
+      { toolCallId: 'update-affinity', messages: [] },
+    );
+    const settings = await import('../src/settings.js');
+    const saved = settings.loadSettings().schedules.find((item) => item.id === schedule.id);
+    expect(saved?.originSessionId).toBe(originSessionId);
+    expect(saved?.instruction).toBe('Updated instruction.');
+  });
+
   it('generates a task id when add omits it', async () => {
     const result = (await requestHost('schedule.manage', {
       input: {
@@ -1318,7 +1742,7 @@ describe('shared host and session IPC', () => {
     const toolResult = viewer
       .getSnapshot()
       .session.entries.find((entry) => entry.kind === 'tool' && entry.result.includes('WORKER-REPORT'));
-    expect(toolResult?.kind === 'tool' ? toolResult.command : '').toMatch(/^subagent explorer/);
+    expect(toolResult?.kind === 'tool' ? toolEntryCommand(toolResult) : '').toMatch(/^subagent explorer/);
   }, 15_000);
 
   it('lets an executor subagent start one child layer but not a third layer', async () => {
@@ -1537,7 +1961,9 @@ describe('shared host and session IPC', () => {
 
     const spawnResult = viewer
       .getSnapshot()
-      .session.entries.find((entry) => entry.kind === 'tool' && entry.command.startsWith('subagent ') && typeof entry.session === 'string');
+      .session.entries.find(
+        (entry) => entry.kind === 'tool' && toolEntryCommand(entry).startsWith('subagent ') && typeof entry.session === 'string',
+      );
     expect(spawnResult).toBeDefined();
     expect(workerNames).toContain('parent_message');
     expect(workerNames).toContain('file_write');
@@ -1692,9 +2118,13 @@ describe('shared host and session IPC', () => {
     );
     const spawnResult = viewer
       .getSnapshot()
-      .session.entries.find((entry) => entry.kind === 'tool' && entry.command.startsWith('subagent ') && typeof entry.session === 'string');
+      .session.entries.find(
+        (entry) => entry.kind === 'tool' && toolEntryCommand(entry).startsWith('subagent ') && typeof entry.session === 'string',
+      );
     expect(spawnResult).toBeDefined();
-    const stopResult = viewer.getSnapshot().session.entries.find((entry) => entry.kind === 'tool' && entry.command.startsWith('Stop '));
+    const stopResult = viewer
+      .getSnapshot()
+      .session.entries.find((entry) => entry.kind === 'tool' && toolEntryCommand(entry).startsWith('Stop '));
     expect(stopResult).toBeDefined();
     const spawnedWorkerId = spawnResult?.kind === 'tool' ? spawnResult.session : undefined;
     expect(spawnedWorkerId).toMatch(/^[0-9a-f-]{36}$/);
@@ -1764,7 +2194,9 @@ describe('shared host and session IPC', () => {
       .map((entry) => (entry.kind === 'tool' ? entry.session : undefined))
       .filter((session): session is string => typeof session === 'string');
     expect(started).toHaveLength(8);
-    const busy = toolEntries.find((entry) => entry.kind === 'tool' && entry.session === undefined && entry.command.startsWith('subagent '));
+    const busy = toolEntries.find(
+      (entry) => entry.kind === 'tool' && entry.session === undefined && toolEntryCommand(entry).startsWith('subagent '),
+    );
     expect(busy?.kind === 'tool' ? busy.result : '').toContain('limit 8');
     const workerIds = started;
 
@@ -1846,7 +2278,9 @@ describe('shared host and session IPC', () => {
     );
     const spawned = viewer
       .getSnapshot()
-      .session.entries.find((entry) => entry.kind === 'tool' && entry.command.startsWith('subagent ') && typeof entry.session === 'string');
+      .session.entries.find(
+        (entry) => entry.kind === 'tool' && toolEntryCommand(entry).startsWith('subagent ') && typeof entry.session === 'string',
+      );
     const workerId = spawned?.kind === 'tool' ? spawned.session : undefined;
     expect(workerId).toMatch(/^[0-9a-f-]{36}$/);
 
@@ -2075,7 +2509,7 @@ async function automaticWorkerFixture(options: { fail?: boolean; question?: bool
   );
   const worker = viewer
     .getSnapshot()
-    .session.entries.find((entry) => entry.kind === 'tool' && entry.command.startsWith('subagent ') && entry.session);
+    .session.entries.find((entry) => entry.kind === 'tool' && toolEntryCommand(entry).startsWith('subagent ') && entry.session);
   if (!worker || worker.kind !== 'tool' || !worker.session) throw new Error('Worker id was not returned');
   return { viewer, workerId: worker.session, release, parentCalls: () => parentCalls };
 }
