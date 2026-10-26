@@ -1714,7 +1714,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     for (const event of ledger.pendingEvents(1000)) {
       if (activeEvents.has(event.id)) continue;
       if (event.source === 'worker') {
-        if (!workerSignalPending(ledger, event)) {
+        if (!signalStillNeeded(event)) {
           ledger.setEventState(event.id, 'delivered');
           continue;
         }
@@ -1835,14 +1835,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   async function processWorkerEvent(event: ObservedEventRow): Promise<void> {
-    if (!workerSignalPending(ledger, event)) {
+    if (!signalStillNeeded(event)) {
       ledger.setEventState(event.id, 'delivered');
       return;
     }
     const parentId = String(event.payload.parentSessionId);
     const persistedParent = loadSavedSession(parentId);
     if (persistedParent) acknowledgeSavedWorkerReads(persistedParent, String(event.payload.workerId));
-    if (!workerSignalPending(ledger, event)) {
+    if (!signalStillNeeded(event)) {
       ledger.setEventState(event.id, 'delivered');
       return;
     }
@@ -1894,7 +1894,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     try {
       await controller.sendEvent(
         {
-          text: '',
+          text: inboxNotice('Subagent', 1),
           images: [],
           eventId: attemptId,
           communication: { source: 'inbox' },
@@ -1912,7 +1912,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       await controller.flushSave();
       const result = controller.takeEventRunResult(attemptId);
       const error = result ? result.error : controller.getLastRunError();
-      if (!workerSignalPending(ledger, event)) ledger.setEventState(event.id, 'delivered');
+      if (!signalStillNeeded(event)) ledger.setEventState(event.id, 'delivered');
       else if (controller.getSnapshot().session.id !== parentId)
         deferWorkerEvent(event, 30_000, 'The original parent is no longer selected.');
       else if (result?.skipped) deferWorkerEvent(event, 1000, 'Waiting for the parent tool result to be saved.');

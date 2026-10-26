@@ -1988,6 +1988,17 @@ describe('shared host and session IPC', () => {
       .session.entries.find((entry) => entry.kind === 'tool' && entry.result.includes('WORKER-REPORT'));
     expect(reportPoll).toBeDefined();
     expect(viewer.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.source === 'inbox')).toBe(true);
+    // Once the parent has consumed the report, the completion must settle: a raw
+    // signal check used to ignore the staged read and requeue a fresh empty wake
+    // on every pump (815 claims observed on one event).
+    await vi.waitFor(async () => {
+      const events = (await requestHost('ledger.events')) as { kind: string; status: string }[];
+      const completions = events.filter((entry) => entry.kind === 'worker.completed');
+      expect(completions.length).toBeGreaterThan(0);
+      expect(completions[completions.length - 1]!.status).toBe('delivered');
+    });
+    // Queued wakes carry a visible message; empty rows must never reach the queue.
+    expect(viewer.getSnapshot().queuedMessages.every((message) => message.text.trim().length > 0)).toBe(true);
   }, 20_000);
 
   it('lets only the parent stop its background worker', async () => {
