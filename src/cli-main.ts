@@ -647,6 +647,10 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
 
   let runStarted = false;
   let finished = false;
+  // A one-shot CLI must eventually return even if an upstream stream never settles.
+  // Reset this deadline only on actual host state changes, not a wall-clock run cap.
+  const maxIdleMs = 10 * 60_000;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let printedText = false;
   let finish!: () => void;
   const done = new Promise<void>((resolveDone) => {
@@ -660,7 +664,18 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
 
   const onSnapshot = () => {
     const snapshot = controller.getSnapshot();
-    if (snapshot.busy) runStarted = true;
+    if (snapshot.busy && !finished) {
+      runStarted = true;
+      if (idleTimer !== null) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        ui.failure('One-shot run stopped: no session progress was reported for 10 minutes.');
+        process.exitCode = 1;
+        controller.stop();
+        finish();
+      }, maxIdleMs);
+    }
     const notices = snapshot.session.entries.filter((entry) => entry.kind === 'notice');
     for (const notice of notices.slice(visibleNoticeCount)) if (notice.kind === 'notice') ui.warn(notice.text);
     visibleNoticeCount = notices.length;
@@ -733,6 +748,7 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
     if (!runStarted && !finished) {
       finished = true;
       ui.failure('The background host did not start the one-shot run.');
+      process.exitCode = 1;
       finish();
     }
   }, 5_000);
@@ -756,6 +772,7 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
     await done;
   } finally {
     clearTimeout(startTimeout);
+    if (idleTimer !== null) clearTimeout(idleTimer);
     process.off('SIGINT', onInterrupt);
     unsubscribe();
     await controller.flushSave();

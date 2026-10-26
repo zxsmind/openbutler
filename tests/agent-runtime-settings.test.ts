@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -65,7 +65,12 @@ beforeEach(async () => {
   settings = await import('../src/settings.js');
   const catalog = await import('../src/provider/catalog.js');
   catalog.writeCatalogSnapshot(
-    { vercel: { npm: '@ai-sdk/gateway', models: { mimo: { tool_call: true }, minimax: { tool_call: true } } } },
+    {
+      vercel: {
+        npm: '@ai-sdk/gateway',
+        models: { mimo: { tool_call: true, limit: { context: 100_000 } }, minimax: { tool_call: true, limit: { context: 100_000 } } },
+      },
+    },
     new Date().toISOString(),
   );
   const store = settings.defaultSettings();
@@ -167,10 +172,11 @@ describe('live runtime settings', () => {
       url: 'http://localhost:1234/v1',
       keys: ['fixture-custom'],
       models: ['new-custom-model'],
+      modelSpecs: { 'new-custom-model': { context: 100_000 } },
     };
     settings.saveSettings(latest);
     await runtime.selectModel('custom', 'new-custom-model');
-    expect(runtime.contextWindowTokens).toBeNull();
+    expect(runtime.contextWindowTokens).toBe(100_000);
     expect(runtime.reasoningVariants.map((variant) => variant.id)).toEqual(['default']);
 
     const catalog = await import('../src/provider/catalog.js');
@@ -261,9 +267,13 @@ describe('live runtime settings', () => {
   it('rejects invalid edits and removed credentials, then recovers on the next valid edit', async () => {
     const latest = settings.loadSettings();
     const originalModel = runtime.model;
+    const lastValidSettings = readFileSync(settings.getSettingsPath(), 'utf8');
     writeFileSync(settings.getSettingsPath(), 'providers: [');
     await expect(runtime.reloadSettings!()).rejects.toThrow();
     expect(runtime.model).toBe(originalModel);
+    // Restore the last valid on-disk file before saving a new revision.
+    // Stale settings snapshots must not silently overwrite external edits.
+    writeFileSync(settings.getSettingsPath(), lastValidSettings);
     latest.providers.vercel!.enabled = false;
     settings.saveSettings(latest);
     await expect(runtime.reloadSettings!()).rejects.toThrow(/disabled or not configured/);

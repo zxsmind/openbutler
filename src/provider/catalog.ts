@@ -1,8 +1,12 @@
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
+  fsyncSync,
+  unlinkSync,
   readFileSync,
   readSync,
   renameSync,
@@ -10,7 +14,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getDataPath } from '../paths.js';
 
 /**
@@ -81,10 +85,14 @@ interface CatalogEntry {
   modelCount: number;
   /** Models this provider has, as of the fetch. Read from the index, not the line. */
   toolCapableCount: number;
+  /** Checks that the byte range belongs to the committed snapshot. */
+  sha256?: string;
 }
 
 interface CatalogIndex {
   fetchedAt: string;
+  /** An immutable NDJSON generation. Absent only for legacy cache files. */
+  dataFile?: string;
   entries: Record<string, CatalogEntry>;
   /** Provider ids serving each model id, so custom providers can match cataloged models. */
   modelProviders?: Record<string, string[]>;
@@ -140,7 +148,7 @@ function isFresh(value: CatalogIndex, nowMs: number, ttlMs: number): boolean {
 }
 
 function readDiskIndex(): CatalogIndex | null {
-  if (!existsSync(INDEX_FILE) || !existsSync(NDJSON_FILE)) return null;
+  if (!existsSync(INDEX_FILE)) return null;
   try {
     const parsed: unknown = JSON.parse(readFileSync(INDEX_FILE, 'utf8'));
     if (!isRecord(parsed) || !isRecord(parsed.entries)) return null;
@@ -153,7 +161,11 @@ function readDiskIndex(): CatalogIndex | null {
           ),
         )
       : undefined;
+    const dataFile = parsed.dataFile;
+    if (dataFile !== undefined && (typeof dataFile !== 'string' || !/^catalog\.[0-9a-f-]{36}\.ndjson$/.test(dataFile))) return null;
+    if (!existsSync(dataFile ? join(dirname(NDJSON_FILE), dataFile) : NDJSON_FILE)) return null;
     return {
+      ...(typeof dataFile === 'string' ? { dataFile } : {}),
       fetchedAt: typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : '',
       entries: parsed.entries as Record<string, CatalogEntry>,
       ...(modelProviders ? { modelProviders } : {}),
@@ -175,7 +187,7 @@ function currentIndex(): CatalogIndex | null {
 
 function catalogDiskRevision(): string {
   try {
-    return [INDEX_FILE, NDJSON_FILE]
+    return [INDEX_FILE]
       .map((file) => {
         const stat = statSync(file, { bigint: true });
         return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
@@ -193,11 +205,9 @@ export function getCatalogRevision(): string {
 }
 
 /**
- * Writes the payload as NDJSON and records where each provider landed.
- *
- * The offsets are measured from the bytes actually written, so the index and
- * the file cannot disagree. Both are written to temporary names and renamed, so
- * an interrupted refresh leaves the previous catalog intact.
+ * Publishes immutable, generation-named NDJSON before atomically replacing its
+ * index pointer. Readers always use the data generation named by their index,
+ * so a crash or concurrent refresh cannot create a torn pair.
  *
  * Exported because the on-disk format is a contract: a test that hand-builds an
  * index would be testing its own copy of the layout rather than this writer.
@@ -207,9 +217,10 @@ export function writeCatalogSnapshot(payload: unknown, fetchedAt: string): Catal
   const source = isRecord(payload.providers) ? payload.providers : payload;
 
   mkdirSync(dirname(NDJSON_FILE), { recursive: true });
-  const ndjsonTemp = `${NDJSON_FILE}.tmp`;
-  const indexTemp = `${INDEX_FILE}.tmp`;
-  const handle = openSync(ndjsonTemp, 'w');
+  const dataFile = `catalog.${randomUUID()}.ndjson`;
+  const dataPath = join(dirname(NDJSON_FILE), dataFile);
+  const indexTemp = `${INDEX_FILE}.${randomUUID()}.tmp`;
+  const handle = openSync(dataPath, 'wx', 0o600);
   const entries: Record<string, CatalogEntry> = {};
   const modelProviders: Record<string, string[]> = {};
   let offset = 0;
@@ -226,29 +237,56 @@ export function writeCatalogSnapshot(payload: unknown, fetchedAt: string): Catal
       entries[id] = {
         offset,
         length: buffer.length - 1,
+        sha256: createHash('sha256').update(buffer.subarray(0, -1)).digest('hex'),
         modelCount: modelIds.length,
         toolCapableCount: modelIds.filter((modelId) => provider.models?.[modelId]?.tool_call === true).length,
       };
       offset += buffer.length;
     }
   } finally {
+    fsyncSync(handle);
     closeSync(handle);
   }
 
-  const next: CatalogIndex = { fetchedAt, entries, modelProviders };
-  writeFileSync(indexTemp, JSON.stringify(next), 'utf8');
-  renameSync(ndjsonTemp, NDJSON_FILE);
-  renameSync(indexTemp, INDEX_FILE);
+  const next: CatalogIndex = { fetchedAt, dataFile, entries, modelProviders };
+  try {
+    writeFileSync(indexTemp, JSON.stringify(next), { encoding: 'utf8', flag: 'wx' });
+    renameSync(indexTemp, INDEX_FILE);
+  } finally {
+    try {
+      unlinkSync(indexTemp);
+    } catch {
+      /* Index publication errors take precedence over temporary cleanup. */
+    }
+  }
+  pruneOldCatalogGenerations(dataFile);
   return next;
 }
 
-/** Reads one provider line by its byte range. Small, and the only disk read. */
-function readProviderLine(entry: CatalogEntry): CatalogProvider | null {
+function catalogDataPath(catalog: CatalogIndex | null): string {
+  return catalog?.dataFile ? join(dirname(NDJSON_FILE), catalog.dataFile) : NDJSON_FILE;
+}
+
+/** Keep a grace period for other running Ranite processes still using an older index. */
+function pruneOldCatalogGenerations(current: string): void {
+  try {
+    for (const filename of readdirSync(dirname(NDJSON_FILE))) {
+      if (filename === current || !/^catalog\\.[0-9a-f-]{36}\\.ndjson$/.test(filename)) continue;
+      const path = join(dirname(NDJSON_FILE), filename);
+      if (Date.now() - statSync(path).mtimeMs > 30 * 24 * 60 * 60_000) unlinkSync(path);
+    }
+  } catch {
+    // Cache cleanup must not invalidate an already committed generation.
+  }
+}
+
+/** Reads one provider line by its byte range and verifies its content digest. */
+function readProviderLine(entry: CatalogEntry, catalog: CatalogIndex | null): CatalogProvider | null {
   if (!Number.isSafeInteger(entry.offset) || !Number.isSafeInteger(entry.length)) return null;
   if (entry.offset < 0 || entry.length <= 0 || entry.length > MAX_PROVIDER_LINE_BYTES) return null;
   const buffer = Buffer.alloc(entry.length);
   let read = 0;
-  const handle = openSync(NDJSON_FILE, 'r');
+  const handle = openSync(catalogDataPath(catalog), 'r');
   try {
     while (read < entry.length) {
       const got = readSync(handle, buffer, read, entry.length - read, entry.offset + read);
@@ -258,6 +296,7 @@ function readProviderLine(entry: CatalogEntry): CatalogProvider | null {
   } finally {
     closeSync(handle);
   }
+  if (entry.sha256 && createHash('sha256').update(buffer).digest('hex') !== entry.sha256) return null;
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(buffer.toString('utf8'));
@@ -371,7 +410,7 @@ export function getProvider(providerId: string): CatalogProvider | null {
   const catalog = currentIndex();
   if (loaded.has(providerId)) return loaded.get(providerId) ?? null;
   const entry = catalog?.entries[providerId];
-  const provider = entry ? readProviderLine(entry) : null;
+  const provider = entry ? readProviderLine(entry, catalog) : null;
   // A line whose id does not match its index slot means the pair is torn; the
   // honest answer is "unknown" until the next refresh writes a consistent pair.
   const verified = provider && provider.id === providerId ? provider : null;
@@ -395,13 +434,8 @@ export function listProviderIdsForModel(modelId: string): string[] {
       for (const id of Object.keys(provider?.models ?? {})) (modelProviders[id] ??= []).push(providerId);
     }
     catalog.modelProviders = modelProviders;
-    try {
-      const tempFile = `${INDEX_FILE}.tmp`;
-      writeFileSync(tempFile, JSON.stringify(catalog), 'utf8');
-      renameSync(tempFile, INDEX_FILE);
-    } catch {
-      // The in-memory lookup still works when the cache directory is read-only.
-    }
+    // This derived reverse map is process-local. Never rewrite a published
+    // index from a stale reader and overwrite a newer catalog's pointer.
   }
   return catalog.modelProviders[modelId] ?? [];
 }
@@ -423,9 +457,8 @@ export function getTokenPrice(providerId: string, modelId: string): CatalogModel
 
 /** Total bytes the catalog occupies on disk. */
 export function catalogSizeOnDisk(): number {
-  if (!existsSync(NDJSON_FILE)) return 0;
   try {
-    return statSync(NDJSON_FILE).size;
+    return statSync(catalogDataPath(currentIndex())).size;
   } catch {
     return 0;
   }

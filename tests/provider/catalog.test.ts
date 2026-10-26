@@ -2,7 +2,6 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, writeFileSync, writeSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getDataPath } from '../../src/paths.js';
 
 /**
  * The catalog is stored as NDJSON with a byte-range index, and nothing the
@@ -158,7 +157,8 @@ describe('reading a provider out of the file', () => {
 
   it('reports unknown instead of crashing when a provider line is unreadable', async () => {
     const catalog = await loadWithCatalog();
-    writeFileSync(`${getDataPath('catalog')}.ndjson`, 'not json at all\n');
+    const index = await catalog.getCatalogIndex();
+    writeFileSync(join(dataDir, index.dataFile!), 'not json at all\n');
     catalog.resetCatalogCacheForTests();
     expect(catalog.getProvider('openai')).toBeNull();
     expect(catalog.getModel('openai', 'gpt-5')).toBeNull();
@@ -169,7 +169,7 @@ describe('reading a provider out of the file', () => {
     const index = catalog.writeCatalogSnapshot(FIXTURE, new Date().toISOString());
     const entry = index.entries['openai']!;
     const replacement = Buffer.from(JSON.stringify({ id: 'solocal', name: 'Wrong' }).padEnd(entry.length, ' '), 'utf8');
-    const handle = openSync(`${getDataPath('catalog')}.ndjson`, 'r+');
+    const handle = openSync(join(dataDir, index.dataFile!), 'r+');
     try {
       writeSync(handle, replacement, 0, replacement.length, entry.offset);
     } finally {

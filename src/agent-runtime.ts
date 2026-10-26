@@ -38,6 +38,18 @@ import type { UsageRecordInput } from './usage/recorder.js';
 import type { SubagentRequest } from './tools/subagent.js';
 import type { McpConnectionManager } from './tools/mcp.js';
 
+/** A session cannot manage its context safely without a verified model limit.
+ * Never silently invent an arbitrary 8k/32k window for unknown providers.
+ */
+export function requireModelContextWindow(value: number | null | undefined, providerId: string, modelId: string): number {
+  if (value === undefined || value === null || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(
+      `The context limit for ${providerId}/${modelId} is unknown. Configure providers.${providerId}.modelSpecs.${modelId}.context in settings, or choose a cataloged model. Automatic compaction requires an explicit model context limit.`,
+    );
+  }
+  return value;
+}
+
 export interface CreateAgentRuntimeOptions {
   workspaceRoot?: string;
   /** Restore a conversation's model without changing the machine's defaults. */
@@ -106,6 +118,11 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   const resolved = await createLanguageModel(providerId, modelId, provider, createPayloadFetch(provider, modelId), reportRetry);
   if (!resolved.ok) throw new Error(resolved.error.reason);
   const reasoningCatalog = findReasoningCatalogMatch(providerId, modelId, resolved.resolved);
+  const contextWindowTokens = requireModelContextWindow(
+    reasoningCatalog.model?.limit?.context ?? provider.modelSpecs?.[modelId]?.context,
+    providerId,
+    modelId,
+  );
   const catalogVariants = listReasoningVariants(resolved.resolved, reasoningCatalog.model);
   const reasoningVariants = [
     ...catalogVariants,
@@ -227,6 +244,11 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       );
       if (!next.ok) throw new Error(next.error.reason);
       const nextCatalog = findReasoningCatalogMatch(nextProviderId, nextModelId, next.resolved);
+      const nextContextWindowTokens = requireModelContextWindow(
+        nextCatalog.model?.limit?.context ?? nextProvider.modelSpecs?.[nextModelId]?.context,
+        nextProviderId,
+        nextModelId,
+      );
       const nextCatalogVariants = listReasoningVariants(next.resolved, nextCatalog.model);
       const nextVariants = [
         ...nextCatalogVariants,
@@ -246,7 +268,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       runtime.modelName = next.resolved.displayName;
       runtime.providerId = nextProviderId;
       runtime.modelId = nextModelId;
-      runtime.contextWindowTokens = nextCatalog.model?.limit?.context ?? nextProvider.modelSpecs?.[nextModelId]?.context ?? null;
+      runtime.contextWindowTokens = nextContextWindowTokens;
       runtime.outputLimitTokens = nextCatalog.model?.limit?.output ?? nextProvider.modelSpecs?.[nextModelId]?.output ?? null;
       runtime.supportsVision = modelSupportsVision(nextProviderId, nextModelId, next.resolved);
       runtime.supportsImageToolResult = supportsImageToolResult(next.resolved, nextModelId);
@@ -266,7 +288,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       modelName: resolved.resolved.displayName,
       providerId,
       modelId,
-      contextWindowTokens: reasoningCatalog.model?.limit?.context ?? provider.modelSpecs?.[modelId]?.context ?? null,
+      contextWindowTokens,
       outputLimitTokens: reasoningCatalog.model?.limit?.output ?? provider.modelSpecs?.[modelId]?.output ?? null,
       supportsVision: modelSupportsVision(providerId, modelId, activeResolved),
       supportsImageToolResult: supportsImageToolResult(resolved.resolved, modelId),

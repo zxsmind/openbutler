@@ -35,6 +35,7 @@ import { pickProjectFolder } from './folder-picker.js';
 import { attachTerminalServer } from './terminal-server.js';
 import { readWorkspaceFiles, readWorkspaceFileTree, WorkspaceFilesError } from './files.js';
 import { WebSessions, SessionRequestError } from './sessions.js';
+import { BoundedSseWriter } from './sse-output.js';
 
 /** Outside the Windows ephemeral range so the port stays free between runs. */
 /**
@@ -103,6 +104,7 @@ export interface WebServer {
 
 interface SseClient {
   res: ServerResponse;
+  writer: BoundedSseWriter;
   lastEntries: Entry[] | null;
   sessionId: string;
   /** When this stream last carried a byte, so a close can say how silent it was. */
@@ -297,7 +299,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return;
     }
     try {
-      client_.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      if (!client_.writer.send(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)) {
+        clients.delete(client_);
+        return;
+      }
       client_.lastWriteAt = Date.now();
     } catch (problem) {
       clients.delete(client_);
@@ -961,7 +966,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         connection: 'keep-alive',
         'x-accel-buffering': 'no',
       });
-      res.write(': connected\n\n');
+
       let socketError: string | null = null;
       // A socket error is the one signal that separates "the browser went away"
       // from "this machine could not write any more".
@@ -971,7 +976,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       req.socket.on('error', (problem: Error) => {
         socketError = problem.name;
       });
-      const target: SseClient = { res, lastEntries: null, sessionId: client.getSnapshot().session.id, lastWriteAt: Date.now() };
+      const target: SseClient = {
+        res,
+        writer: new BoundedSseWriter(res),
+        lastEntries: null,
+        sessionId: client.getSnapshot().session.id,
+        lastWriteAt: Date.now(),
+      };
+      target.writer.send(': connected\n\n');
       const release = sessions.retain(target.sessionId);
       clients.add(target);
       const entries = client.getServerEntries() as Entry[];
@@ -983,8 +995,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         try {
           // A named event, not a comment: the browser must be able to see that
           // the stream is alive, or it cannot tell a healthy stream from a dead one.
-          res.write('event: ping\ndata: {}\n\n');
-          target.lastWriteAt = Date.now();
+          writeEvent(target, 'ping', {});
         } catch {
           /* The close handler removes the stream. */
         }

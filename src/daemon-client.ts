@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { getDataPath } from './paths.js';
+import { DaemonFrameDecoder } from './daemon-frames.js';
 import { createConnection, type Socket } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
@@ -64,7 +65,7 @@ export async function connectDaemonSession(workspacePath: string, options: Attac
 }
 
 class DaemonSessionClient implements AgentSessionClient {
-  private input = Buffer.alloc(0);
+  private frames = new DaemonFrameDecoder(MAX_DAEMON_FRAME_BYTES);
   private readonly pending = new Map<string, PendingRequest>();
   private readonly listeners = new Set<() => void>();
   private snapshot: AgentSessionSnapshot | null = null;
@@ -343,16 +344,14 @@ class DaemonSessionClient implements AgentSessionClient {
   }
 
   private consume(chunk: Buffer): void {
-    if (this.input.byteLength + chunk.byteLength > MAX_DAEMON_FRAME_BYTES) {
-      this.socket.destroy(new Error('Ranite host frame exceeded the 32 MB limit.'));
+    let frames: Buffer[];
+    try {
+      frames = this.frames.append(chunk);
+    } catch (error) {
+      this.socket.destroy(error as Error);
       return;
     }
-    this.input = Buffer.concat([this.input, chunk]);
-    while (true) {
-      const newline = this.input.indexOf(0x0a);
-      if (newline < 0) return;
-      const frame = this.input.subarray(0, newline);
-      this.input = this.input.subarray(newline + 1);
+    for (const frame of frames) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(frame.toString('utf8'));
@@ -506,7 +505,7 @@ class DaemonSessionClient implements AgentSessionClient {
           break;
         }
         this.socket = socket;
-        this.input = Buffer.alloc(0);
+        this.frames = new DaemonFrameDecoder(MAX_DAEMON_FRAME_BYTES);
         this.bindSocket(socket);
         await this.attach(this.attachOptions);
 

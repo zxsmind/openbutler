@@ -1,7 +1,9 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import { load as parseYaml, dump as dumpYaml } from 'js-yaml';
 import { getDataPath } from './paths.js';
+import { commitSecrets, commitSettingsPair, withSettingsLock } from './settings-transaction.js';
 
 /**
  * Persisted configuration.
@@ -169,6 +171,24 @@ export interface SettingsStore {
 
 const SETTINGS_FILE = getDataPath('settings.yaml');
 const CONFIG_FILE = getDataPath('config.yaml');
+const loadedRevisions = new WeakMap<SettingsStore, string>();
+
+function diskSettingsRevision(): string {
+  const hash = createHash('sha256');
+  try {
+    hash.update('settings:').update(readFileSync(SETTINGS_FILE));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    hash.update('settings:missing');
+  }
+  // A separate owner can rotate a team ticket or Modal token without editing
+  // model settings. Saving settings merges those secrets from disk, so only
+  // provider keys (which the SettingsStore actually rewrites) participate in
+  // optimistic concurrency control.
+  const providers = loadSecretsUnlocked().providers;
+  hash.update(JSON.stringify(Object.entries(providers).sort(([a], [b]) => a.localeCompare(b))));
+  return hash.digest('hex');
+}
 
 const KNOWN_KEYS = new Set([
   'providers',
@@ -519,6 +539,14 @@ export function defaultSettings(): SettingsStore {
 
 /** Reads settings from disk, or returns defaults when the file is absent. */
 export function loadSettings(): SettingsStore {
+  return withSettingsLock(() => {
+    const settings = loadSettingsUnlocked();
+    loadedRevisions.set(settings, diskSettingsRevision());
+    return settings;
+  });
+}
+
+function loadSettingsUnlocked(): SettingsStore {
   let text: string;
   try {
     text = readFileSync(SETTINGS_FILE, 'utf8');
@@ -695,6 +723,10 @@ function mergeSecrets(settings: SettingsStore, secrets: SecretsStore): void {
 
 /** Reads the secret store from disk, or empty when the file is absent. */
 export function loadSecrets(): SecretsStore {
+  return withSettingsLock(loadSecretsUnlocked);
+}
+
+function loadSecretsUnlocked(): SecretsStore {
   let text: string;
   try {
     text = readFileSync(CONFIG_FILE, 'utf8');
@@ -747,20 +779,9 @@ function parseProviderSecrets(raw: unknown, id: string): ProviderSecrets {
   return { keys: stringArray(raw.keys, `config providers.${id}.keys`) };
 }
 
-/** Writes a YAML document atomically, so a crash cannot leave a half file. */
-function atomicWriteYaml(path: string, document: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tempFile = `${path}.tmp`;
-  writeFileSync(tempFile, dumpYaml(document, { lineWidth: 120 }), 'utf8');
-  // Config entries hold API key material, so both files are owner-only like the
-  // allowlist and the ledger. Note that on Windows `chmod` only toggles the read-only
-  // attribute: the data directory's ACL is what actually governs access there.
-  try {
-    chmodSync(tempFile, 0o600);
-  } catch {
-    /* Windows uses the directory ACL. */
-  }
-  renameSync(tempFile, path);
+/** Stable YAML serialization shared by the journaled pair and single-file writes. */
+function serializeYaml(document: unknown): string {
+  return dumpYaml(document, { lineWidth: 120 });
 }
 
 /**
@@ -770,11 +791,13 @@ function atomicWriteYaml(path: string, document: unknown): void {
 export function saveSecrets(secrets: SecretsStore): void {
   const providers: Record<string, ProviderSecrets> = {};
   for (const [id, secret] of Object.entries(secrets.providers)) providers[id] = { keys: [...secret.keys] };
-  atomicWriteYaml(CONFIG_FILE, {
-    providers,
-    ...(secrets.teamTicket ? { teamTicket: secrets.teamTicket } : {}),
-    ...(secrets.modal ? { modal: { tokenId: secrets.modal.tokenId, tokenSecret: secrets.modal.tokenSecret } } : {}),
-  });
+  commitSecrets(
+    serializeYaml({
+      providers,
+      ...(secrets.teamTicket ? { teamTicket: secrets.teamTicket } : {}),
+      ...(secrets.modal ? { modal: { tokenId: secrets.modal.tokenId, tokenSecret: secrets.modal.tokenSecret } } : {}),
+    }),
+  );
 }
 
 /** Modal credentials, or null when this machine has none. */
@@ -802,6 +825,17 @@ export function clearModalCredentials(): void {
  * it is saved.
  */
 export function saveSettings(settings: SettingsStore): void {
+  withSettingsLock(() => {
+    const expected = loadedRevisions.get(settings);
+    if (expected !== undefined && expected !== diskSettingsRevision()) {
+      throw new Error('Settings changed after this copy was loaded. Reload settings before saving to avoid overwriting another writer.');
+    }
+    saveSettingsUnlocked(settings);
+    loadedRevisions.set(settings, diskSettingsRevision());
+  });
+}
+
+function saveSettingsUnlocked(settings: SettingsStore): void {
   const ordered: Record<string, ProviderState> = {};
   for (const id of [...settings.providerOrder, ...Object.keys(settings.providers)]) {
     if (id in settings.providers) ordered[id] = settings.providers[id];
@@ -832,24 +866,17 @@ export function saveSettings(settings: SettingsStore): void {
     ...(settings.telegram ? { telegram: settings.telegram } : {}),
     ...(settings.team ? { team: settings.team } : {}),
   };
-  atomicWriteYaml(SETTINGS_FILE, document);
-  // saveSettings rewrites the secret file wholesale, so it carries the team
-  // ticket through: a settings save must never log the machine out of its team.
-  let teamTicket: string | undefined;
-  let modal: ModalCredentials | undefined;
-  try {
-    const secrets = loadSecrets();
-    teamTicket = secrets.teamTicket;
-    modal = secrets.modal;
-  } catch {
-    teamTicket = undefined;
-    modal = undefined;
-  }
-  atomicWriteYaml(CONFIG_FILE, {
-    providers: secretProviders,
-    ...(teamTicket ? { teamTicket } : {}),
-    ...(modal ? { modal: { tokenId: modal.tokenId, tokenSecret: modal.tokenSecret } } : {}),
-  });
+  // Validate the existing secret store BEFORE committing anything. An unreadable
+  // store must never be reinterpreted as an empty one.
+  const secrets = loadSecretsUnlocked();
+  commitSettingsPair(
+    serializeYaml(document),
+    serializeYaml({
+      providers: secretProviders,
+      ...(secrets.teamTicket ? { teamTicket: secrets.teamTicket } : {}),
+      ...(secrets.modal ? { modal: { tokenId: secrets.modal.tokenId, tokenSecret: secrets.modal.tokenSecret } } : {}),
+    }),
+  );
 }
 
 export function parseScheduleState(raw: unknown): ScheduleState {

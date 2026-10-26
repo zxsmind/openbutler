@@ -1,6 +1,7 @@
 import { storeAttachment, verifyAttachmentPath, type FileAttachment } from './attachments.js';
 import { TEAM_CAPABILITY_MAX_AGE_MS } from './team/contracts.js';
 import { randomUUID } from 'node:crypto';
+import { DaemonFrameDecoder } from './daemon-frames.js';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path';
@@ -882,23 +883,20 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       }
       sockets.add(socket);
       socket.setNoDelay(true);
-      let input = Buffer.alloc(0);
-      // Frames from one socket are handled in order: a request's response, state
-      // transitions and file writes must not interleave with the next frame.
+      const frames = new DaemonFrameDecoder(MAX_DAEMON_FRAME_BYTES);
+      // Frames from one socket are handled in order, even if a chunk holds multiple requests.
       let dispatchQueue = Promise.resolve();
       socket.on('data', (chunk: Buffer) => {
         if (socket.destroyed) return;
-        if (input.byteLength + chunk.byteLength > MAX_DAEMON_FRAME_BYTES) {
+        let messages: Buffer[];
+        try {
+          messages = frames.append(chunk);
+        } catch {
           writeResponse(socket, '', false, undefined, 'IPC frame exceeded the 32 MB limit; the connection is being closed.');
           socket.destroy();
           return;
         }
-        input = Buffer.concat([input, chunk]);
-        while (true) {
-          const newline = input.indexOf(0x0a);
-          if (newline < 0) break;
-          const frame = input.subarray(0, newline);
-          input = input.subarray(newline + 1);
+        for (const frame of messages) {
           dispatchQueue = dispatchQueue.then(() => dispatchFrame(socket, frame.toString('utf8'))).catch(() => undefined);
         }
       });
