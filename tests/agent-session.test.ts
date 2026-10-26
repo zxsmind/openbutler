@@ -112,6 +112,144 @@ function fixtureText(text: string, finishReason: 'stop' | 'length' = 'stop', inp
 }
 
 describe('owner replies and safe steering', () => {
+  it('finishes replies and accepts the next message while the first title is still being generated', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    let complete!: (value: ReturnType<typeof titleResponse>) => void;
+    const pending = new Promise<ReturnType<typeof titleResponse>>((resolve) => {
+      complete = resolve;
+    });
+    const generate = vi.fn<MockLanguageModelV3['doGenerate']>(() => pending);
+    const model = new MockLanguageModelV3({ doGenerate: generate, doStream: async () => fixtureText('Completed answer') });
+    session = new AgentSessionController(runtimeFor(model));
+    await session.sendMessage({ text: 'First message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    expect(session.getSnapshot().busy).toBe(false);
+    expect(session.getSnapshot().session.entries.find((entry) => entry.kind === 'user')?.turnOutcome).toBe('completed');
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
+    await session.sendMessage({ text: 'Next message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    expect(session.getSnapshot().session.entries.filter((entry) => entry.kind === 'user')).toHaveLength(2);
+    complete(titleResponse());
+    await vi.waitFor(() => expect(session!.getSnapshot().session.title).toBe('Fixture greeting'));
+  });
+
+  it('carries the admitted message reasoning variant into every model step', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const runtime = runtimeFor(
+      new MockLanguageModelV3({
+        doGenerate: async () => titleResponse(),
+        doStream: async () => fixtureText('Chosen effort'),
+      }),
+    );
+    const seen: string[] = [];
+    runtime.getReasoningProviderOptions = (variantId: string) => {
+      seen.push(variantId);
+      return {};
+    };
+    session = new AgentSessionController(runtime);
+    await session.sendMessage({ text: 'Reason hard', images: [] }, { reasoningVariantId: 'high', showReasoning: true });
+    await session.waitUntilIdle(1000);
+    expect(seen[0]).toBe('high');
+    expect(seen).toContain('high');
+  });
+
+  it('cancels title generation when changing sessions and ignores the stale result', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    let complete!: (value: ReturnType<typeof titleResponse>) => void;
+    const pending = new Promise<ReturnType<typeof titleResponse>>((resolve) => {
+      complete = resolve;
+    });
+    const generate = vi.fn<MockLanguageModelV3['doGenerate']>(() => pending);
+    session = new AgentSessionController(
+      runtimeFor(new MockLanguageModelV3({ doGenerate: generate, doStream: async () => fixtureText('Done') })),
+    );
+    await session.sendMessage({ text: 'First message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
+    const signal = generate.mock.calls[0]![0]?.abortSignal;
+    session.createNewSession();
+    const next = session.getSnapshot().session;
+    expect(signal?.aborted).toBe(true);
+    complete(titleResponse());
+    await delay(20);
+    expect(session.getSnapshot().session.id).toBe(next.id);
+    expect(session.getSnapshot().session.title).toBe(next.title);
+  });
+
+  it('closes without waiting for a stalled title request', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const generate = vi.fn<MockLanguageModelV3['doGenerate']>(async () => new Promise<ReturnType<typeof titleResponse>>(() => {}));
+    session = new AgentSessionController(
+      runtimeFor(new MockLanguageModelV3({ doGenerate: generate, doStream: async () => fixtureText('Done') })),
+    );
+    await session.sendMessage({ text: 'First message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
+    await session.close();
+    expect(generate.mock.calls[0]![0]?.abortSignal?.aborted).toBe(true);
+  });
+
+  it('queues owner messages by default and promotes only the selected message into the active turn', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const registry = new ToolRegistry();
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'Fixture',
+      inputSchema: { type: 'object', properties: {} },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => {
+        started = true;
+        await gate;
+        return { message: 'Evidence' };
+      },
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi
+        .fn()
+        .mockImplementationOnce(async () =>
+          delayedStream([{ type: 'tool-call', toolCallId: 'one', toolName: 'inspect', input: '{}' }], 'tool-calls'),
+        )
+        .mockImplementationOnce(async () => fixtureText('Original task completed with the correction.'))
+        .mockImplementationOnce(async () => fixtureText('Queued task completed.')),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
+    const communication = { source: 'terminal' as const, replyTo: { channel: 'terminal' as const } };
+    const first = session.sendMessage({ text: 'Original task.', images: [], communication }, preferences);
+    await vi.waitFor(() => expect(started).toBe(true));
+    const waiting = session.sendMessage({ text: 'Later independent task.', images: [], communication }, preferences);
+    const steering = session.sendMessage({ text: 'Correct the current task.', images: [], communication }, preferences);
+    const removed = session.sendMessage({ text: 'Removed task.', images: [], communication }, preferences);
+    const pending = session.getSnapshot().queuedMessages;
+    expect(pending.every((message) => message.steering === false)).toBe(true);
+    session.manageQueuedMessage(pending[1]!.id!, 'steer', session.getSnapshot().session.id);
+    session.manageQueuedMessage(pending[2]!.id!, 'remove', session.getSnapshot().session.id);
+    await removed;
+    release();
+    await Promise.all([first, waiting, steering]);
+    expect(model.doStreamCalls).toHaveLength(3);
+    const activePrompt = JSON.stringify(model.doStreamCalls[1]!.prompt);
+    expect(activePrompt).toContain('Correct the current task.');
+    expect(activePrompt).not.toContain('Later independent task.');
+    expect(JSON.stringify(model.doStreamCalls)).not.toContain('Removed task.');
+    const nextPrompt = model.doStreamCalls[2]!.prompt;
+    expect(JSON.stringify(nextPrompt.at(-1))).toContain('Later independent task.');
+    expect(JSON.stringify(nextPrompt.at(-1))).not.toContain('follow-up steering');
+    expect(JSON.stringify(nextPrompt)).toContain('Original task completed with the correction.');
+    const entries = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'user');
+    expect(entries.map((entry) => entry.text)).toEqual(['Original task.', 'Correct the current task.', 'Later independent task.']);
+    expect(entries[1]!.turnId).toBe(entries[0]!.turnId);
+    expect(entries[2]!.turnId).not.toBe(entries[0]!.turnId);
+    expect(() => session!.manageQueuedMessage('missing', 'steer', session!.getSnapshot().session.id)).toThrow('no running task');
+  });
+
   it('steers actual owner text after tool results, shares one reply, and excludes tool traces', async () => {
     let started = false;
     let release!: () => void;
@@ -155,6 +293,10 @@ describe('owner replies and safe steering', () => {
     const first = session.sendMessage({ text: 'Review it.', images: [], eventId: 'first', communication }, preferences);
     await vi.waitFor(() => expect(started).toBe(true));
     const second = session.sendMessage({ text: 'Do not delete, only read.', images: [], eventId: 'second', communication }, preferences);
+    const queued = session.getSnapshot().queuedMessages[0]!;
+    expect(queued.steering).toBe(false);
+    session.manageQueuedMessage(queued.id!, 'steer', session.getSnapshot().session.id);
+    expect(session.getSnapshot().queuedMessages[0]!.steering).toBe(true);
     release();
     await Promise.all([first, second]);
     expect(model.doStreamCalls).toHaveLength(2);
@@ -169,7 +311,15 @@ describe('owner replies and safe steering', () => {
     ).toHaveLength(1);
     expect(JSON.stringify(prompt)).toContain('[Host context: owner message via Telegram]');
     expect(JSON.stringify(prompt)).toContain('reply through send_message_to_owner');
+    expect(JSON.stringify(prompt)).toContain('follow-up steering for the task already in progress');
+    expect(JSON.stringify(prompt)).toContain('then continue the unfinished work');
     expect(JSON.stringify(prompt)).not.toContain('telegramAvailable');
+    const userEntries = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'user');
+    expect(userEntries).toHaveLength(2);
+    expect(userEntries[1]!.turnId).toBe(userEntries[0]!.turnId);
+    expect(userEntries[0]!.turnOutcome).toBe('completed');
+    expect(userEntries[0]!.turnEndedAt).toBeGreaterThanOrEqual(userEntries[0]!.at!);
+    expect(userEntries[1]!.turnOutcome).toBeUndefined();
     expect(session.takeEventRunResult('first')).toEqual({
       error: null,
       outputs: [
@@ -180,7 +330,7 @@ describe('owner replies and safe steering', () => {
     expect(session.takeEventRunResult('second')).toEqual({ error: null, outputs: [], replyHandledByEventId: 'first' });
   });
 
-  it('drains every compatible queued message in the same steering gap', async () => {
+  it.each(['terminal', 'web'] as const)('drains explicitly steered %s messages in the same gap', async (source) => {
     let started = false;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -219,12 +369,15 @@ describe('owner replies and safe steering', () => {
     });
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
-    const terminal = { source: 'terminal' as const, replyTo: { channel: 'terminal' as const } };
+    const terminal = { source, replyTo: { channel: 'terminal' as const } };
     const first = session.sendMessage({ text: 'First task.', images: [], communication: terminal }, preferences);
     await vi.waitFor(() => expect(started).toBe(true));
     const second = session.sendMessage({ text: 'Second note alpha.', images: [], communication: terminal }, preferences);
     const third = session.sendMessage({ text: 'Third note beta.', images: [], communication: terminal }, preferences);
     const fourth = session.sendMessage({ text: 'Fourth note gamma.', images: [], communication: terminal }, preferences);
+    for (const queued of session.getSnapshot().queuedMessages) {
+      session.manageQueuedMessage(queued.id!, 'steer', session.getSnapshot().session.id);
+    }
     release();
     await Promise.all([first, second, third, fourth]);
     // One initial step plus a single steered step carrying the whole burst.
@@ -233,6 +386,10 @@ describe('owner replies and safe steering', () => {
     expect(prompt).toContain('Second note alpha.');
     expect(prompt).toContain('Third note beta.');
     expect(prompt).toContain('Fourth note gamma.');
+    expect(prompt).toContain(`[Host context: owner message via ${source}]`);
+    expect(prompt).toContain('follow-up steering for the task already in progress');
+    expect(prompt.indexOf('Second note alpha.')).toBeLessThan(prompt.indexOf('Third note beta.'));
+    expect(prompt.indexOf('Third note beta.')).toBeLessThan(prompt.indexOf('Fourth note gamma.'));
     expect(session.getSnapshot().queuedMessageCount).toBe(0);
   });
 
@@ -280,6 +437,7 @@ describe('owner replies and safe steering', () => {
           },
           preferences,
         );
+        session!.manageQueuedMessage(session!.getSnapshot().queuedMessages[0]!.id!, 'steer', session!.getSnapshot().session.id);
         return { message: 'Tool completed' };
       },
     });
@@ -366,6 +524,7 @@ describe('owner replies and safe steering', () => {
     );
     expect(model.doStreamCalls).toHaveLength(2);
     expect(session.getLastRunError()).toContain('without a user-facing answer');
+    expect(session.getSnapshot().session.entries.find((entry) => entry.kind === 'user')?.turnOutcome).toBe('failed');
   });
 });
 
@@ -720,8 +879,15 @@ describe('session streaming message boundaries', () => {
 
     const toolEntries = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'tool');
     expect(toolEntries).toMatchObject([
-      { kind: 'tool', command: 'Write src/runtime.ts', result: 'Wrote', running: false, tool: 'host:file_write' },
+      {
+        kind: 'tool',
+        input: { path: 'src/runtime.ts', content: 'export const x = 1;' },
+        result: 'Wrote',
+        running: false,
+        tool: 'host:file_write',
+      },
     ]);
+    expect(toolEntries[0]).not.toHaveProperty('command');
   });
 
   it('keeps text that keeps streaming after a tool call starts in the same assistant entry', async () => {
@@ -860,11 +1026,13 @@ describe('session compaction persistence and continuation', () => {
       autoApprove: () => true,
       execute: async () => {
         executions++;
-        if (executions === 1)
+        if (executions === 1) {
           void session!.sendMessage(
             { text: 'Keep the queued constraint.', images: [], communication: { source: 'terminal', replyTo: { channel: 'terminal' } } },
             preferences,
           );
+          session!.manageQueuedMessage(session!.getSnapshot().queuedMessages[0]!.id!, 'steer', session!.getSnapshot().session.id);
+        }
         return { finding: `Original tool result ${executions}. ` + 'Detailed evidence. '.repeat(1_000) };
       },
     });
@@ -1196,10 +1364,10 @@ describe('session compaction persistence and continuation', () => {
     else await session.sendMessage({ text: 'Continue.', images: [] }, selected);
     expect(model.doStreamCalls).toHaveLength(mode === 'manual' ? 1 : 2);
     for (const request of model.doStreamCalls) expect(request.providerOptions).toEqual(providerOptions);
-    // Manual compaction honors its explicit argument; a running turn follows the
-    // live runtime preference instead of its send-time capture, so a mid-run
-    // settings change applies immediately.
-    expect(runtime.getReasoningProviderOptions).toHaveBeenCalledWith(mode === 'manual' ? 'xhigh' : 'default', true);
+    // Manual compaction honors its explicit argument; an admitted message's own
+    // preference now governs its running turn, and an explicit runtime settings
+    // change made mid-turn still overrides it immediately.
+    expect(runtime.getReasoningProviderOptions).toHaveBeenCalledWith('xhigh', true);
   });
 
   it('retains measured context when selecting the same model on another provider, then compacts before continuing', async () => {
@@ -1621,6 +1789,7 @@ describe('session activity reporting', () => {
 
     session.stop();
     await vi.waitFor(() => expect(session!.getSnapshot().busy).toBe(false));
+    expect(session.getSnapshot().session.entries.find((entry) => entry.kind === 'user')?.turnOutcome).toBe('cancelled');
     expect(session.getSnapshot().queuedMessageCount).toBe(0);
     expect(session.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Second request.')).toBe(false);
   });
@@ -1682,8 +1851,10 @@ describe('session activity reporting', () => {
     const heldEntries = () =>
       session!.getSnapshot().session.entries.filter((entry) => entry.kind === 'user' && entry.text === 'Second request.');
     expect(heldEntries()).toHaveLength(1);
+    expect(session.getSnapshot().session.entries.find((entry) => entry.kind === 'user')?.turnOutcome).toBe('cancelled');
+    expect(heldEntries()[0]!.turnOutcome).toBeUndefined();
 
-    // The next explicit send releases the hold: held and new messages run together.
+    // The next explicit send releases the hold: held and new messages resume in order.
     void session.sendMessage({ text: 'Third request.', images: [] }, preferences);
     await vi.waitFor(() =>
       expect(session!.getSnapshot().session.entries.some((entry) => entry.kind === 'user' && entry.text === 'Third request.')).toBe(true),
@@ -1691,6 +1862,8 @@ describe('session activity reporting', () => {
     await vi.waitFor(() => expect(session!.getSnapshot().queuedMessageCount).toBe(0));
     // The held message is delivered once, so its transcript entry must not be duplicated.
     expect(heldEntries()).toHaveLength(1);
+    await vi.waitFor(() => expect(session!.getSnapshot().busy).toBe(false));
+    expect(heldEntries()[0]!.turnOutcome).toBe('completed');
     await session.close();
     session = undefined;
   });
