@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
+import { toolEntryCommand } from '../../src/tool-display.js';
 import { Markdown } from './markdown.js';
 import type { Entry } from './types.js';
 import { ToolOutput } from './components/tool-output.js';
@@ -6,6 +7,7 @@ import { ReasoningText } from './components/reasoning-text.js';
 import { ScrollArea } from './components/scroll-area.js';
 import { Collapsible } from './components/collapsible.js';
 import { Icon } from './components/ui.js';
+import { Feedback } from './components/feedback.js';
 import { MessageAttachments } from './components/message-attachments.js';
 import {
   activeGroupIndex,
@@ -19,6 +21,7 @@ import {
   thoughtHeadline,
   thoughtLabel,
   turnDuration,
+  turnContents,
   type GroupSignal,
   type Turn,
 } from './turns.js';
@@ -63,7 +66,12 @@ function isBrowser(entry: Entry): boolean {
 }
 
 function EntryNotice({ entry }: { entry: Entry }) {
-  return entry.text ? <div className={`notice ${entry.tone ?? (entry.kind === 'error' ? 'error' : 'info')}`}>{entry.text}</div> : null;
+  const tone = entry.tone ?? (entry.kind === 'error' ? 'error' : 'info');
+  return entry.text ? (
+    <Feedback tone={tone === 'warn' ? 'warning' : tone} announce={false}>
+      {entry.text}
+    </Feedback>
+  ) : null;
 }
 
 function StepRow({ entry, live }: { entry: Entry; live: boolean }) {
@@ -89,7 +97,7 @@ function StepRow({ entry, live }: { entry: Entry; live: boolean }) {
     setOpen((value) => !value);
   };
   const { verb } = stepLabel(entry);
-  const label = entry.kind === 'reasoning' ? thoughtLabel(entry.durationMs) : entry.command || entry.tool || 'tool';
+  const label = entry.kind === 'reasoning' ? thoughtLabel(entry.durationMs) : toolEntryCommand(entry);
   const running = entry.running === true || entry.preparing === true;
   const bad = !running && failed(entry);
   const hasDetail = entry.kind === 'tool' || Boolean(entry.text);
@@ -118,7 +126,7 @@ function StepRow({ entry, live }: { entry: Entry; live: boolean }) {
           {entry.kind === 'tool' ? (
             <ToolOutput entry={entry} running={running} />
           ) : (
-            <ReasoningText text={entry.text ?? ''} follow={thinking} />
+            <ReasoningText text={entry.text ?? ''} follow={thinking} reveal={entry.streamReveal} />
           )}
         </div>
       </Collapsible>
@@ -208,8 +216,18 @@ function StepGroup({ entries, live, active }: { entries: Entry[]; live: boolean;
   );
 }
 export function TurnView({ turn, live, sessionId }: { turn: Turn; live: boolean; sessionId: string }) {
-  const duration = live && turn.startedAt !== null ? Math.max(0, Date.now() - turn.startedAt) : turnDuration(turn);
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const detailsId = useId();
   const groups = groupTimeline(turn);
+  const { details, answer } = turnContents(turn);
+  const firstWork = details.findIndex((group) => group.kind !== 'message' || group.entry.kind !== 'user');
+  const leadingUsers = details.slice(0, firstWork < 0 ? details.length : firstWork);
+  const workDetails = details.slice(leadingUsers.length);
+  // A reader's explicit choice takes precedence over the automatic live/finished state.
+  const open = expanded ?? (live || workDetails.some((group) => group.kind === 'message' && group.entry.kind === 'user'));
+  const duration = live && turn.startedAt !== null ? Math.max(0, Date.now() - turn.startedAt) : turnDuration(turn);
+  const outcome = turn.user?.turnOutcome;
+  const label = live ? 'Working for' : outcome === 'cancelled' ? 'Stopped after' : outcome === 'failed' ? 'Failed after' : 'Took';
   // The open group belongs to the run that is still going: once the work stops,
   // the last group folds like every other finished group.
   const activeGroup = activeGroupIndex(groups, live);
@@ -223,36 +241,67 @@ export function TurnView({ turn, live, sessionId }: { turn: Turn; live: boolean;
           </div>
         </div>
       ) : null}
-      {duration !== null && turn.steps.length > 0 ? (
-        <div className="turn-work-duration">
-          {live ? 'Working for' : 'Took'} {formatDuration(duration)}
+      {leadingUsers.map((group, index) => {
+        const entry = group.kind === 'message' ? group.entry : null;
+        return entry ? (
+          <div className="ask" key={entry.eventId || index}>
+            <div className="prose">
+              <MessageAttachments entry={entry} sessionId={sessionId} />
+              {(entry.text ?? '').trimEnd()}
+            </div>
+          </div>
+        ) : null;
+      })}
+      {workDetails.length > 0 ? (
+        <button
+          type="button"
+          className="turn-toggle turn-work-duration"
+          data-scroll-preserve
+          aria-expanded={open}
+          aria-controls={detailsId}
+          onClick={() => setExpanded(!open)}
+        >
+          <span>{duration === null ? 'Work details' : `${label} ${formatDuration(duration)}`}</span>
+          <span className={`step-chevron${open ? ' expanded' : ''}`}>
+            <Icon name="chevron-down" />
+          </span>
+        </button>
+      ) : null}
+      <Collapsible id={detailsId} open={open}>
+        {workDetails.map((group, index) => {
+          if (group.kind === 'steps')
+            return <StepGroup key={index} entries={group.entries} live={live} active={index + leadingUsers.length === activeGroup} />;
+          if (group.kind === 'compaction') return <CompactionRow key={`compaction-${index}`} entry={group.entry} />;
+          const entry = group.entry;
+          // A message the owner sent into a running turn is still their words, not
+          // a notice: it renders like the opening ask, in its place in the timeline.
+          if (entry.kind === 'user')
+            return (
+              <div className="ask" key={entry.eventId || index}>
+                <div className="prose">
+                  <MessageAttachments entry={entry} sessionId={sessionId} />
+                  {(entry.text ?? '').trimEnd()}
+                </div>
+              </div>
+            );
+          if (entry.kind === 'assistant')
+            return entry.text?.trim() ? (
+              <div className="answer" key={entry.eventId || index}>
+                <div className="body">
+                  <Markdown text={entry.text.trimEnd()} reveal={entry.streamReveal} />
+                </div>
+              </div>
+            ) : null;
+          return <EntryNotice key={entry.eventId || index} entry={entry} />;
+        })}
+      </Collapsible>
+      {answer ? (
+        <div className="answer">
+          <div className="body">
+            <Markdown text={answer.text!.trimEnd()} reveal={answer.streamReveal} />
+          </div>
         </div>
       ) : null}
-      {groups.map((group, index) => {
-        if (group.kind === 'steps') return <StepGroup key={index} entries={group.entries} live={live} active={index === activeGroup} />;
-        if (group.kind === 'compaction') return <CompactionRow key={`compaction-${index}`} entry={group.entry} />;
-        const entry = group.entry;
-        // A message the owner sent into a running turn is still their words, not
-        // a notice: it renders like the opening ask, in its place in the timeline.
-        if (entry.kind === 'user')
-          return (
-            <div className="ask" key={entry.eventId || index}>
-              <div className="prose">
-                <MessageAttachments entry={entry} sessionId={sessionId} />
-                {(entry.text ?? '').trimEnd()}
-              </div>
-            </div>
-          );
-        if (entry.kind === 'assistant')
-          return entry.text?.trim() ? (
-            <div className="answer" key={entry.eventId || index}>
-              <div className="body">
-                <Markdown text={entry.text.trimEnd()} />
-              </div>
-            </div>
-          ) : null;
-        return <EntryNotice key={entry.eventId || index} entry={entry} />;
-      })}
     </section>
   );
 }

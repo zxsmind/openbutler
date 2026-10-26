@@ -12,6 +12,8 @@ import {
   thoughtDuration,
   thoughtHeadline,
   thoughtLabel,
+  turnContents,
+  turnDuration,
 } from '../../web/src/turns.js';
 import type { Entry } from '../../web/src/types.js';
 
@@ -21,7 +23,94 @@ function onlyTurn(entries: Entry[]) {
   return turn;
 }
 
+describe('whole-turn disclosure', () => {
+  it('keeps commentary, steering and tools in details and leaves only the final answer outside', () => {
+    const entries: Entry[] = [
+      { kind: 'user', text: 'Task', turnId: 't' },
+      { kind: 'assistant', text: 'Inspecting it.', turnId: 't' },
+      { kind: 'tool', command: 'read file', result: 'ok', turnId: 't' },
+      { kind: 'user', text: 'Also check this.', turnId: 't' },
+      { kind: 'reasoning', text: 'Checking', turnId: 't' },
+      { kind: 'assistant', text: 'Final result.', turnId: 't' },
+    ];
+    const { details, answer } = turnContents(onlyTurn(entries));
+    expect(answer).toBe(entries[5]);
+    expect(details.map((group) => group.kind)).toEqual(['message', 'steps', 'message', 'steps']);
+  });
+
+  it.each(['cancelled', 'failed'] as const)('keeps partial text inside details when a turn is %s', (turnOutcome) => {
+    const turn = onlyTurn([
+      { kind: 'user', text: 'Task', turnOutcome },
+      { kind: 'assistant', text: 'Partial output' },
+    ]);
+    expect(turnContents(turn).answer).toBeNull();
+    expect(turnContents(turn).details).toHaveLength(1);
+  });
+
+  it('does not promote a progress message followed by more work to the final answer', () => {
+    const turn = onlyTurn([
+      { kind: 'user', text: 'Task' },
+      { kind: 'assistant', text: 'Still working.' },
+      { kind: 'tool', command: 'inspect', result: '' },
+    ]);
+    expect(turnContents(turn).answer).toBeNull();
+  });
+
+  it('keeps the answer visible after a connection notice and reads the recorded completion time', () => {
+    const turn = onlyTurn([
+      { kind: 'user', text: 'Task', at: 1_000, turnOutcome: 'completed', turnEndedAt: 6_000 },
+      { kind: 'assistant', text: 'Answer', at: 4_000 },
+      { kind: 'notice', text: 'Reconnected', at: 20_000 },
+    ]);
+    expect(turnContents(turn).answer?.text).toBe('Answer');
+    expect(turnDuration(turn)).toBe(5_000);
+  });
+});
+
 describe('step grouping', () => {
+  it.each(['', '\n\n', ' \t\r\n', undefined])('keeps tools in one group across invisible assistant text: %j', (text) => {
+    const blank: Entry = { kind: 'assistant', ...(text === undefined ? {} : { text }) };
+    const entries: Entry[] = [
+      { kind: 'user', text: 'Task' },
+      { kind: 'tool', tool: 'host:file_write' },
+      blank,
+      { kind: 'tool', tool: 'host:execute_command' },
+      { kind: 'reasoning', text: 'Checking' },
+      { ...blank },
+      { kind: 'tool', tool: 'host:file_read' },
+      { ...blank },
+      { kind: 'tool', tool: 'host:file_read' },
+    ];
+    const turn = onlyTurn(entries);
+    const groups = groupTimeline(turn);
+    expect(groups).toEqual([{ kind: 'steps', entries: entries.slice(1).filter((entry) => entry.kind !== 'assistant') }]);
+    expect(activeGroupIndex(groups, true)).toBe(0);
+    expect(turn.timeline).toEqual(entries.slice(1));
+  });
+
+  it('starts a new group when streamed whitespace becomes visible commentary', () => {
+    const message: Entry = { kind: 'assistant', text: '\n\n' };
+    const entries: Entry[] = [
+      { kind: 'user', text: 'Task' },
+      { kind: 'tool', tool: 'host:file_read' },
+      message,
+      { kind: 'tool', tool: 'host:file_read' },
+    ];
+    expect(groupTimeline(onlyTurn(entries)).map((group) => group.kind)).toEqual(['steps']);
+    message.text += 'Checking the next file.';
+    expect(groupTimeline(onlyTurn(entries)).map((group) => group.kind)).toEqual(['steps', 'message', 'steps']);
+  });
+
+  it('keeps the final answer visible when whitespace-only assistant text follows it', () => {
+    const turn = onlyTurn([
+      { kind: 'user', text: 'Task' },
+      { kind: 'tool', tool: 'host:file_read' },
+      { kind: 'assistant', text: 'Final answer.' },
+      { kind: 'assistant', text: '\n\n' },
+    ]);
+    expect(turnContents(turn).answer?.text).toBe('Final answer.');
+  });
+
   it('keeps warnings, errors and system notices inside the surrounding work group', () => {
     const entries: Entry[] = [
       { kind: 'user', text: 'Task' },

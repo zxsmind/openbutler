@@ -95,21 +95,25 @@ export function createScrollFollower(node: HTMLElement): ScrollFollower {
   };
 }
 
-/** A nested viewport owns its gestures; they must not unpin its ancestors. */
+/** The viewport that can consume a gesture owns it; edges chain to ancestors. */
 export function bindReaderGestures(node: HTMLElement, follower: ScrollFollower): () => void {
-  const owns = (event: Event) =>
-    event.composedPath().find((target) => target instanceof HTMLElement && target.hasAttribute('data-scroll-viewport')) === node;
+  const owns = (event: Event, deltaY = 0) =>
+    event.composedPath().find((target) => {
+      if (!(target instanceof HTMLElement) || !target.hasAttribute('data-scroll-viewport')) return false;
+      if (deltaY < 0) return target.scrollTop > 0;
+      if (deltaY > 0) return target.scrollTop < target.scrollHeight - target.clientHeight - 1;
+      return true;
+    }) === node;
   const onWheel = (event: WheelEvent) => {
-    if (owns(event) && event.deltaY < 0) follower.release();
+    if (event.deltaY < 0 && owns(event, event.deltaY)) follower.release();
   };
   let touchY: number | undefined;
   const onTouchStart = (event: TouchEvent) => {
-    if (owns(event)) touchY = event.touches[0]?.clientY;
+    touchY = event.touches[0]?.clientY;
   };
   const onTouch = (event: TouchEvent) => {
-    if (!owns(event)) return;
     const next = event.touches[0]?.clientY;
-    if (next !== undefined && touchY !== undefined && next > touchY) follower.release();
+    if (next !== undefined && touchY !== undefined && next > touchY && owns(event, touchY - next)) follower.release();
     touchY = next;
   };
   const onKey = (event: KeyboardEvent) => {

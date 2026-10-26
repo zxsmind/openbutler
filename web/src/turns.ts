@@ -149,6 +149,8 @@ export type TurnGroup = { kind: 'steps'; entries: Entry[] } | { kind: 'message';
 export function groupTimeline(turn: Turn): TurnGroup[] {
   const groups: TurnGroup[] = [];
   for (const entry of turn.timeline) {
+    // The renderer hides blank assistant text, so it cannot be a visible group boundary.
+    if (entry.kind === 'assistant' && !entry.text?.trim()) continue;
     if (entry.kind === 'user' || entry.kind === 'assistant') {
       groups.push({ kind: 'message', entry });
       continue;
@@ -178,6 +180,26 @@ export function activeGroupIndex(groups: readonly TurnGroup[], current: boolean)
   // reader reads the text, not the log of how it was produced.
   const last = groups[groups.length - 1];
   return last?.kind === 'steps' ? groups.length - 1 : -1;
+}
+
+/** Keep the latest answer outside the work disclosure; interrupted text stays in the log. */
+export function turnContents(turn: Turn): { details: TurnGroup[]; answer: Entry | null } {
+  const groups = groupTimeline(turn);
+  let answerIndex = groups.length - 1;
+  // Connection/status notices appended after an answer do not turn it back into work.
+  while (answerIndex >= 0) {
+    const group = groups[answerIndex];
+    if (
+      group.kind !== 'steps' ||
+      !group.entries.every((entry) => (entry.kind === 'notice' || entry.kind === 'system') && entry.tone !== 'error')
+    )
+      break;
+    answerIndex--;
+  }
+  const last = groups[answerIndex];
+  const interrupted = turn.user?.turnOutcome === 'cancelled' || turn.user?.turnOutcome === 'failed';
+  const answer = !interrupted && last?.kind === 'message' && last.entry.kind === 'assistant' && last.entry.text?.trim() ? last.entry : null;
+  return { details: answer ? groups.filter((_, index) => index !== answerIndex) : groups, answer };
 }
 
 /** A thinking block names its own duration, the way the terminal header does. */
