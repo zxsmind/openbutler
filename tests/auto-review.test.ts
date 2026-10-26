@@ -224,7 +224,9 @@ describe('auto-review records its verdict and still lets the decision through', 
     controller = new AgentSessionController(environment, (action) => ledger.recordToolAction(action));
     await controller.sendMessage({ text: 'Inspect the fixture', images: [] }, { reasoningVariantId: 'xhigh', showReasoning: false });
     expect(execute).toHaveBeenCalledOnce();
-    expect(model.doGenerateCalls).toHaveLength(1);
+    // The title is metadata: the run hands it to a background task instead of
+    // waiting for it, so the request lands after sendMessage resolves.
+    await vi.waitFor(() => expect(model.doGenerateCalls).toHaveLength(1));
     expect(model.doGenerateCalls[0]!.providerOptions).toEqual(providerOptions);
     expect(model.doStreamCalls).toHaveLength(3);
     // The review streams without the turn's reasoning effort; agent steps keep it.
