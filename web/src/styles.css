@@ -175,8 +175,7 @@ select:focus-visible,
   margin: 0 auto 26px;
   color: #b9bcc2;
 }
-.connection-dot,
-.pulse {
+.connection-dot {
   display: inline-block;
   width: 6px;
   height: 6px;
@@ -186,10 +185,6 @@ select:focus-visible,
 }
 .connection-dot.online {
   background: #4c9d82;
-}
-.pulse {
-  background: #979ba4;
-  animation: breathe 1.5s ease-in-out infinite;
 }
 
 /* Shell: conversations and one continuous workspace surface. */
@@ -258,14 +253,6 @@ select:focus-visible,
   white-space: nowrap;
   font-size: 11px;
   color: #8a8e97;
-}
-.queued-count {
-  border-radius: 6px;
-  padding: 2px 7px;
-  background: #f3f4f6;
-  font-size: 11px;
-  color: #747984;
-  white-space: nowrap;
 }
 .mobile-only {
   display: none;

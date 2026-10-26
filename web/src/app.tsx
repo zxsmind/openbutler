@@ -4,7 +4,7 @@ import { PENDING_CHAT_ID, useSession } from './use-session.js';
 import { useProjects } from './projects/use-projects.js';
 import { ProjectContextBar } from './projects/project-selector.js';
 import { CreateProjectDialog } from './projects/create-project-dialog.js';
-import { awaitingFirstChunk, buildTurns, formatDuration } from './turns.js';
+import { awaitingFirstChunk, buildTurns } from './turns.js';
 import { TurnView } from './turn.js';
 import { TypingIndicator } from './components/typing-indicator.js';
 import { VirtualList } from './virtual.js';
@@ -64,7 +64,6 @@ export function App() {
       return {};
     }
   });
-  const [elapsed, setElapsed] = useState(0);
   const composer = useRef<HTMLTextAreaElement>(null);
   const payload = session.payload;
   const id = payload?.session.id ?? '';
@@ -122,13 +121,6 @@ export function App() {
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
-  useEffect(() => {
-    setElapsed(0);
-    if (!busy) return;
-    const started = Date.now();
-    const timer = setInterval(() => setElapsed(Date.now() - started), 1000);
-    return () => clearInterval(timer);
-  }, [busy]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -229,20 +221,10 @@ export function App() {
                 />
                 <span className="session-title">{payload?.session.title || 'Ranite'}</span>
                 <span className="spacer" />
-                <span className={`run-status${connected && !busy ? ' sr-only' : ''}`} role="status">
-                  {busy ? (
-                    <>
-                      <span className="pulse" />
-                      Working {formatDuration(elapsed)}
-                    </>
-                  ) : (
-                    <>
-                      <span className={`connection-dot ${connected ? 'online' : ''}`} />
-                      {connected ? 'Connected' : session.status === 'error' ? 'Reconnecting' : 'Connecting'}
-                    </>
-                  )}
+                <span className={`run-status${connected ? ' sr-only' : ''}`} role="status">
+                  <span className={`connection-dot ${connected ? 'online' : ''}`} />
+                  {connected ? 'Connected' : session.status === 'error' ? 'Reconnecting' : 'Connecting'}
                 </span>
-                {queued > 0 ? <span className="queued-count">{queued} queued</span> : null}
                 <IconButton icon="info" label="Session details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)} />
                 <IconButton
                   icon={panelOpen ? 'panel-right-close' : 'panel-right'}
