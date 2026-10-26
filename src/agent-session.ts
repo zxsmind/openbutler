@@ -960,9 +960,10 @@ export class AgentSessionController implements AgentSessionClient {
     if (this.previewToolEntries.size === 0) return;
     for (const preview of this.previewToolEntries.values()) {
       this.replaceEntry(preview.entry, {
+        ...preview.entry,
         kind: 'tool',
-        command: preview.entry.command,
         result: 'The tool call was not executed.',
+        preparing: false,
         running: false,
         ...(preview.entry.tool ? { tool: preview.entry.tool } : {}),
       });
@@ -2127,6 +2128,7 @@ export function toolPreviewCommand(
 ): string {
   const input: Record<string, unknown> = {};
   for (const field of fields) input[field.key] = field.value;
+  if (title !== undefined) return title;
   if (providerId === 'host' && name === 'execute_command' && typeof input.command === 'string') return input.command;
   if (providerId === 'host' && (name === 'file_read' || name === 'file_write' || name === 'file_edit') && typeof input.path === 'string')
     return `${name === 'file_read' ? 'Read' : name === 'file_write' ? 'Write' : 'Edit'} ${input.path}`;
@@ -2214,7 +2216,6 @@ export function formatToolResult(request: Pick<ToolCallRequest, 'providerId' | '
     return { outcome: typeof result.status === 'string' ? result.status : 'result', text: result.message };
   }
   return formatExecOutput(result);
-  if (title !== undefined) return title;
 }
 
 /** Content-first display text for host tool results; undefined defers to the generic rules. */
