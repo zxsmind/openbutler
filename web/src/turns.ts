@@ -284,8 +284,9 @@ export function groupSignal(entries: readonly Entry[], headline: string): GroupS
 }
 
 export function turnDuration(turn: Turn): number | null {
-  if (turn.startedAt === null || turn.endedAt === null) return null;
-  return Math.max(0, turn.endedAt - turn.startedAt);
+  const end = turn.user?.turnEndedAt ?? turn.endedAt;
+  if (turn.startedAt === null || end === null) return null;
+  return Math.max(0, end - turn.startedAt);
 }
 
 /** 784.4k, 126.9k: a token count a reader can size at a glance. */

@@ -28,6 +28,7 @@ import {
 } from './session-paths.js';
 import { isWithinPhysicalDirectory } from './workspace-scope.js';
 import { appendTranscriptArchiveReference, repairQueuedMessageOrder, retireCoveredToolPreviews } from './conversation.js';
+import type { TurnCompletion } from './turn-types.js';
 
 export type NoticeTone = 'info' | 'warn' | 'error';
 
@@ -41,7 +42,7 @@ export const USER_ENTRY_SOURCES = TURN_SOURCES;
 export type UserEntrySource = (typeof USER_ENTRY_SOURCES)[number];
 
 /** Metadata every entry carries so a client can group and time the work. */
-export interface SessionEntryMeta {
+export interface SessionEntryMeta extends TurnCompletion {
   /** Epoch milliseconds when the entry was first written. */
   at?: number | undefined;
   /** Id of the user message that opened the turn this entry belongs to. */

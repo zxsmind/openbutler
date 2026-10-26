@@ -3,7 +3,9 @@ export type ApprovalMode = 'workspace' | 'auto-review' | 'full-access';
 export type { Project, ProjectCatalog } from '../../src/projects/types.js';
 import type { SessionProject } from '../../src/projects/types.js';
 
-export interface Entry {
+import type { TurnCompletion } from '../../src/turn-types.js';
+
+export interface Entry extends TurnCompletion {
   kind: EntryKind | string;
   text?: string;
   command?: string;
