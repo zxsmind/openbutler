@@ -18,20 +18,35 @@ import type {
 } from './types.js';
 
 import type { Project, ProjectCatalog } from './types.js';
+import type { WorkspaceFiles, WorkspaceFileTree } from '../../src/web/files-protocol.js';
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
+  const context = body && typeof body === 'object' ? (body as { currentSessionId?: unknown; sessionId?: unknown }) : null;
+  const sessionId =
+    typeof context?.currentSessionId === 'string'
+      ? context.currentSessionId
+      : typeof context?.sessionId === 'string'
+        ? context.sessionId
+        : undefined;
   const response = await fetch(
     path,
     body === undefined
       ? undefined
       : {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', ...(sessionId ? { 'x-ranite-session': sessionId } : {}) },
           body: JSON.stringify(body),
         },
-  );
+  ).catch(() => {
+    throw new Error('Unable to reach Ranite. Check your connection and try again.');
+  });
   if (!response.ok) {
-    let detail = `Request failed (${response.status}).`;
+    let detail =
+      response.status === 404
+        ? 'This content is currently unavailable. Try refreshing the page.'
+        : response.status === 429
+          ? 'Please wait a moment before trying again.'
+          : 'Ranite could not complete this request. Please try again.';
     try {
       const data: unknown = await response.json();
       if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') detail = data.error;
@@ -55,13 +70,18 @@ export const validateProjectFolder = (path: string) => request<{ path: string }>
 export const pickProjectFolder = () => request<{ path: string | null }>('/api/project-folder-picker', {});
 export const changeSessionProject = (sessionId: string, projectId: string | null) =>
   request<SessionPayload>('/api/session-project', { sessionId, projectId });
-export const stopRun = () => request('/api/stop', { holdQueue: true });
+export const stopRun = (sessionId: string) => request('/api/stop', { holdQueue: true, sessionId });
 export const manageQueuedMessage = (sessionId: string, messageId: string, action: 'steer' | 'remove') =>
   request('/api/queue', { sessionId, messageId, action });
-export const decideApproval = (decision: 'allow' | 'deny' | 'always', requestId?: string) =>
-  request('/api/approve', { decision, requestId });
-export const answerQuestion = (answer: string | null, questionId?: string) => request('/api/answer', { answer, questionId });
+export const decideApproval = (decision: 'allow' | 'deny' | 'always', sessionId: string, requestId?: string) =>
+  request('/api/approve', { decision, requestId, sessionId });
+export const answerQuestion = (answer: string | null, sessionId: string, questionId?: string) =>
+  request('/api/answer', { answer, questionId, sessionId });
 export const fetchSessions = () => request<SessionInfo[]>('/api/sessions');
+export const fetchWorkspaceFiles = (sessionId: string, path: string) =>
+  request<WorkspaceFiles>(`/api/files?${new URLSearchParams({ sessionId, path })}`);
+export const fetchWorkspaceFileTree = (sessionId: string) =>
+  request<WorkspaceFileTree>(`/api/files/tree?${new URLSearchParams({ sessionId })}`);
 export const fetchModels = () => request<ModelChoice[]>('/api/models');
 export const fetchModelCatalog = () => request<ModelCatalogRow[]>('/api/models/catalog');
 export const setModelActive = (providerId: string, modelId: string, active: boolean) =>
@@ -91,7 +111,13 @@ export const fetchOlder = (before: number, sessionId: string, limit = 50) =>
 /** The server sends a heartbeat every 15 s; three missed ones mean the stream is dead. */
 const STALE_MS = 45_000;
 
-export function subscribe(onPayload: (payload: SessionPayload) => void, onStatus: (status: 'open' | 'error') => void): () => void {
+export function subscribe(
+  onPayload: (payload: SessionPayload) => void,
+  onStatus: (status: 'open' | 'error') => void,
+  sessionId?: string,
+  onSessionsChanged?: () => void,
+  onModelsChanged?: () => void,
+): () => void {
   // Liveness comes from the server's heartbeat event; a stream that keeps
   // delivering is never torn down.
   let lastSeen = 0;
@@ -110,7 +136,7 @@ export function subscribe(onPayload: (payload: SessionPayload) => void, onStatus
 
   const connect = () => {
     if (stopped || source) return;
-    const stream = new EventSource('/api/events');
+    const stream = new EventSource(`/api/events${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`);
     source = stream;
     stream.addEventListener('open', () => {
       attempt = 0;
@@ -122,6 +148,8 @@ export function subscribe(onPayload: (payload: SessionPayload) => void, onStatus
     });
     stream.addEventListener('snapshot', handle as EventListener);
     stream.addEventListener('patch', handle as EventListener);
+    stream.addEventListener('sessions-changed', () => onSessionsChanged?.());
+    stream.addEventListener('models-changed', () => onModelsChanged?.());
     stream.addEventListener('error', () => {
       onStatus('error');
       // Why a stream ended is the question that matters: the ready state and how
@@ -167,7 +195,8 @@ export function subscribe(onPayload: (payload: SessionPayload) => void, onStatus
   };
 }
 export const fetchUsage = (days: number) => request<UsageReport>(`/api/usage?days=${days}`);
-export const fetchSnapshot = () => request<SessionPayload>('/api/snapshot');
+export const fetchSnapshot = (sessionId?: string) =>
+  request<SessionPayload>(`/api/snapshot${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`);
 /**
  * Diagnostics only: the browser reports what the server cannot see about it.
  * Failures are ignored, because a report must never disturb the reader.

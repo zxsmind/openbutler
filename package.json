@@ -18,7 +18,7 @@
     "ranite": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-builtin-skills.mjs",
+    "build": "tsc && node scripts/copy-builtin-skills.mjs && node scripts/copy-terminal-host.mjs",
     "prepare": "npm run build",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm --prefix web run typecheck && vitest run",
     "dev": "tsx src/cli.ts",
@@ -57,11 +57,13 @@
     "ink": "^8.0.0",
     "js-yaml": "^4.1.0",
     "marked": "^15.0.12",
+    "node-pty": "^1.1.0",
     "onnxruntime-node": "1.23.2",
     "ora": "^9.4.1",
     "picocolors": "^1.1.1",
     "react": "^19.3.0",
-    "string-width": "^8.3.0"
+    "string-width": "^8.3.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -69,6 +71,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.12.0",
     "@types/react": "^19.3.0",
+    "@types/ws": "^8.18.2",
     "eslint": "^9.39.5",
     "prettier": "^3.9.9",
     "tsx": "^4.19.4",

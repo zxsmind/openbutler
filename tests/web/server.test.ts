@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from '../../src/web/server.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../../src/agent-session.js';
 import type { SessionEntry } from '../../src/session-store.js';
+import { connectDaemonSession } from '../../src/daemon-client.js';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 
-vi.mock('../../src/daemon-client.js', () => ({ connectDaemonSession: async () => client }));
+vi.mock('../../src/daemon-client.js', () => ({ connectDaemonSession: vi.fn() }));
 const settingsMocks = vi.hoisted(() => ({ saveSettings: vi.fn() }));
 vi.mock('../../src/settings.js', () => ({
+  getSettingsPath: () => join(process.env.RANITE_DATA_DIR!, 'settings.yaml'),
+  getConfigPath: () => join(process.env.RANITE_DATA_DIR!, 'config.yaml'),
   loadSettings: () => ({
     providers: {
       local: { enabled: true, keys: ['private-key-never-exposed'], models: ['model-a', 'model-b'] },
@@ -63,6 +69,10 @@ const client = {
   loadSession,
   createNewSession: newSession,
   sendMessage: send,
+  stop: vi.fn(() => {
+    snapshot.busy = false;
+    publish();
+  }),
   selectModel: vi.fn(async (providerId: string, modelId: string) => {
     Object.assign(client.runtime, { providerId, modelId });
     publish();
@@ -71,31 +81,112 @@ const client = {
 } as unknown as AgentSessionClient;
 let server: WebServer;
 let cookie: string;
+let dataDirectory: string;
+const actors = new Map<string, AgentSessionClient>();
+function actor(id: string): AgentSessionClient {
+  const state = {
+    ...snapshot,
+    busy: false,
+    queuedMessageCount: 0,
+    session: { ...snapshot.session, id, title: id, entries: id === 'new-session' ? [] : [{ kind: 'user' as const, text: id }] },
+  };
+  const subscribers = new Set<() => void>();
+  const changed = () => {
+    for (const subscriber of subscribers) subscriber();
+  };
+  const value = {
+    ...client,
+    runtime: { ...client.runtime },
+    get isBusy() {
+      return state.busy;
+    },
+    getSnapshot: () => state,
+    getServerEntries: () => state.session.entries,
+    subscribe: (listener: () => void) => {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
+    sendMessage: vi.fn(async () => {}),
+    stop: vi.fn(() => {
+      state.busy = false;
+      changed();
+    }),
+    close: vi.fn(),
+  } as AgentSessionClient;
+  actors.set(id, value);
+  return value;
+}
 const post = (path: string, body: unknown) =>
   fetch(`${server.url}${path}`, {
     method: 'POST',
-    headers: { cookie, origin: server.url, 'content-type': 'application/json' },
+    headers: {
+      cookie,
+      origin: server.url,
+      'content-type': 'application/json',
+      ...((body as { currentSessionId?: string; sessionId?: string }).currentSessionId || (body as { sessionId?: string }).sessionId
+        ? { 'x-ranite-session': (body as { currentSessionId?: string }).currentSessionId ?? (body as { sessionId: string }).sessionId }
+        : {}),
+    },
     body: JSON.stringify(body),
   });
 
 beforeEach(async () => {
+  dataDirectory = await mkdtemp(join(tmpdir(), 'ranite-web-session-'));
+  vi.stubEnv('RANITE_DATA_DIR', dataDirectory);
   vi.clearAllMocks();
   listeners.clear();
+  actors.clear();
   snapshot = {
     session: { id: 'session-a', title: 'A', entries: [{ kind: 'user', text: 'A' }] },
     busy: false,
     queuedMessageCount: 0,
   } as AgentSessionSnapshot;
   Object.assign(client.runtime, { providerId: 'local', modelId: 'model-a' });
+  vi.mocked(connectDaemonSession).mockImplementation(async (_path, options) =>
+    options?.newChatSession
+      ? actor('new-session')
+      : options?.chatSessionId
+        ? (actors.get(options.chatSessionId) ?? actor(options.chatSessionId))
+        : client,
+  );
   server = await startWebServer({ workspaceRoot: 'C:/workspace', port: 0, assetsDir: 'missing-test-assets' });
   const paired = await fetch(server.pairUrl, { redirect: 'manual' });
   cookie = paired.headers.get('set-cookie')!.split(';')[0];
 });
 afterEach(async () => {
   await server?.close();
+  vi.unstubAllEnvs();
+  if (dirname(resolve(dataDirectory)) !== resolve(tmpdir()) || !basename(dataDirectory).startsWith('ranite-web-session-'))
+    throw new Error('Unsafe fixture cleanup path.');
+  await rm(dataDirectory, { recursive: true, force: true });
 });
 
 describe('browser session controls', () => {
+  it('notifies every open browser when model settings or the catalog change on disk', async () => {
+    const streams = await Promise.all([
+      fetch(`${server.url}/api/events`, { headers: { cookie }, signal: AbortSignal.timeout(5000) }),
+      fetch(`${server.url}/api/events`, { headers: { cookie }, signal: AbortSignal.timeout(5000) }),
+    ]);
+    const readers = streams.map((response) => response.body!.getReader());
+    const buffers = ['', ''];
+    const nextModelChange = async (index: number) => {
+      while (!buffers[index]!.includes('event: models-changed\ndata: {}\n\n')) {
+        const chunk = await readers[index]!.read();
+        if (chunk.done) throw new Error('Stream ended before the model change.');
+        buffers[index] += new TextDecoder().decode(chunk.value);
+      }
+      buffers[index] = '';
+    };
+    try {
+      await writeFile(join(dataDirectory, 'settings.yaml'), 'providers: {}');
+      await Promise.all(readers.map((_, index) => nextModelChange(index)));
+      await writeFile(join(dataDirectory, 'catalog-index.json'), '{}');
+      await Promise.all(readers.map((_, index) => nextModelChange(index)));
+    } finally {
+      await Promise.all(readers.map((reader) => reader.cancel()));
+    }
+  });
+
   it('requires pairing and rejects cross-origin mutations', async () => {
     expect((await fetch(`${server.url}/api/sessions`)).status).toBe(401);
     const result = await fetch(`${server.url}/api/session`, {
@@ -114,7 +205,7 @@ describe('browser session controls', () => {
       404,
     );
   });
-  it('publishes a reset over the live stream when chats have the same entry count', async () => {
+  it('keeps an existing stream bound to its chat when another view opens a different chat', async () => {
     const response = await fetch(`${server.url}/api/events`, { headers: { cookie } });
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -125,7 +216,7 @@ describe('browser session controls', () => {
         if (end >= 0) {
           const frame = buffer.slice(0, end);
           buffer = buffer.slice(end + 2);
-          if (frame.startsWith('event:')) return frame;
+          if (frame.startsWith('event:') && !frame.startsWith('event: sessions-changed')) return frame;
           continue;
         }
         const chunk = await reader.read();
@@ -136,34 +227,88 @@ describe('browser session controls', () => {
     try {
       expect(await event()).toContain('event: snapshot');
       await post('/api/session', { action: 'load', sessionId: 'session-b', currentSessionId: 'session-a' });
-      const switched = await event();
-      expect(switched).toContain('event: snapshot');
-      expect(switched).toContain('"id":"session-b"');
+      expect(snapshot.session.id).toBe('session-a');
+      snapshot = {
+        ...snapshot,
+        session: { ...snapshot.session, entries: [...snapshot.session.entries, { kind: 'assistant', text: 'A continued.' }] },
+      };
+      publish();
+      const continued = await event();
+      expect(continued).toContain('event: patch');
+      expect(continued).toContain('"id":"session-a"');
+      expect(continued).not.toContain('"id":"session-b"');
+      const other = (await (await fetch(`${server.url}/api/snapshot?sessionId=session-b`, { headers: { cookie } })).json()) as {
+        session: { id: string };
+      };
+      expect(other.session.id).toBe('session-b');
     } finally {
       await reader.cancel();
     }
   });
-  it('preserves the current chat when busy, queued, or a stale browser tries navigation', async () => {
+  it('opens other chats while the current chat is busy or queued, and rejects unknown IDs', async () => {
     snapshot.busy = true;
-    expect((await post('/api/session', { action: 'new', currentSessionId: 'session-a' })).status).toBe(409);
+    expect((await post('/api/session', { action: 'new', currentSessionId: 'session-a' })).status).toBe(200);
+    expect(snapshot.busy).toBe(true);
     snapshot.busy = false;
     snapshot.queuedMessageCount = 1;
-    expect((await post('/api/session', { action: 'new', currentSessionId: 'session-a' })).status).toBe(409);
+    expect((await post('/api/session', { action: 'load', sessionId: 'session-b', currentSessionId: 'session-a' })).status).toBe(200);
     snapshot.queuedMessageCount = 0;
-    expect((await post('/api/session', { action: 'new', currentSessionId: 'stale-chat' })).status).toBe(409);
+    expect((await post('/api/session', { action: 'new', currentSessionId: 'stale-chat' })).status).toBe(404);
     expect(newSession).not.toHaveBeenCalled();
   });
   it('creates an empty chat without sending anything to a model', async () => {
     const response = await post('/api/session', { action: 'new', currentSessionId: 'session-a' });
-    expect(await response.json()).toMatchObject({ reset: true, session: { id: 'new-session' }, entries: [] });
+    expect(await response.json()).toMatchObject({ reset: true, session: { id: 'new-session', hasUserMessage: false }, entries: [] });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('keeps conversation presence when the user message is outside the visible transcript window', async () => {
+    snapshot.session.entries = [
+      { kind: 'user', text: 'First message' },
+      ...Array.from({ length: 120 }, () => ({ kind: 'assistant' as const, text: 'Fixture' })),
+    ];
+    const response = await fetch(`${server.url}/api/snapshot`, { headers: { cookie } });
+    const payload = (await response.json()) as { session: { hasUserMessage: boolean }; entries: SessionEntry[] };
+    expect(payload.session.hasUserMessage).toBe(true);
+    expect(payload.entries.some((entry) => entry.kind === 'user')).toBe(false);
+  });
+  it('routes messages and stop controls to the addressed chat, with no cross-chat fallback', async () => {
+    snapshot.busy = true;
+    await post('/api/session', { action: 'load', sessionId: 'session-b', currentSessionId: 'session-a' });
+    const other = actors.get('session-b')!;
+    other.getSnapshot().busy = true;
+    expect((await post('/api/message', { text: 'Only B.', sessionId: 'session-b' })).status).toBe(200);
+    expect(other.sendMessage).toHaveBeenCalledWith({ text: 'Only B.', images: [] }, expect.anything());
+    expect(send).not.toHaveBeenCalled();
+    expect((await post('/api/stop', {})).status).toBe(409);
+    expect((await post('/api/stop', { sessionId: 'session-b' })).status).toBe(200);
+    expect(other.stop).toHaveBeenCalledOnce();
+    expect(client.stop).not.toHaveBeenCalled();
+    expect(snapshot.busy).toBe(true);
+    const conflict = await fetch(`${server.url}/api/message`, {
+      method: 'POST',
+      headers: { cookie, origin: server.url, 'content-type': 'application/json', 'x-ranite-session': 'session-a' },
+      body: JSON.stringify({ text: 'Mismatch', sessionId: 'session-b' }),
+    });
+    expect(conflict.status).toBe(409);
     expect(send).not.toHaveBeenCalled();
   });
   it('does not send or load history into the wrong chat', async () => {
-    expect((await post('/api/message', { text: 'Keep my draft', sessionId: 'old-chat' })).status).toBe(409);
+    expect((await post('/api/message', { text: 'Keep my draft', sessionId: 'old-chat' })).status).toBe(404);
     expect(send).not.toHaveBeenCalled();
-    expect((await fetch(`${server.url}/api/entries?before=1&sessionId=old-chat`, { headers: { cookie } })).status).toBe(409);
+    expect((await fetch(`${server.url}/api/entries?before=1&sessionId=old-chat`, { headers: { cookie } })).status).toBe(404);
     expect((await post('/api/message', { text: 'Hello', sessionId: 'session-a' })).status).toBe(200);
     expect(send).toHaveBeenCalledWith({ text: 'Hello', images: [] }, expect.anything());
+  });
+  it('declares web identity on the connection and ignores identity in the HTTP message body', async () => {
+    expect(connectDaemonSession).toHaveBeenCalledWith('C:/workspace', { clientKind: 'web' });
+    const response = await post('/api/message', {
+      text: 'Browser message',
+      sessionId: 'session-a',
+      clientKind: 'terminal',
+      communication: { source: 'telegram' },
+    });
+    expect(response.status).toBe(200);
+    expect(send).toHaveBeenCalledWith({ text: 'Browser message', images: [] }, expect.anything());
   });
   it('accepts validated image attachments and a supported reasoning level without altering the message', async () => {
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9KsAAAAASUVORK5CYII=';
@@ -326,7 +471,8 @@ describe('browser session controls', () => {
           const frame = buffer.slice(0, end);
           buffer = buffer.slice(end + 2);
           const data = frame.split('\n').find((line) => line.startsWith('data: '));
-          if (frame.startsWith('event:') && data) return { event: frame.split('\n')[0], payload: JSON.parse(data.slice(6)) };
+          if (frame.startsWith('event:') && !frame.startsWith('event: sessions-changed') && data)
+            return { event: frame.split('\n')[0], payload: JSON.parse(data.slice(6)) };
           continue;
         }
         const chunk = await reader.read();
@@ -367,7 +513,8 @@ describe('browser session controls', () => {
           const frame = buffer.slice(0, end);
           buffer = buffer.slice(end + 2);
           const data = frame.split('\n').find((line) => line.startsWith('data: '));
-          if (frame.startsWith('event:') && data) return { event: frame.split('\n')[0], payload: JSON.parse(data.slice(6)) };
+          if (frame.startsWith('event:') && !frame.startsWith('event: sessions-changed') && data)
+            return { event: frame.split('\n')[0], payload: JSON.parse(data.slice(6)) };
           continue;
         }
         const chunk = await reader.read();

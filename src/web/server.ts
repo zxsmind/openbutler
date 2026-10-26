@@ -6,7 +6,15 @@ import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeBase64Image, MAX_IMAGE_BYTES } from '../image-data.js';
 import { getDataPath } from '../paths.js';
-import { clearModalCredentials, loadModalCredentials, loadSettings, saveModalCredentials, saveSettings } from '../settings.js';
+import {
+  clearModalCredentials,
+  getConfigPath,
+  getSettingsPath,
+  loadModalCredentials,
+  loadSettings,
+  saveModalCredentials,
+  saveSettings,
+} from '../settings.js';
 import { verifyModalCredentials } from '../modal.js';
 import { getProvider, listProviderSummaries } from '../provider/catalog.js';
 import { addProviderKeys } from '../provider/keys.js';
@@ -24,6 +32,9 @@ import { readLogRecords } from '../cli/logs.js';
 import { createProject, listProjects, projectFolder, ProjectInputError, resolveProjectSelection } from '../projects/store.js';
 import { pickProjectFolder } from './folder-picker.js';
 
+import { attachTerminalServer } from './terminal-server.js';
+import { readWorkspaceFiles, readWorkspaceFileTree, WorkspaceFilesError } from './files.js';
+import { WebSessions, SessionRequestError } from './sessions.js';
 /** Outside the Windows ephemeral range so the port stays free between runs. */
 /**
  * Every model a configured provider offers, with the flag that decides whether it
@@ -210,7 +221,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // itself once it is idle.
   const buildId = readBuildId(assetsDir);
   const startedAt = Date.now();
-  const client: AgentSessionClient = await connectDaemonSession(options.workspaceRoot);
+  const client: AgentSessionClient = await connectDaemonSession(options.workspaceRoot, { clientKind: 'web' });
+  const sessions = new WebSessions(client, options.workspaceRoot);
 
   // A paired browser must stay paired across restarts: the owner's phone and
   // desktop should not have to re-pair every time the host or this server comes
@@ -230,14 +242,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     return `http://${host}:${port}/auth/pair?t=${encodeURIComponent(pairToken)}`;
   };
 
-  const snapshotPayload = (entries: Entry[], reset: boolean, from: number) => {
-    const snapshot = client.getSnapshot();
+  const snapshotPayload = (entries: Entry[], reset: boolean, from: number, source: AgentSessionClient) => {
+    const snapshot = source.getSnapshot();
     return {
       reset,
       entries,
       updated: [] as { index: number; entry: Entry }[],
       from,
-      totalEntries: client.getServerEntries().length,
+      totalEntries: source.getServerEntries().length,
       busy: snapshot.busy,
       queuedMessageCount: snapshot.queuedMessageCount,
       queuedMessages: snapshot.queuedMessages,
@@ -245,15 +257,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       pendingQuestion: snapshot.pendingQuestion ?? null,
       contextTokens: (snapshot.session as { contextTokens?: number }).contextTokens ?? null,
       runtime: {
-        modelName: client.runtime.modelName,
-        providerId: client.runtime.providerId,
-        modelId: client.runtime.modelId,
-        contextWindowTokens: client.runtime.contextWindowTokens,
-        approvalMode: client.runtime.approvalMode ?? null,
-        showReasoningDefault: client.runtime.showReasoningDefault,
-        reasoningVariants: client.runtime.reasoningVariants.map(({ id, label }) => ({ id, label })),
-        reasoningDefault: client.runtime.reasoningDefault,
-        workspaceRoot: client.runtime.workspaceRoot,
+        supportsSessionAttachments: source.runtime.supportsSessionAttachments === true,
+        modelName: source.runtime.modelName,
+        providerId: source.runtime.providerId,
+        modelId: source.runtime.modelId,
+        contextWindowTokens: source.runtime.contextWindowTokens,
+        approvalMode: source.runtime.approvalMode ?? null,
+        showReasoningDefault: source.runtime.showReasoningDefault,
+        reasoningVariants: source.runtime.reasoningVariants.map(({ id, label }) => ({ id, label })),
+        reasoningDefault: source.runtime.reasoningDefault,
+        workspaceRoot: source.runtime.workspaceRoot,
       },
       session: {
         id: snapshot.session.id,
@@ -265,6 +278,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     };
   };
 
+        hasUserMessage: snapshot.session.hasUserMessage ?? source.getServerEntries().some((entry) => entry.kind === 'user'),
   const writeEvent = (client_: SseClient, event: string, data: unknown) => {
     // One dead socket must never break the broadcast for the other clients, so a
     // failed write drops that stream instead of throwing through the loop.
@@ -284,7 +298,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
   };
 
-  const broadcast = () => {
+  const broadcast = (boundId: string, client: AgentSessionClient, catalogChanged: boolean) => {
+    if (catalogChanged) for (const target of clients) writeEvent(target, 'sessions-changed', {});
     if (clients.size === 0) return;
     const entries = client.getServerEntries() as Entry[];
     for (const target of clients) {
@@ -295,7 +310,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       if (!previous || sessionChanged || entries.length < previous.length) {
         resetReason = !previous ? 'first' : sessionChanged ? 'session' : 'shrunk';
         const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-        payload = snapshotPayload(entries.slice(from), true, from);
+      if (target.sessionId !== boundId) continue;
+      if (client.getSnapshot().session.id !== boundId) {
+        target.res.end();
+        continue;
+      }
+        payload = snapshotPayload(entries.slice(from), true, from, client);
       } else {
         const updated: { index: number; entry: Entry }[] = [];
         for (let index = 0; index < previous.length; index += 1) {
@@ -312,10 +332,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         if (updated.length * 2 > entries.length && entries.length > WINDOW_ENTRIES) {
           resetReason = 'rewritten';
           const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-          payload = snapshotPayload(entries.slice(from), true, from);
+          payload = snapshotPayload(entries.slice(from), true, from, client);
         } else {
           payload = {
-            ...snapshotPayload(entries.slice(previous.length), false, previous.length),
+            ...snapshotPayload(entries.slice(previous.length), false, previous.length, client),
             updated,
           };
         }
@@ -335,7 +355,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
   };
 
-  const unsubscribe = client.subscribe(broadcast);
+  const unsubscribe = sessions.subscribe(broadcast);
 
   const isAuthorized = (req: IncomingMessage): boolean => {
     const cookies = parseCookies(req.headers.cookie);
@@ -435,10 +455,36 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     if (url.pathname === '/api/projects' && req.method === 'GET') {
       return sendJson(res, 200, { projects: listProjects(), supportsSelection: client.runtime.supportsProjects === true });
     }
+    const headerSessionId = req.headers['x-ranite-session'];
+    if (headerSessionId !== undefined && typeof headerSessionId !== 'string') return sendJson(res, 400, { error: 'Invalid chat ID.' });
+    const querySessionId = url.searchParams.get('sessionId');
+    if (querySessionId && headerSessionId && querySessionId !== headerSessionId)
+      return sendJson(res, 400, { error: 'Conflicting chat IDs.' });
+    const requestedSessionId = querySessionId ?? headerSessionId;
+    const client = protectedPath && requestedSessionId ? await sessions.get(requestedSessionId) : sessions.defaultClient;
+
     if (url.pathname === '/api/projects' && req.method === 'POST') {
       return sendJson(res, 201, createProject(JSON.parse(await readBody(req, 65536))));
     }
     if (url.pathname === '/api/project-folders' && req.method === 'POST') {
+    if ((url.pathname === '/api/files' || url.pathname === '/api/files/tree') && req.method === 'GET') {
+      const sessionId = url.searchParams.get('sessionId');
+      if (sessionId !== client.getSnapshot().session.id)
+        return sendJson(res, 409, { error: 'The active chat changed. Reopen Files in the current chat.' });
+      try {
+        const result =
+          url.pathname === '/api/files/tree'
+            ? await readWorkspaceFileTree(client.runtime.workspaceRoot)
+            : await readWorkspaceFiles(client.runtime.workspaceRoot, url.searchParams.get('path') ?? '');
+        if (sessionId !== client.getSnapshot().session.id)
+          return sendJson(res, 409, { error: 'The active chat changed. Reopen Files in the current chat.' });
+        return sendJson(res, 200, result);
+      } catch (error) {
+        if (error instanceof WorkspaceFilesError) return sendJson(res, error.status, { error: error.message });
+        throw error;
+      }
+    }
+
       const body = JSON.parse(await readBody(req, 65536)) as { path?: unknown };
       return sendJson(res, 200, { path: projectFolder(body.path) });
     }
@@ -459,21 +505,21 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       await client.selectProject(body.projectId as string | null, body.sessionId as string);
       const entries = client.getServerEntries() as Entry[];
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
     if (url.pathname === '/api/snapshot' && req.method === 'GET') {
       const entries = client.getServerEntries() as Entry[];
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
     if (url.pathname === '/api/sessions' && req.method === 'GET') {
-      const sessions = await client.listSessions();
+      const catalog = await sessions.list();
       return sendJson(
         res,
         200,
-        sessions.map((session) => ({
+        catalog.map((session) => ({
           id: session.id,
           title: session.title,
           updatedAt: session.updatedAt,
@@ -485,6 +531,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
 
     if (url.pathname === '/api/approvals' && req.method === 'GET') {
+          running: session.running,
       let remembered: Array<{ id: string; label: string; at: number }> = [];
       try {
         remembered = listRememberedPermissions().map((entry) => ({ id: entry.hash, label: entry.label, at: entry.at }));
@@ -814,25 +861,17 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         projectId?: unknown;
       };
       if (currentSessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
-      if (client.isBusy || client.getSnapshot().queuedMessageCount > 0)
-        return sendJson(res, 409, { error: 'Finish or stop the current run and clear the queue before switching chats.' });
+      let next: AgentSessionClient;
       if (action === 'new') {
         if (projectId !== undefined && projectId !== null && typeof projectId !== 'string')
           return sendJson(res, 400, { error: 'Invalid project.' });
-        await client.createNewSession(projectId === undefined ? null : (projectId as string | null));
-        if (client.getSnapshot().session.id === currentSessionId)
-          return sendJson(res, 409, { error: 'The host could not create a new chat. Try again.' });
+        next = await sessions.create(projectId === undefined ? null : (projectId as string | null));
       } else if (action === 'load' && typeof sessionId === 'string' && sessionId.length <= 64) {
-        const sessions = await client.listSessions();
-        if (currentSessionId !== client.getSnapshot().session.id)
-          return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
-        if (!sessions.some((session) => session.id === sessionId))
-          return sendJson(res, 404, { error: 'Session not found in this workspace.' });
-        if (!(await client.loadSession(sessionId))) return sendJson(res, 404, { error: 'Session not found.' });
+        next = await sessions.get(sessionId);
       } else return sendJson(res, 400, { error: 'Invalid session action.' });
-      const entries = client.getServerEntries();
+      const entries = next.getServerEntries();
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, next));
     }
 
     if (url.pathname === '/api/model' && req.method === 'POST') {
@@ -848,7 +887,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       await client.selectModel(body.providerId, body.modelId);
       const entries = client.getServerEntries();
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
     if (url.pathname === '/api/approval-mode' && req.method === 'POST') {
@@ -859,7 +898,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       await client.setApprovalMode(body.mode);
       const entries = client.getServerEntries();
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from));
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
     if (url.pathname === '/api/attachment' && req.method === 'GET') {
@@ -926,9 +965,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const entries = client.getServerEntries() as Entry[];
       target.lastEntries = entries;
       const from = Math.max(0, entries.length - WINDOW_ENTRIES);
-      writeEvent(target, 'snapshot', snapshotPayload(entries.slice(from), true, from));
+      writeEvent(target, 'snapshot', snapshotPayload(entries.slice(from), true, from, client));
       const heartbeat = setInterval(() => {
         if (res.writableEnded || res.destroyed) return;
+      const release = sessions.retain(target.sessionId);
         try {
           // A named event, not a comment: the browser must be able to see that
           // the stream is alive, or it cannot tell a healthy stream from a dead one.
@@ -950,6 +990,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         // simply went away look identical from the outside.
         logger.info('web.stream.close', {
           device,
+        release();
           port: req.socket.remotePort ?? null,
           seconds: Math.round((Date.now() - openedAt) / 1000),
           silentMs: Date.now() - target.lastWriteAt,
@@ -1041,20 +1082,27 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
 
     if (url.pathname === '/api/stop' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}') as { holdQueue?: boolean };
+      const body = JSON.parse((await readBody(req)) || '{}') as { holdQueue?: boolean; sessionId?: unknown };
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'Choose the chat to stop.' });
       client.stop(body.holdQueue === false ? { keepQueue: true } : { keepQueue: true, holdQueue: true });
       return sendJson(res, 200, { ok: true });
     }
 
     if (url.pathname === '/api/approve' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}') as { decision?: 'allow' | 'deny' | 'always'; requestId?: string };
+      const body = JSON.parse((await readBody(req)) || '{}') as {
+        decision?: 'allow' | 'deny' | 'always';
+        requestId?: string;
+        sessionId?: unknown;
+      };
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The approval belongs to another chat.' });
       if (!body.decision) return sendJson(res, 400, { error: 'Missing decision.' });
       client.approveToolCall(body.decision, body.requestId);
       return sendJson(res, 200, { ok: true });
     }
 
     if (url.pathname === '/api/answer' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}') as { answer?: string | null; questionId?: string };
+      const body = JSON.parse((await readBody(req)) || '{}') as { answer?: string | null; questionId?: string; sessionId?: unknown };
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The question belongs to another chat.' });
       client.answerQuestion(body.answer ?? null, body.questionId);
       return sendJson(res, 200, { ok: true });
     }
@@ -1083,9 +1131,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         res.end();
         return;
       }
-      res.writeHead(error instanceof ProjectInputError || error instanceof SyntaxError ? 400 : 500, {
-        'content-type': 'application/json; charset=utf-8',
-      });
+      res.writeHead(
+        error instanceof SessionRequestError
+          ? error.status
+          : error instanceof ProjectInputError || error instanceof SyntaxError
+            ? 400
+            : 500,
+        {
+          'content-type': 'application/json; charset=utf-8',
+        },
+      );
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     });
   });
@@ -1100,6 +1155,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   const address = server.address();
   if (address && typeof address === 'object') port = address.port;
+  const closeTerminals = attachTerminalServer(server, {
+    authorize: (request) => originAllowed(request) && isAuthorized(request),
+    workspace: async (sessionId) => (await sessions.get(sessionId)).runtime.workspaceRoot,
+  });
+
   const pairUrl = issuePairToken();
   options.onPairUrl?.(pairUrl);
 
@@ -1112,7 +1172,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       for (const target of clients) target.res.end();
       clients.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      client.close();
+      await sessions.close();
     },
     stats() {
       return { clients: clients.size, rssBytes: process.memoryUsage().rss, uptimeMs: Date.now() - startedAt };

@@ -8,17 +8,20 @@ import type { TurnCompletion } from '../../src/turn-types.js';
 export interface Entry extends TurnCompletion {
   kind: EntryKind | string;
   text?: string;
+  /** Client-only source ranges received through incremental patches. Snapshots
+   * and paged history have no entrance animation. Never sent to the server. */
+  streamReveal?: import('./stream-reveal.js').StreamRange[];
   command?: string;
+  input?: Record<string, unknown>;
   result?: string;
   /** Client-only source ranges received through incremental patches. Snapshots
    * and paged history have no entrance animation. Never sent to the server. */
-  input?: Record<string, unknown>;
   streamReveal?: import('./stream-reveal.js').StreamRange[];
   tool?: string;
+  toolTitle?: string;
   running?: boolean;
   preparing?: boolean;
   tone?: 'info' | 'warn' | 'error';
-  toolTitle?: string;
   durationMs?: number;
   eventId?: string;
   turnId?: string;
@@ -81,10 +84,11 @@ export interface PendingQuestion {
 }
 
 export interface RuntimeInfo {
+  supportsSessionAttachments?: boolean;
   modelName?: string;
   providerId?: string;
   modelId?: string;
-  contextWindowTokens?: number;
+  contextWindowTokens?: number | null;
   approvalMode?: string | null;
   showReasoningDefault?: boolean;
   reasoningVariants?: Array<{ id: string; label: string }>;
@@ -105,12 +109,13 @@ export interface SessionPayload {
   pendingQuestion: PendingQuestion | null;
   contextTokens?: number | null;
   runtime?: RuntimeInfo;
-  session: { id: string; title: string; project?: SessionProject; projectLocked?: boolean };
+  session: { id: string; title: string; hasUserMessage?: boolean; project?: SessionProject; projectLocked?: boolean };
   /** Changes when the server is serving a rebuilt browser bundle. */
   buildId?: string | null;
 }
 
 export interface SessionInfo {
+  running?: boolean;
   id: string;
   title: string;
   updatedAt?: number | string;
