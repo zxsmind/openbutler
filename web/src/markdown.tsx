@@ -3,7 +3,7 @@ import type { Root } from 'hast';
 import { visit } from 'unist-util-visit';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
+import remarkMath from 'remark-math-extended';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeKatex from 'rehype-katex';
