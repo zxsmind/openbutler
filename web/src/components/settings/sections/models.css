@@ -71,25 +71,12 @@
   font-size: 11px;
 }
 
-.add-provider__note {
-  margin: 0;
-  padding: 12px;
-  color: #8a8e97;
-  font-size: 12px;
-}
-
 .add-provider__key {
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 12px;
   color: #73767a;
-}
-
-.add-provider__error {
-  margin: 0;
-  color: #b4394a;
-  font-size: 12px;
 }
 
 .add-provider__footer {

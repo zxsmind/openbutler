@@ -21,7 +21,7 @@ function describe(error: unknown): string {
 }
 
 export function ModelsSettings() {
-  const { runtime } = useSettingsSession();
+  const { runtime, modelsRevision } = useSettingsSession();
   const [rows, setRows] = useState<ModelCatalogRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [providerId, setProviderId] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export function ModelsSettings() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, modelsRevision]);
 
   const provider = rows?.find((row) => row.providerId === providerId) ?? rows?.[0];
   const activeCount = provider?.models.filter((model) => model.active).length ?? 0;
@@ -94,7 +94,7 @@ export function ModelsSettings() {
   return (
     <SettingsPage title="Models">
       <SettingsSection title="Composer" description="Only active models are offered in the composer's selector.">
-        {error ? <SettingsStatus>{error}</SettingsStatus> : null}
+        {error ? <SettingsStatus tone="error">{error}</SettingsStatus> : null}
         {rows === null && !error ? <SettingsStatus>Loading models…</SettingsStatus> : null}
         {rows !== null && rows.length === 0 ? <SettingsStatus>No provider is configured yet. Run `ranite setup`.</SettingsStatus> : null}
         {rows !== null && rows.length > 0 ? (

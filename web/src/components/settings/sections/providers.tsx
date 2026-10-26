@@ -11,6 +11,7 @@ import { Icon } from '../../icon.js';
 import type { ProviderCatalogRow } from '../../../types.js';
 import { SettingsGroup, SettingsPage, SettingsRow, SettingsSection, SettingsStatus } from '../primitives.js';
 import { AddProviderDialog } from './add-provider-dialog.js';
+import { useSettingsSession } from '../settings-session.js';
 import './models.css';
 
 function describe(error: unknown): string {
@@ -18,6 +19,7 @@ function describe(error: unknown): string {
 }
 
 export function ProvidersSettings() {
+  const { modelsRevision } = useSettingsSession();
   const [rows, setRows] = useState<ProviderCatalogRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -35,7 +37,7 @@ export function ProvidersSettings() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, modelsRevision]);
 
   const configured = (rows ?? []).filter((row) => row.configured);
 

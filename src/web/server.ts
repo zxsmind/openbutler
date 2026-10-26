@@ -16,7 +16,8 @@ import {
   saveSettings,
 } from '../settings.js';
 import { verifyModalCredentials } from '../modal.js';
-import { getProvider, listProviderSummaries } from '../provider/catalog.js';
+import { CATALOG_FILENAMES, getProvider, listProviderSummaries } from '../provider/catalog.js';
+import { watchSettingsFiles } from '../settings-watch.js';
 import { addProviderKeys } from '../provider/keys.js';
 import { verifyAttachmentPath } from '../attachments.js';
 import { connectDaemonSession } from '../daemon-client.js';
@@ -1145,6 +1146,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     });
   });
 
+  const closeTerminals = attachTerminalServer(server, {
+    authorize: (request) => originAllowed(request) && isAuthorized(request),
+    workspace: async (sessionId) => (await sessions.get(sessionId)).runtime.workspaceRoot,
+  });
+
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
@@ -1155,19 +1161,25 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   const address = server.address();
   if (address && typeof address === 'object') port = address.port;
-  const closeTerminals = attachTerminalServer(server, {
-    authorize: (request) => originAllowed(request) && isAuthorized(request),
-    workspace: async (sessionId) => (await sessions.get(sessionId)).runtime.workspaceRoot,
-  });
-
   const pairUrl = issuePairToken();
   options.onPairUrl?.(pairUrl);
+
+  const settingsWatcher = watchSettingsFiles(
+    getDataPath(),
+    [getSettingsPath(), getConfigPath(), ...CATALOG_FILENAMES],
+    () => {
+      for (const target of clients) writeEvent(target, 'models-changed', {});
+    },
+    (message) => logger.warn('web.settings.watch', { message }),
+  );
 
   return {
     url: `http://${host}:${port}`,
     pairUrl,
     newPairUrl: issuePairToken,
     async close() {
+      settingsWatcher.stop();
+      closeTerminals();
       unsubscribe();
       for (const target of clients) target.res.end();
       clients.clear();

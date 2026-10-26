@@ -10,6 +10,7 @@ import type { ApprovalMode, ModelChoice } from '../../types.js';
 
 export interface SettingsSession {
   models: ModelChoice[];
+  modelsRevision: number;
   runtime: { providerId?: string; modelId?: string; modelName?: string } | undefined;
   busy: boolean;
   selectModel: (model: ModelChoice) => void;
