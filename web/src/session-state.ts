@@ -1,11 +1,25 @@
 import type { Entry, SessionPayload } from './types.js';
 import { appendReveal } from './stream-reveal.js';
+import { normalizeLatexMath } from './latex-math.js';
+
+/** Normalize an entry's text on its way into state, so the renderer and the
+ * reveal ranges both work on one consistent string. Tool output stays verbatim:
+ * its backslashes are content, not markup. */
+function normalizeEntry(entry: Entry): Entry {
+  if (entry.kind === 'tool' || typeof entry.text !== 'string') return entry;
+  const text = normalizeLatexMath(entry.text);
+  return text === entry.text ? entry : { ...entry, text };
+}
 
 function revealEntry(entry: Entry, previous: Entry | undefined, receivedAt: number | undefined): Entry {
-  if (receivedAt === undefined) return entry;
-  if (entry.kind !== 'assistant' && entry.kind !== 'reasoning' && entry.kind !== 'tool') return entry;
-  const field = entry.kind === 'tool' ? 'result' : 'text';
-  return { ...entry, streamReveal: appendReveal(previous?.[field] ?? '', entry[field] ?? '', previous?.streamReveal ?? [], receivedAt) };
+  const normalized = normalizeEntry(entry);
+  if (receivedAt === undefined) return normalized;
+  if (normalized.kind !== 'assistant' && normalized.kind !== 'reasoning' && normalized.kind !== 'tool') return normalized;
+  const field = normalized.kind === 'tool' ? 'result' : 'text';
+  return {
+    ...normalized,
+    streamReveal: appendReveal(previous?.[field] ?? '', normalized[field] ?? '', previous?.streamReveal ?? [], receivedAt),
+  };
 }
 
 type SessionState = {
@@ -27,7 +41,7 @@ export const initialSessionState: SessionState = { payload: null, entries: [], b
 
 function applyPayload(state: SessionState, payload: SessionPayload, receivedAt?: number): SessionState {
   if (state.payload?.session.id !== payload.session.id)
-    return { payload, entries: payload.entries, base: payload.from, behind: false, gap: null };
+    return { payload, entries: payload.entries.map(normalizeEntry), base: payload.from, behind: false, gap: null };
   if (payload.reset) {
     // A reset is authoritative. The host can remove entries below this window —
     // reasoning is removable, compaction rewrites the conversation — and every
@@ -35,7 +49,7 @@ function applyPayload(state: SessionState, payload: SessionPayload, receivedAt?:
     // leave stale entries in front of the new window, so the next index-addressed
     // update would overwrite a message that is still there. Older history is not
     // lost: the reader pages it back on demand, by absolute index.
-    return { payload, entries: payload.entries, base: payload.from, behind: false, gap: null };
+    return { payload, entries: payload.entries.map(normalizeEntry), base: payload.from, behind: false, gap: null };
   }
   // A patch continues exactly where the local list ends. A higher `from` means
   // entries in between never arrived: appending anyway would leave a hole and
@@ -62,7 +76,7 @@ function applyPayload(state: SessionState, payload: SessionPayload, receivedAt?:
 export function sessionReducer(state: SessionState, action: SessionAction): SessionState {
   if (action.type === 'older') {
     if (state.payload?.session.id !== action.sessionId || state.base !== action.before) return state;
-    return { ...state, base: action.from, entries: [...action.entries, ...state.entries] };
+    return { ...state, base: action.from, entries: [...action.entries.map(normalizeEntry), ...state.entries] };
   }
   if (action.type === 'payloads')
     return action.payloads.reduce((current, item) => applyPayload(current, item.payload, item.receivedAt), state);

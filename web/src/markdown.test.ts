@@ -1,6 +1,7 @@
 import { Fragment, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { normalizeLatexMath } from './latex-math.js';
 import { Markdown } from './markdown.js';
 
 const render = (text: string) => renderToStaticMarkup(createElement(Markdown, { text }));
@@ -86,5 +87,20 @@ describe('shared Markdown renderer', () => {
     const html = renderToStaticMarkup(createElement(Fragment, null, createElement(Markdown, { text }), createElement(Markdown, { text })));
     const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('renders the LaTeX delimiters models emit once state normalized them', () => {
+    const html = render(normalizeLatexMath('Çözüm: \\(x^2 - 4 = 0\\) ve \\(y = mx + c\\).\n\n\\[E = mc^2\\]'));
+    expect(html).toContain('class="katex"');
+    expect(html).toContain('katex-display');
+    expect(html).not.toContain('\\(x^2');
+    expect(html).not.toContain('\\[E =');
+  });
+
+  it('keeps LaTeX delimiters literal inside code through normalization', () => {
+    const html = render(normalizeLatexMath('Inline `\\(x\\)` stays code.\n\n```tex\n\\[x\\]\n```'));
+    expect(html).toContain('<code>\\(x\\)</code>');
+    expect(html).toContain('\\[x\\]');
+    expect(html).not.toContain('class="katex"');
   });
 });
