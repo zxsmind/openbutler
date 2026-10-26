@@ -167,6 +167,8 @@ export class ToolRegistry {
     guardWrite?: (absolutePath: string) => string | null;
     /** When set, only these tool names are offered to the model for this run (worker tool sets). */
     allowTools?: readonly string[];
+    /** Rebuilds every tool schema for the run's provider before it reaches the model. */
+    schemaSanitizer?: (schema: Record<string, unknown>) => Record<string, unknown>;
     onStart?: (request: ToolCallRequest, toolCallId?: string) => void;
     onResult: (request: ToolCallRequest, result: unknown, toolCallId?: string) => void;
     onAction?: (request: ToolCallRequest, state: ToolActionState, detail?: { result?: unknown; error?: string }) => void | Promise<void>;
@@ -498,9 +500,10 @@ export class ToolRegistry {
         const text = typeof output === 'string' ? output : (JSON.stringify(output) ?? String(output));
         return { type: 'text', value: `${text}\n\n${note}` };
       };
+      const modelInputSchema = options.schemaSanitizer?.(definition.inputSchema) ?? definition.inputSchema;
       modelTools[modelName] = tool({
         description: `${definition.description}\nSource: ${definition.providerId}/${definition.name}. Declared effects: ${JSON.stringify(definition.effect)}.`,
-        inputSchema: jsonSchema<Record<string, unknown>>(withToolTimeoutSchema(definition.inputSchema) as Parameters<typeof jsonSchema>[0]),
+        inputSchema: jsonSchema<Record<string, unknown>>(withToolTimeoutSchema(modelInputSchema) as Parameters<typeof jsonSchema>[0]),
         onInputStart: ({ toolCallId }) => {
           try {
             options.preview?.onStart?.({ toolCallId, providerId: definition.providerId, name: definition.name });

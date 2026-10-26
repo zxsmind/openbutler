@@ -22,6 +22,7 @@ import { isToolRequestWhitelisted, rememberToolRequest } from './tool-permission
 import { ensureHostOwnedRoots } from './host-owned-paths.js';
 import { consumeApproval, recordDeniedAction } from './review-overrides.js';
 import type { ReasoningSupport, ReasoningVariant } from './provider/registry.js';
+import { geminiToolSchemaSanitizer } from './provider/gemini-schema.js';
 import { loadSettings, type ApprovalMode } from './settings.js';
 import { autoReviewFingerprint, reviewToolRequest, type AutoReviewOptions, type AutoReviewResult } from './auto-review.js';
 import type { ToolApprovalOutcome, ToolCallRequest, ToolRegistry, ToolUserQuestion } from './tools/registry.js';
@@ -329,6 +330,10 @@ export class AgentSessionController implements AgentSessionClient {
   getSnapshot = (): AgentSessionSnapshot => this.snapshot;
   private sessionModel(model: LanguageModel = this.runtime.model): LanguageModel {
     return bindSessionKeyRotation(model, (this.session.keyPositions ??= {}));
+  }
+  /** The provider-boundary schema rebuild for this run's model, absent where no strict subset applies. */
+  private toolSchemaSanitizer(): ((schema: Record<string, unknown>) => Record<string, unknown>) | undefined {
+    return geminiToolSchemaSanitizer(this.sessionModel());
   }
   /** The controller has no client-local notices, so both views are the same. */
   getServerEntries = (): readonly SessionEntry[] => this.snapshot.session.entries;
@@ -1403,6 +1408,7 @@ export class AgentSessionController implements AgentSessionClient {
         let archivedResponseCount = 0;
         do {
           refreshTools = false;
+          const schemaSanitizer = this.toolSchemaSanitizer();
           const tools = await this.runtime.registry.createModelTools({
             approve: (request, signal) => this.requestApproval(request, signal),
             approvalMode: this.runtime.approvalMode ?? 'workspace',
@@ -1410,6 +1416,7 @@ export class AgentSessionController implements AgentSessionClient {
             allowToolAutoApproval: this.options.background !== true,
             ...(this.options.tools ? { allowTools: this.options.tools } : {}),
             sessionId: this.session.id,
+            ...(schemaSanitizer ? { schemaSanitizer } : {}),
             ...(this.options.writeGuard ? { guardWrite: (path: string) => this.options.writeGuard!(this.session.id, path) } : {}),
             ...(this.options.background === true ? {} : { ask: (question, signal) => this.requestQuestion(question, signal) }),
             onStart: (request, toolCallId) => this.onToolStart(request, toolCallId),
@@ -1798,7 +1805,12 @@ export class AgentSessionController implements AgentSessionClient {
         undefined,
         this.session.id,
       );
-      const tools = await this.runtime.registry.createModelTools({ approve: async () => false, onResult: () => {} });
+      const schemaSanitizer = this.toolSchemaSanitizer();
+      const tools = await this.runtime.registry.createModelTools({
+        approve: async () => false,
+        onResult: () => {},
+        ...(schemaSanitizer ? { schemaSanitizer } : {}),
+      });
       const result = await compactConversation({
         ...context,
         archivePath: sessionFilePath(this.session.id),
