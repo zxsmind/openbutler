@@ -8,7 +8,7 @@ export function createSendMessageToOwnerTool(workspaceRoot: string, send: SendOw
     name: 'send_message_to_owner',
     maxInputChars: MAX_TOOL_INPUT_CHARS,
     description:
-      'Send an intentional message to the owner through the paired Telegram chat. This never sends to the terminal. Include text and optionally attach one local image as a photo or one local file as a document. Use this for progress the owner should see, questions, or a final answer; ordinary assistant text and tool activity are not delivered to Telegram. When replying to inbox messages, include their ids in replyTo.',
+      'Send an intentional message to the owner through the paired Telegram chat. This never sends to the terminal. At least one of text, imagePath or filePath is required. Include text and optionally attach one local image as a photo or one local file as a document. Use this for progress the owner should see, questions, or a final answer; ordinary assistant text and tool activity are not delivered to Telegram. When replying to inbox messages, include their ids in replyTo.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -22,10 +22,20 @@ export function createSendMessageToOwnerTool(workspaceRoot: string, send: SendOw
           description: 'Owner inbox message ids this message answers. Omit for a proactive update.',
         },
       },
-      anyOf: [{ required: ['text'] }, { required: ['imagePath'] }, { required: ['filePath'] }],
+      // No root-level anyOf: Google's function schema subset rejects required on
+      // type-less branches and requires anyOf to be the only field on its node,
+      // which no root object can satisfy while still declaring these properties.
+      // The "at least one" rule lives in the description above and in execute.
     },
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'none', outbound: 'model-and-tool-server' },
     autoApprove: () => true,
-    execute: (input) => send(input, workspaceRoot),
+    execute: async (input) => {
+      const payload = ['text', 'imagePath', 'filePath'].some((field) => {
+        const value = input[field];
+        return typeof value === 'string' && value.trim() !== '';
+      });
+      if (!payload) return { error: 'Provide at least one of text, imagePath or filePath.' };
+      return send(input, workspaceRoot);
+    },
   };
 }
