@@ -144,6 +144,7 @@ type QueuedTurn = {
   reject: (error: unknown) => void;
   /** The owner message already has a transcript entry; the turn only delivers it to the model. */
   entryAdded?: boolean;
+  turnId?: string | undefined;
 };
 
 export type AgentEventRunResult = { error: string | null; outputs: AgentEventOutput[]; replyHandledByEventId?: string; skipped?: boolean };
@@ -1235,6 +1236,7 @@ export class AgentSessionController implements AgentSessionClient {
       if (turn.automatic || turn.entryAdded) continue;
       turn.entryAdded = true;
       this.addUserEntry(turn.message);
+      turn.turnId = this.activeTurnId;
       added = true;
     }
     if (added) this.publish();
@@ -1637,7 +1639,7 @@ export class AgentSessionController implements AgentSessionClient {
                     next.preferences.showReasoning !== live.showReasoning
                   )
                     break;
-                  this.queuedMessages.shift();
+                  this.queuedMessages.splice(index, 1);
                   if (!(await this.prepareQueuedTurn(next, abortController.signal))) {
                     if (abortController.signal.aborted) break;
                     continue;
