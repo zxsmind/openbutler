@@ -122,6 +122,7 @@ const MAX_SUBAGENT_DEPTH = 2;
 const MAX_WORKERS_PER_MAIN = 8;
 const MAX_WORKERS_PER_WORKER = 2;
 const MAX_WORKERS_TOTAL = 10;
+const INBOX_REMINDER_MS = 5 * 60_000;
 /** Read-only research tool set for explorer workers. */
 const EXPLORER_TOOLS = ['file_read', 'glob', 'grep', 'memory_search', 'session_list', 'session_search', 'session_read'] as const;
 /** Core file and command tools for executor workers; MCP tools are never given to workers (P4 decision). */
@@ -307,7 +308,6 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   const teamDelivery = new TeamDelivery(openTeamConnection);
   const teamSync = new TeamSync(openTeamConnection);
   /** The team this host is currently serving, so a switch can drop the old queue. */
-  let activeTeamId: string | null = null;
   /** Guards a concurrent hub-server start attempt. */
   let teamServerStarting = false;
 
@@ -452,6 +452,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
                 },
               };
             });
+          // A read consumes the notification, not the team's task/agreement.
+          // Keep the local receipt even if the remote acknowledgement needs retrying.
+          if (results.length)
+            await channel
+              .ack(results.map((item) => JSON.parse(item.reference)[1] as string))
+              .catch((error: unknown) => options.log(`Team inbox read acknowledgement: ${String(error)}`));
+          return results;
         });
       },
       acknowledge: async (references, sessionId) => {
@@ -459,7 +466,6 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return withTeamChannel(async (channel, connection) => {
           const ids = teamIds(references, connection.key);
           const result = await channel.ack(ids);
-          for (const id of ids) teamReadMessageIds.delete(`${connection.key}:${id}`);
           return result;
         });
       },
@@ -687,7 +693,6 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const controller = workspace.controller;
       if (controller.automaticWakeHeld) return;
       const keys = fresh.map((message) => `${teamKey}:${message.msgId}`);
-      const alreadyRead = new Set(keys.filter((key) => teamReadMessageIds.has(key)));
       const highest = Math.max(...fresh.map((message) => message.seq));
       const wakeId = `team-wake:${highest}:${Date.now()}`;
       for (const key of keys) teamPendingWakeIds.add(key);
@@ -914,6 +919,12 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
 
   async function closeHost(): Promise<void> {
     closing = true;
+    for (const workspace of workspaces.values()) {
+      workspace.controller.stop({ preserveWakePolicy: true });
+      for (const session of workspace.privateSessions.values()) session.controller.stop({ preserveWakePolicy: true });
+    }
+    custodianWorkspace?.controller.stop({ preserveWakePolicy: true });
+    const mcpClosed = mcpManager.close();
     teamDelivery.close();
     if (workspaceSweepTimer !== null) {
       clearInterval(workspaceSweepTimer);
@@ -959,6 +970,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       await Promise.all([...workspaces.values()].map((workspace) => workspace.runtime.close()));
       workspaces.clear();
     } finally {
+      await mcpClosed;
       ledger.recoverInterruptedEvents();
       ledger.recoverInterruptedActions();
       ledger.close();
@@ -1015,18 +1027,38 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
 
       subagentStop: stopWorker,
     });
+  }
+
+  async function createWorkspace(
+    root: string,
+    key: string,
+    chat?: { saved: ReturnType<typeof loadSavedSession>; projectId?: string | null },
+  ): Promise<WorkspaceHost> {
+    const runtime = await createSessionRuntime(
+      chat?.saved?.project?.workspaceRoot ?? (chat && !chat.saved ? resolveProjectSelection(chat.projectId ?? null).workspaceRoot : root),
+      chat?.saved ? { providerId: chat.saved.providerId, modelId: chat.saved.modelId } : undefined,
+    );
     if (closing) {
       await runtime.close();
       throw new Error('Ranite host shut down while the workspace runtime was loading.');
     }
     const controller = new AgentSessionController(runtime, (action) => ledger.recordToolAction(action), {
+      ...(chat ? { sessionWorkspaceRoot: null } : {}),
       onAutomaticWakeReady: pumpEvents,
       onSessionSaved: acknowledgeSavedWorkerReads,
     });
-    const restartSessionId = ledger.getState(RESTART_SESSION_KEY_PREFIX + key);
-    if (restartSessionId) {
-      controller.loadSession(restartSessionId);
-      ledger.setState(RESTART_SESSION_KEY_PREFIX + key, '');
+    try {
+      if (chat?.saved) controller.openSession(chat.saved);
+      else if (chat) controller.selectProject(chat.projectId ?? null, controller.getSnapshot().session.id);
+      const restartSessionId = chat ? null : ledger.getState(RESTART_SESSION_KEY_PREFIX + key);
+      if (restartSessionId) {
+        controller.loadSession(restartSessionId);
+        ledger.setState(RESTART_SESSION_KEY_PREFIX + key, '');
+      }
+    } catch (error) {
+      await controller.close();
+      await runtime.close();
+      throw error;
     }
     const workspace: WorkspaceHost = {
       root,
@@ -1449,16 +1481,16 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   /**
-   * Reloads services when the settings or secret files change on disk, so a
+   * Reloads services when settings, secrets, or the model catalog change on disk, so a
    * hand edit (or an agent edit through the pre-authorized settings path)
-   * takes effect without a host restart. Only the two files trigger it;
+   * takes effect without a host restart. Only these files trigger it;
    * every ledger, session, or state write in the same directory is ignored.
    */
   function watchSettingsFiles(): void {
     if (settingsWatcher !== null) return;
     settingsWatcher = watchSettingsFilesModule(
       getDataPath(),
-      [getSettingsPath(), getConfigPath()],
+      [getSettingsPath(), getConfigPath(), ...CATALOG_FILENAMES],
       () => {
         if (closing) return;
         void reloadServices().catch((error: unknown) => options.log(`Settings reload: ${String(error)}`));
@@ -1530,7 +1562,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       else stopTeamPoller();
       for (const controller of approvalControllers.values()) {
         const pending = controller.getSnapshot().pendingApproval;
-        if (pending)
+        if (pending && telegram)
           void telegram.requestApproval(pending, controller.runtime.workspaceRoot).catch((error: unknown) => options.log(String(error)));
       }
       pumpEvents();
@@ -1943,7 +1975,6 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const controller = remote ? workspace.controller : (await getPersistentSession(workspace, key, true)).session.controller;
     if (closing) throw new Error('Host is shutting down.');
     if ((stopGenerations.get(key) ?? 0) !== stopGeneration) throw new Error('Run cancelled before execution.');
-    const isRecovery = event.payload.recovery === true;
     const recoveryInboxIds = Array.isArray(event.payload.inboxEventIds)
       ? event.payload.inboxEventIds.filter((id): id is string => typeof id === 'string')
       : typeof event.payload.inboxEventId === 'string'
@@ -2171,7 +2202,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     // and the custodian never blocks on the worker's turn.
     void target.controller
       .sendMessage(
-        { text: framed, images: [] },
+        { text: framed, images: [], communication: { source: 'worker' } },
         {
           reasoningVariantId: target.workspace.runtime.reasoningDefault,
           showReasoning: target.workspace.runtime.showReasoningDefault,
@@ -2666,6 +2697,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         // Old inbox rows become durable file references on their first read.
         const image = event.payload.image;
         if (
+          files.length === 0 &&
           isRecord(image) &&
           typeof image.path === 'string' &&
           typeof image.filename === 'string' &&
@@ -2925,10 +2957,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         const name = typeof rawSchedule.name === 'string' ? rawSchedule.name : '';
         rawSchedule.id = generateScheduleId(name, new Set(settings.schedules.map((candidate) => candidate.id)));
       }
+      if (rawSchedule.originSessionId === undefined) {
+        const existing = action === 'update' ? settings.schedules.find((candidate) => candidate.id === rawSchedule.id) : undefined;
+        rawSchedule.originSessionId = existing?.originSessionId ?? senderSessionId ?? '';
+      }
       const schedule = parseScheduleState(rawSchedule);
       schedule.trigger = normalizeScheduleTrigger(schedule.trigger);
       validateScheduleTrigger(schedule.trigger);
-      if (!schedule.originSessionId && senderSessionId) schedule.originSessionId = senderSessionId;
       canonicalWorkspaceRoot(schedule.workspaceRoot);
       const index = settings.schedules.findIndex((candidate) => candidate.id === schedule.id);
       if (action === 'add' && index >= 0) throw new Error('A schedule with that id already exists.');
@@ -3298,7 +3333,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           return;
         }
         case 'session.list':
-          writeResponse(socket, request.id, true, controller.listSessions());
+          writeResponse(
+            socket,
+            request.id,
+            true,
+            controller
+              .listSessions()
+              .map((session) => ({ ...session, running: findLiveSessionById(session.id)?.controller.isBusy ?? false })),
+          );
           return;
         case 'session.load': {
           const sessionId = requireString(request.sessionId, 'sessionId', 64);
@@ -3307,6 +3349,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
             writeResponse(socket, request.id, true, currentSnapshot.session);
             return;
           }
+          if (attachment.interactive) throw new Error('Open another chat attachment instead of replacing this chat.');
           if (controller.isBusy) throw new Error('Wait for the current run before switching sessions.');
           const targetWorkspace = findLiveSessionById(sessionId)?.workspace ?? workspace;
           const activePrivate = [...targetWorkspace.privateSessions.entries()].find(
@@ -3330,6 +3373,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
               controller: activeController,
               privateSessionId: activePrivate?.[0] ?? null,
               scopeRoot: attachment.scopeRoot,
+              ...(attachment.legacyCustodian ? { legacyCustodian: true } : {}),
               ...(targetWorkspace === custodianWorkspace && !activePrivate ? { custodian: true } : {}),
               ...(workers.has(sessionId) ? { readOnly: true } : {}),
             });
@@ -3349,13 +3393,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           return;
         }
         case 'session.select-project': {
-          if (!attachment.custodian) throw new Error('Project selection requires the machine custodian.');
+          if (!attachment.custodian && !attachment.interactive) throw new Error('Project selection requires an interactive chat.');
           if (request.projectId !== null && typeof request.projectId !== 'string') throw new Error('Invalid project ID.');
           controller.selectProject(request.projectId as string | null, requireString(request.sessionId, 'sessionId', 64));
           writeResponse(socket, request.id, true, { accepted: true });
           return;
         }
         case 'session.new':
+          if (attachment.interactive) throw new Error('Open a new chat attachment instead of replacing this chat.');
           if (controller.isBusy) throw new Error('Wait for the current run before creating a new session.');
           if (request.projectId !== undefined && request.projectId !== null && typeof request.projectId !== 'string')
             throw new Error('Invalid project ID.');
@@ -3669,17 +3714,20 @@ function parseSessionEntry(value: unknown): SessionEntry {
   if (!isRecord(value) || typeof value.kind !== 'string') throw new Error('Session entry is invalid.');
   if (value.kind === 'tool') {
     if (
-      typeof value.command !== 'string' ||
+      !(typeof value.command === 'string' || (isRecord(value.input) && typeof value.tool === 'string')) ||
+      (value.input !== undefined && !isRecord(value.input)) ||
       typeof value.result !== 'string' ||
       (value.running !== undefined && typeof value.running !== 'boolean') ||
       (value.preparing !== undefined && typeof value.preparing !== 'boolean') ||
       (value.tool !== undefined && typeof value.tool !== 'string') ||
+      (value.toolTitle !== undefined && typeof value.toolTitle !== 'string') ||
       (value.session !== undefined && typeof value.session !== 'string')
     )
       throw new Error('Tool session entry is invalid.');
     return {
       kind: 'tool',
-      command: value.command,
+      ...(isRecord(value.input) ? { input: value.input } : { command: value.command as string }),
+      ...(typeof value.toolTitle === 'string' ? { toolTitle: value.toolTitle } : {}),
       result: value.result,
       ...(value.running === true ? { running: true } : {}),
       ...(value.preparing === true ? { preparing: true } : {}),
