@@ -65,8 +65,8 @@ function normalizeNode(node: JsonSchema): JsonSchema {
       node.anyOf = nonNull.map((entry) => ({ type: entry }));
     }
   }
-  // anyOf/oneOf must be the only field on their node, so the siblings go — the
-  // same strip opencode applies. Branches were normalized before this node.
+  // anyOf/oneOf must be the only field on their node, so the siblings go.
+  // Branches were normalized before this node.
   const union = node.anyOf !== undefined ? 'anyOf' : node.oneOf !== undefined ? 'oneOf' : undefined;
   if (union !== undefined) return { [union]: node[union] };
   // `required`/`properties` without a type describe an object under JSON Schema
