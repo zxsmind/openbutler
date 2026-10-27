@@ -254,7 +254,7 @@ export function App() {
                         ) : null}
                       </div>
                     }
-                    render={(turn) => <TurnView turn={turn} live={turn.id === liveTurn} sessionId={id} />}
+                    render={(turn) => <TurnView turn={turn} live={turn.id === liveTurn} sessionId={id} runtime={payload?.runtime} />}
                     footer={typingIndicator}
                   />
                 ) : null}
@@ -302,7 +302,8 @@ export function App() {
                     images={draftImages[id] || []}
                     onImages={(images) => setDraftImages((previous) => ({ ...previous, [id]: images }))}
                     busy={busy}
-                    disabled={!connected || (session.changing && session.pendingNewChatId === null) || projects.selecting}
+                    disabled={!connected || projects.selecting}
+                    modelChanging={session.changing && session.pendingNewChatId === null}
                     changing={session.changing || queued > 0}
                     empty={turns.length === 0 && connected}
                     onDraft={(value) => {

@@ -276,6 +276,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         contextWindowTokens: source.runtime.contextWindowTokens,
         approvalMode: source.runtime.approvalMode ?? null,
         showReasoningDefault: source.runtime.showReasoningDefault,
+        reasoningTitles: source.runtime.reasoningTitles === true,
         reasoningVariants: source.runtime.reasoningVariants.map(({ id, label }) => ({ id, label })),
         reasoningDefault: source.runtime.reasoningDefault,
         workspaceRoot: source.runtime.workspaceRoot,

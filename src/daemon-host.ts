@@ -3603,6 +3603,7 @@ function toRuntimeView(runtime: AgentEnvironment, workspaceRoot = runtime.worksp
     reasoningSupport: runtime.reasoningSupport,
     reasoningDefault: runtime.reasoningDefault,
     showReasoningDefault: runtime.showReasoningDefault,
+    reasoningTitles: runtime.reasoningTitles === true,
     approvalMode: runtime.approvalMode ?? 'workspace',
   };
 }

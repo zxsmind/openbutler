@@ -82,6 +82,8 @@ export interface AgentSessionRuntimeView {
   reasoningDefault: string;
   saveReasoningPreference: (variantId: string) => void;
   showReasoningDefault: boolean;
+  /** This provider's reasoning opens with a bold title line; views may headline it instead of a picked sentence. */
+  reasoningTitles?: boolean;
   saveShowReasoningPreference: (visible: boolean) => void;
   /** Receives provider retry and key-rotation events; set per run, cleared after. */
   reportRetry?: (handler: ((event: RetryEvent) => void) | null) => void;

@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { toolEntryCommand } from '../../src/tool-display.js';
 import { Markdown } from './markdown.js';
-import type { Entry } from './types.js';
+import type { Entry, RuntimeInfo } from './types.js';
 import { ToolOutput } from './components/tool-output.js';
 import { ReasoningText } from './components/reasoning-text.js';
 import { ScrollArea } from './components/scroll-area.js';
@@ -17,6 +17,7 @@ import {
   groupSummary,
   groupSignal,
   isShellTool,
+  reasoningTitle,
   stepLabel,
   thoughtHeadline,
   thoughtLabel,
@@ -134,7 +135,7 @@ function StepRow({ entry, live }: { entry: Entry; live: boolean }) {
   );
 }
 
-function StepGroup({ entries, live, active }: { entries: Entry[]; live: boolean; active: boolean }) {
+function StepGroup({ entries, live, active, titles }: { entries: Entry[]; live: boolean; active: boolean; titles: boolean }) {
   const [open, setOpen] = useState(active);
   // Whether the current `open` came from being the active group rather than a
   // click, so only an automatic opening is folded again when the next group
@@ -168,7 +169,14 @@ function StepGroup({ entries, live, active }: { entries: Entry[]; live: boolean;
   const streaming = active
     ? [...entries].reverse().find((entry) => entry.kind === 'reasoning' && entry.durationMs === undefined)
     : undefined;
-  const headline = streaming ? thoughtHeadline(streaming.text ?? '') : '';
+  // Summary-style providers open a thought with a bold title line; headline it
+  // for them, and keep the ranked sentence for every other provider.
+  const streamingText = streaming?.text ?? '';
+  const headline = !streamingText
+    ? ''
+    : titles
+      ? (reasoningTitle(streamingText) ?? thoughtHeadline(streamingText))
+      : thoughtHeadline(streamingText);
   // Activity owns the header; expanding/collapsing only controls the body.
   // Finished groups show a summary even when the reader opens them again.
   const desired = active ? groupSignal(entries, headline) : { kind: 'summary' as const, text: summary };
@@ -215,7 +223,7 @@ function StepGroup({ entries, live, active }: { entries: Entry[]; live: boolean;
     </div>
   );
 }
-export function TurnView({ turn, live, sessionId }: { turn: Turn; live: boolean; sessionId: string }) {
+export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live: boolean; sessionId: string; runtime?: RuntimeInfo }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const detailsId = useId();
   const groups = groupTimeline(turn);
@@ -270,7 +278,15 @@ export function TurnView({ turn, live, sessionId }: { turn: Turn; live: boolean;
       <Collapsible id={detailsId} open={open}>
         {workDetails.map((group, index) => {
           if (group.kind === 'steps')
-            return <StepGroup key={index} entries={group.entries} live={live} active={index + leadingUsers.length === activeGroup} />;
+            return (
+              <StepGroup
+                key={index}
+                entries={group.entries}
+                live={live}
+                active={index + leadingUsers.length === activeGroup}
+                titles={runtime?.reasoningTitles === true}
+              />
+            );
           if (group.kind === 'compaction') return <CompactionRow key={`compaction-${index}`} entry={group.entry} />;
           const entry = group.entry;
           // A message the owner sent into a running turn is still their words, not

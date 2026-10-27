@@ -33,6 +33,21 @@ export function reasoningSentences(text: string): string[] {
 
 type Vector = Map<string, number>;
 
+/**
+ * Summary-style models split their thought into sections headed by a sole bold
+ * line ("**Planning the request**"). The headline follows the current section:
+ * the last completed bold line wins, and a half-streamed one is ignored.
+ * Only a lone line counts - bold anywhere else stays prose.
+ */
+export function reasoningTitle(text: string): string | null {
+  let title: string | null = null;
+  for (const line of text.split('\n')) {
+    const match = /^\*\*([^*\n]{3,60})\*\*[.:]?$/.exec(line.trim());
+    if (match) title = match[1]!.trim();
+  }
+  return title;
+}
+
 function cosine(left: Vector, right: Vector): number {
   let dot = 0;
   let leftNorm = 0;

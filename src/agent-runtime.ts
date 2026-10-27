@@ -15,6 +15,7 @@ import {
   modelSupportsVision,
   normalizeReasoningVariantId,
   providerIsConfigured,
+  reasoningSummaryTitles,
   reasoningSupportStatus,
   resolveReasoningVariant,
   routingProviderOptions,

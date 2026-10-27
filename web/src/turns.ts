@@ -1,6 +1,6 @@
 import type { Entry } from './types.js';
 import { toolEntryCommand } from '../../src/tool-display.js';
-export { reasoningSentences, thoughtHeadline } from './reasoning-headline.js';
+export { reasoningSentences, reasoningTitle, thoughtHeadline } from './reasoning-headline.js';
 
 export interface Turn {
   id: string;

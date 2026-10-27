@@ -88,6 +88,8 @@ export interface RuntimeInfo {
   contextWindowTokens?: number | null;
   approvalMode?: string | null;
   showReasoningDefault?: boolean;
+  /** This provider's reasoning opens with a bold title line; group headlines may use it. */
+  reasoningTitles?: boolean;
   reasoningVariants?: Array<{ id: string; label: string }>;
   reasoningDefault?: string;
   workspaceRoot?: string;

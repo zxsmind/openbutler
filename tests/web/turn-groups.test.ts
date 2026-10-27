@@ -9,6 +9,7 @@ import {
   groupTimeline,
   groupSignal,
   reasoningSentences,
+  reasoningTitle,
   thoughtDuration,
   thoughtHeadline,
   thoughtLabel,
@@ -493,5 +494,38 @@ describe('typing dot window', () => {
     expect(awaitingFirstChunk(streaming, 'turn-1')).toBe(false);
     // Nothing is running, so nothing is awaited.
     expect(awaitingFirstChunk(turns, undefined)).toBe(false);
+  });
+});
+
+describe('reasoningTitle', () => {
+  it('takes a lone bold first line as the model’s own title', () => {
+    expect(reasoningTitle('**Answering the Question**\n\nI received a specific question and am forming a short answer.')).toBe(
+      'Answering the Question',
+    );
+    expect(reasoningTitle('**Considering the approach.**')).toBe('Considering the approach.');
+  });
+
+  it('follows the current section as later bold headers stream in', () => {
+    const sections = [
+      '**Designing a Quintic**',
+      '**Analyzing Quintic Equations**',
+      '**Formulating Quintic Equations**',
+      '**Solving the Quartic**',
+      '**Confirming Quintic Roots**',
+    ];
+    let text = '';
+    for (const [index, section] of sections.entries()) {
+      text = index === 0 ? `${section}\n\nBody of section ${index}.` : `${text}\n\n${section}\n\nBody of section ${index}.`;
+      expect(reasoningTitle(text)).toBe(section.slice(2, -2));
+    }
+    // A half-streamed header never replaces the finished one.
+    expect(reasoningTitle(`${text}\n\n**Next`)).toBe('Confirming Quintic Roots');
+  });
+
+  it('ignores bold that is not a lone line', () => {
+    expect(reasoningTitle('Text with **bold inside** a sentence.')).toBeNull();
+    expect(reasoningTitle('**Bold but followed** by more words on the same line.')).toBeNull();
+    expect(reasoningTitle('**a**')).toBeNull();
+    expect(reasoningTitle('')).toBeNull();
   });
 });

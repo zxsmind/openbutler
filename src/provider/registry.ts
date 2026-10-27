@@ -482,6 +482,8 @@ interface ReasoningAdapter {
   budget: (tokens: number) => Record<string, unknown> | null;
   /** Extra request options merged when reasoning is shown, or null for none. */
   display: (current: Record<string, unknown>) => Record<string, unknown> | null;
+  /** Summary-style models open their thought with a sole bold title line the view may headline. */
+  summaryTitles?: true;
 }
 
 /** OpenAI-vocabulary efforts, shared by the OpenAI-parity adapters. */
@@ -520,6 +522,7 @@ const REASONING_ADAPTERS: Record<string, ReasoningAdapter> = {
       if (thinking?.type === 'disabled') return null;
       return { sendReasoning: true, ...(thinking ? { thinking: { ...thinking, display: 'summarized' } } : {}) };
     },
+    summaryTitles: true,
   },
   '@ai-sdk/google': {
     optionsKey: () => 'google',
@@ -533,6 +536,7 @@ const REASONING_ADAPTERS: Record<string, ReasoningAdapter> = {
           : {};
       return { thinkingConfig: { ...thinkingConfig, includeThoughts: true } };
     },
+    summaryTitles: true,
   },
   '@openrouter/ai-sdk-provider': {
     optionsKey: () => 'openrouter',
@@ -843,6 +847,11 @@ function toggleOptions(npm: string, enabled: boolean): Record<string, unknown> |
 
 function budgetOptions(npm: string, budgetTokens: number): Record<string, unknown> | null {
   return reasoningAdapter(npm)?.budget(budgetTokens) ?? null;
+}
+
+/** Whether this provider's reasoning arrives as summary-style text that opens with a bold title line. */
+export function reasoningSummaryTitles(provider: ResolvedProvider): boolean {
+  return reasoningAdapter(provider.npm)?.summaryTitles === true;
 }
 
 /**
