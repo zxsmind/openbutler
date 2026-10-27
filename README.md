@@ -310,13 +310,17 @@ over one server-sent event stream; rendering happens in the browser, so the host
 process stays where it is.
 
 ```sh
-ranite web [--port 45278] [--hostname 127.0.0.1] [--dir path/to/project]
+ranite web [--port 45278] [--hostname 127.0.0.1] [--dir path/to/project] [--pair]
 ```
 
-It prints a one-time pairing link that expires in five minutes and sets an
-HttpOnly session cookie when opened. Press Enter for a fresh link; Ctrl+C stops
-the server. The address binds loopback by default; binding another interface
-prints a warning, because the pairing link is then reachable from the network.
+Plain `ranite web` starts the server in the background and prints its address;
+paired browsers reconnect on their own. Pairing is explicit: `ranite web --pair`
+runs a pairing session in this terminal, prints a one-time link that expires in
+five minutes, and sets an HttpOnly session cookie when opened. Press Enter for a
+fresh link; Ctrl+C stops the session. The address binds loopback by default;
+binding another interface prints a warning, because the pairing link is then
+reachable from the network. `ranite restart` recycles the browser server
+together with the background host whenever it is running.
 The client can send messages and images, switch chats and models, stop a run, and
 answer approvals and questions.
 

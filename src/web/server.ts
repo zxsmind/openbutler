@@ -487,7 +487,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           cookieLength: req.headers.cookie?.length ?? 0,
           host: req.headers.host ?? null,
         });
-        return sendJson(res, 401, { error: 'Pair this browser first: run `ranite web`.' });
+        return sendJson(res, 401, { error: 'Pair this browser first: run `ranite web --pair`.' });
       }
     }
 
