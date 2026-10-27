@@ -101,7 +101,7 @@ function usage(): void {
     ['ranite web', 'Serve the browser client (--port, --hostname, --dir).'],
     ['ranite team <subcommand>', 'Form a closed team of ranites over the tailnet (init, invite, join, …).'],
     ['ranite events', 'Inspect the durable event ledger.'],
-    ['ranite actions', 'Inspect the durable tool action ledger.'],
+    ['ranite actions', 'Inspect the durable tool action ledger; actions report counts tools, MCP servers and skills.'],
     ['ranite sessions index', 'Build or refresh the derived session search index (--rebuild to redo it).'],
     ['ranite sessions prune', 'Delete session files older than an explicit cutoff (needs --yes).'],
     ['ranite workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
@@ -1510,6 +1510,54 @@ async function runLedgerPrune(kind: 'events' | 'actions', parsed: Parsed): Promi
 async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Promise<void> {
   if (parsed.words[0] === 'prune') {
     await runLedgerPrune(kind, parsed);
+    return;
+  }
+  if (kind === 'actions' && parsed.words[0] === 'report') {
+    const days = Number(parsed.flags.get('days') ?? 30);
+    const boundedDays = Number.isFinite(days) ? Math.min(3650, Math.max(1, Math.trunc(days))) : 30;
+    const since = new Date(Date.now() - boundedDays * 24 * 60 * 60 * 1000).toISOString();
+    const path = getDataPath('state.db');
+    if (!existsSync(path)) {
+      ui.info('No activity has been recorded.');
+      return;
+    }
+    const { ActivityLedger } = await import('./activity-ledger.js');
+    const { buildActionsReport } = await import('./usage/actions-report.js');
+    const ledger = new ActivityLedger(path, { readOnly: true });
+    try {
+      const report = buildActionsReport(ledger.actionReportRows(since), since);
+      ui.section(`Tool activity - last ${boundedDays} days`);
+      ui.kv('Calls', `${report.windowCalls} (${report.windowFailed} failed)`);
+      ui.kv('MCP servers', String(report.mcp.length));
+      ui.kv('Skills used', String(report.skills.length));
+      if (report.tools.length) {
+        ui.line('');
+        ui.line('Tools:');
+        for (const tool of report.tools.slice(0, 25)) {
+          const failed = tool.failed ? ` (${tool.failed} failed)` : '';
+          ui.line(`  ${String(tool.calls).padStart(5)}  ${tool.provider}:${tool.tool}${failed}`);
+        }
+      }
+      if (report.mcp.length) {
+        ui.line('');
+        ui.line('MCP servers:');
+        for (const server of report.mcp) {
+          const top = server.tools
+            .slice(0, 3)
+            .map((tool) => tool.tool)
+            .join(', ');
+          ui.line(`  ${String(server.calls).padStart(5)}  ${server.server}  (${top})`);
+        }
+      }
+      if (report.skills.length) {
+        ui.line('');
+        ui.line('Skills:');
+        for (const skill of report.skills) ui.line(`  ${String(skill.uses).padStart(5)}  ${skill.skill}`);
+      }
+      if (!report.tools.length) ui.info('No tool calls recorded in this window.');
+    } finally {
+      ledger.close();
+    }
     return;
   }
   if (kind === 'events' && parsed.words[0] === 'retry') {

@@ -1,4 +1,4 @@
-﻿import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -647,6 +647,31 @@ export class ActivityLedger {
       .prepare('SELECT * FROM ranite_actions ORDER BY created_at DESC LIMIT ?')
       .all(bounded) as unknown as ActionDbRow[];
     return rows.map(actionFromRow);
+  }
+
+  /** Windowed facts for the tool report; `path` is the input's path field for file tools. */
+  actionReportRows(sinceIso: string): Array<{
+    providerId: string;
+    toolName: string;
+    state: ToolActionState;
+    createdAt: string;
+    path: string | null;
+  }> {
+    this.assertOpen();
+    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ranite_actions'").get()) return [];
+    return this.database
+      .prepare(
+        `SELECT provider_id AS providerId, tool_name AS toolName, state, created_at AS createdAt,
+                json_extract(input_json, '$.path') AS path
+         FROM ranite_actions WHERE created_at >= ? ORDER BY created_at`,
+      )
+      .all(sinceIso) as unknown as Array<{
+      providerId: string;
+      toolName: string;
+      state: ToolActionState;
+      createdAt: string;
+      path: string | null;
+    }>;
   }
 
   actionTransitions(requestId: string): Array<{ state: ToolActionState; detail: unknown; createdAt: string }> {
