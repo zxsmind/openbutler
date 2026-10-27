@@ -17,6 +17,33 @@
 :root {
   color-scheme: light;
   --font-body: 'SF Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Design tokens consumed by Settings; the conversation UI stays unchanged. */
+  --ui-tiny-size: 10px;
+  --ui-caption-size: 11px;
+  --ui-small-size: 12px;
+  --ui-control-size: 13px;
+  --ui-body-size: 14px;
+  --ui-section-heading-size: 16px;
+  --ui-emphasis-size: 20px;
+  --ui-heading-size: 22px;
+  --ui-control-height: 32px;
+  --ui-control-radius: 8px;
+  --ui-sidebar-width: 274px;
+  --ui-surface: #fff;
+  --ui-surface-subtle: #f9fafb;
+  --ui-control-bg: #f1f2f4;
+  --ui-control-border: #e5e7eb;
+  --ui-hover-bg: #eff1f5;
+  --ui-text-secondary: #555b65;
+  --ui-danger: #bd4853;
+  --ui-danger-bg: #fff5f6;
+  --ui-panel-radius: 12px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 24px;
+  --ui-space-6: 32px;
   font-family: var(--font-body);
   font-optical-sizing: auto;
   color: #292a2e;

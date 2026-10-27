@@ -1,43 +1,35 @@
-/**
- * Which models the composer offers.
- *
- * One provider at a time, chosen from a searchable list, then its models from a
- * searchable multi-select. A catalog holds hundreds of models per provider, so
- * the screen never renders the whole catalog at once: it renders the list the
- * owner asked for. Nothing is active by default — an empty set means the
- * composer has nothing to offer until the owner chooses.
- */
 import { useCallback, useEffect, useState } from 'react';
 import { fetchModelCatalog, setModelActive } from '../../../api.js';
 import { Icon } from '../../icon.js';
-import { Dropdown, type DropdownItem } from '../../selection/dropdown.js';
 import type { ModelCatalogRow } from '../../../types.js';
 import { SettingsGroup, SettingsPage, SettingsRow, SettingsSection, SettingsStatus } from '../primitives.js';
 import { useSettingsSession } from '../settings-session.js';
-import './models.css';
+import { AddModelDialog } from './add-model-dialog.js';
+import './management.css';
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Only enabled models belong on the settings page. Catalog discovery is modal. */
 export function ModelsSettings() {
   const { runtime, modelsRevision } = useSettingsSession();
   const [rows, setRows] = useState<ModelCatalogRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [providerId, setProviderId] = useState<string | null>(null);
-  const [providerOpen, setProviderOpen] = useState(false);
-  const [providerQuery, setProviderQuery] = useState('');
-  const [modelsOpen, setModelsOpen] = useState(false);
-  const [modelQuery, setModelQuery] = useState('');
-  const [pending, setPending] = useState(false);
-  const [newModel, setNewModel] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const next = await fetchModelCatalog();
       setRows(next);
       setError(null);
-      setProviderId((current) => current ?? runtime?.providerId ?? next[0]?.providerId ?? null);
+      setProviderId((current) =>
+        next.some((row) => row.providerId === current)
+          ? current
+          : (next.find((row) => row.providerId === runtime?.providerId)?.providerId ?? next[0]?.providerId ?? null),
+      );
     } catch (cause) {
       setError(describe(cause));
     }
@@ -47,178 +39,95 @@ export function ModelsSettings() {
     void load();
   }, [load, modelsRevision]);
 
-  const provider = rows?.find((row) => row.providerId === providerId) ?? rows?.[0];
-  const activeCount = provider?.models.filter((model) => model.active).length ?? 0;
+  const provider = rows?.find((row) => row.providerId === providerId) ?? null;
+  const enabled = (provider?.models ?? []).filter((model) => model.active).sort((a, b) => a.name.localeCompare(b.name));
 
-  const toggle = async (modelId: string, active: boolean) => {
-    if (!provider) return;
-    setPending(true);
+  const disableModel = async (modelId: string) => {
+    if (!provider || pending) return;
+    setPending(modelId);
+    setError(null);
     try {
-      setRows(await setModelActive(provider.providerId, modelId, active));
-      setError(null);
+      setRows(await setModelActive(provider.providerId, modelId, false));
     } catch (cause) {
       setError(describe(cause));
     } finally {
-      setPending(false);
+      setPending(null);
     }
   };
 
-  const providerItems: DropdownItem[] = (rows ?? [])
-    .filter((row) => row.providerId.toLocaleLowerCase('en').includes(providerQuery.trim().toLocaleLowerCase('en')))
-    .map((row) => {
-      const active = row.models.filter((model) => model.active).length;
-      return {
-        id: row.providerId,
-        label: row.providerId,
-        description: `${active} of ${row.models.length} active`,
-        selected: row.providerId === provider?.providerId,
-        onSelect: () => {
-          setProviderId(row.providerId);
-          setProviderOpen(false);
-        },
-      };
-    });
-
-  const modelItems: DropdownItem[] = (provider?.models ?? [])
-    .filter((model) => `${model.name} ${model.modelId}`.toLocaleLowerCase('en').includes(modelQuery.trim().toLocaleLowerCase('en')))
-    .map((model) => ({
-      id: model.modelId,
-      label: model.name,
-      selected: model.active,
-      trailing: model.active ? <Icon name="check" size={14} /> : undefined,
-      onSelect: () => {
-        void toggle(model.modelId, !model.active);
-      },
-    }));
-
   return (
-    <SettingsPage title="Models">
-      <SettingsSection title="Composer" description="Only active models are offered in the composer's selector.">
-        {error ? <SettingsStatus tone="error">{error}</SettingsStatus> : null}
-        {rows === null && !error ? <SettingsStatus>Loading models…</SettingsStatus> : null}
-        {rows !== null && rows.length === 0 ? <SettingsStatus>No provider is configured yet. Run `ranite setup`.</SettingsStatus> : null}
-        {rows !== null && rows.length > 0 ? (
-          <SettingsGroup>
-            <SettingsRow label="Provider" description="Configured providers only.">
-              <Dropdown
-                open={providerOpen}
-                onOpenChange={(next) => {
-                  setProviderOpen(next);
-                  if (next) setProviderQuery('');
-                }}
-                items={providerItems}
-                ariaLabel="Choose provider"
-                placement="bottom"
-                align="end"
-                itemSelectionMode="single"
-                search={{
-                  value: providerQuery,
-                  onChange: setProviderQuery,
-                  placeholder: 'Search providers',
-                  ariaLabel: 'Search providers',
-                }}
-                renderTrigger={({ ref, open, toggle: onToggle }) => (
-                  <button ref={ref} type="button" className="settings-picker" aria-expanded={open} onClick={onToggle}>
-                    <span className="settings-picker__value">{provider?.providerId ?? 'Choose provider'}</span>
-                    <Icon name="chevron-down" size={12} />
-                  </button>
-                )}
-              />
-            </SettingsRow>
-
-            <SettingsRow
-              label="Models"
-              description={activeCount === 0 ? 'Nothing active: the composer has no model to offer.' : `${activeCount} active`}
-            >
-              <Dropdown
-                open={modelsOpen}
-                onOpenChange={(next) => {
-                  setModelsOpen(next);
-                  if (next) setModelQuery('');
-                }}
-                items={modelItems}
-                ariaLabel="Choose active models"
-                placement="bottom"
-                align="end"
-                itemSelectionMode="single"
-                closeOnSelect={false}
-                search={{ value: modelQuery, onChange: setModelQuery, placeholder: 'Search models', ariaLabel: 'Search models' }}
-                footer={
-                  <div className="settings-picker__add">
-                    <input
-                      aria-label="Add a model id"
-                      placeholder="Add a model id"
-                      value={newModel}
-                      disabled={pending}
-                      onChange={(event) => setNewModel(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter') return;
-                        event.preventDefault();
-                        const modelId = newModel.trim();
-                        if (!modelId) return;
-                        setNewModel('');
-                        void toggle(modelId, true);
-                      }}
-                    />
-                    <button
-                      type="button"
-                      disabled={pending || !newModel.trim()}
-                      onClick={() => {
-                        const modelId = newModel.trim();
-                        if (!modelId) return;
-                        setNewModel('');
-                        void toggle(modelId, true);
-                      }}
-                    >
-                      Add
-                    </button>
-                  </div>
-                }
-                renderTrigger={({ ref, open, toggle: onToggle }) => (
-                  <button ref={ref} type="button" className="settings-picker" aria-expanded={open} disabled={pending} onClick={onToggle}>
-                    <span className="settings-picker__value">
-                      {activeCount} of {provider?.models.length ?? 0} active
-                    </span>
-                    <Icon name="chevron-down" size={12} />
-                  </button>
-                )}
-              />
-            </SettingsRow>
-          </SettingsGroup>
-        ) : null}
-      </SettingsSection>
-
-      <SettingsSection
-        title="Active models"
-        description={
-          activeCount === 0
-            ? 'Nothing is active: the composer has no model to offer until one is chosen above.'
-            : 'These are offered in the composer. The one picked there answers, and the last pick becomes the default for new chats.'
-        }
-      >
-        {activeCount > 0 ? (
-          <ul className="models-chips">
-            {(provider?.models ?? [])
-              .filter((model) => model.active)
-              .map((model) => (
-                <li key={model.modelId} className="models-chip">
-                  <span className="models-chip__name">{model.name}</span>
+    <SettingsPage title="Models" description="Manage which models appear in the conversation composer.">
+      {error ? <SettingsStatus tone="error">{error}</SettingsStatus> : null}
+      {rows === null && !error ? <SettingsStatus>Loading models…</SettingsStatus> : null}
+      {rows !== null && rows.length === 0 ? <SettingsStatus>Connect a provider before adding models.</SettingsStatus> : null}
+      {rows && rows.length > 0 ? (
+        <>
+          <SettingsSection title="Provider">
+            <SettingsGroup>
+              <SettingsRow label="Model provider" description="Select the provider to configure.">
+                <select
+                  className="settings-native-select"
+                  aria-label="Model provider"
+                  value={provider?.providerId ?? ''}
+                  disabled={pending !== null}
+                  onChange={(event) => {
+                    setProviderId(event.target.value);
+                    setError(null);
+                  }}
+                >
+                  {rows.map((row) => (
+                    <option key={row.providerId} value={row.providerId}>
+                      {row.providerId}
+                    </option>
+                  ))}
+                </select>
+              </SettingsRow>
+            </SettingsGroup>
+          </SettingsSection>
+          <SettingsSection
+            title="Enabled models"
+            description="These models are available in the composer."
+            action={
+              <button type="button" className="settings-choice" disabled={pending !== null || !provider} onClick={() => setAdding(true)}>
+                <Icon name="plus" size={14} /> Add model
+              </button>
+            }
+          >
+            <SettingsGroup>
+              {enabled.map((model) => (
+                <SettingsRow
+                  key={model.modelId}
+                  label={model.name}
+                  description={`${model.modelId}${model.modelId === runtime?.modelId && provider?.providerId === runtime.providerId ? ' · Current model' : ''}`}
+                >
                   <button
                     type="button"
-                    className="models-chip__remove"
-                    aria-label={`Remove ${model.name} from the composer`}
-                    disabled={pending}
-                    onClick={() => void toggle(model.modelId, false)}
+                    role="switch"
+                    className="settings-toggle is-on"
+                    aria-checked={true}
+                    aria-label={`Disable ${model.name}`}
+                    disabled={pending !== null}
+                    onClick={() => void disableModel(model.modelId)}
                   >
-                    <Icon name="x" size={12} />
+                    <span />
                   </button>
-                </li>
+                </SettingsRow>
               ))}
-          </ul>
-        ) : (
-          <SettingsStatus>No active model for {provider?.providerId ?? 'this provider'}.</SettingsStatus>
-        )}
-      </SettingsSection>
+              {enabled.length === 0 ? <p className="settings-model-empty">No enabled models. Select Add model to choose one.</p> : null}
+            </SettingsGroup>
+          </SettingsSection>
+          {adding && provider ? (
+            <AddModelDialog
+              provider={provider}
+              onClose={() => setAdding(false)}
+              onAdded={(next) => {
+                setRows(next);
+                setError(null);
+              }}
+            />
+          ) : null}
+        </>
+      ) : null}
     </SettingsPage>
   );
 }

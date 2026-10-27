@@ -1,34 +1,10 @@
 /* Usage: the calendar, the range switch and the table. */
-.settings-range {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.settings-range__option {
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--settings-muted);
-  font: inherit;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.settings-range__option:hover {
-  color: #353639;
-}
-
-.settings-range__option.is-active {
-  color: #1764b2;
-}
-
 .settings-figures {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   margin: 0;
   padding: 14px 0;
-  border: 1px solid var(--settings-border);
+  border: 1px solid var(--line);
   border-radius: 16px;
 }
 
@@ -43,20 +19,20 @@
 }
 
 .settings-figures > div + div {
-  border-left: 1px solid var(--settings-border);
+  border-left: 1px solid var(--line);
 }
 
 .settings-figures dd {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--ui-body-size);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
 .settings-figures dt {
-  font-size: 12px;
-  color: var(--settings-muted);
+  font-size: var(--ui-small-size);
+  color: var(--muted);
 }
 
 .settings-calendar-scroll {
@@ -110,7 +86,7 @@
   grid-template-columns: repeat(var(--weeks), minmax(0, 1fr));
   gap: 3px;
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--ui-caption-size);
   color: #94969c;
 }
 
@@ -124,7 +100,7 @@
   justify-content: space-between;
   gap: 12px;
   color: #94969c;
-  font-size: 11px;
+  font-size: var(--ui-caption-size);
 }
 
 .settings-calendar__legend > span:last-child {
@@ -145,7 +121,7 @@
 .settings-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--ui-small-size);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -154,7 +130,7 @@
 .settings-table td {
   padding: 10px 8px;
   text-align: right;
-  border-bottom: 1px solid var(--settings-border);
+  border-bottom: 1px solid var(--line);
 }
 
 .settings-table th:first-child,
@@ -173,7 +149,7 @@
 }
 
 .settings-table th {
-  color: var(--settings-muted);
+  color: var(--muted);
   font-weight: 400;
 }
 

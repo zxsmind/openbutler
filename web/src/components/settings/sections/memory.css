@@ -2,14 +2,14 @@
 .settings-memory__path {
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: var(--ui-small-size);
   color: var(--faint);
   word-break: break-all;
 }
 
 .settings-memory__summary {
   margin: 0.35rem 0 0;
-  font-size: 0.82rem;
+  font-size: var(--ui-control-size);
   color: var(--muted);
 }
 
@@ -18,23 +18,23 @@
 }
 
 .settings-memory__body .markdown {
-  font-size: 0.875rem;
+  font-size: var(--ui-body-size);
   line-height: 1.55;
 }
 
 .settings-memory__body .markdown h1 {
-  font-size: 1.05rem;
+  font-size: var(--ui-section-heading-size);
   margin: 0.25rem 0 0.5rem;
 }
 
 .settings-memory__body .markdown h2 {
-  font-size: 0.95rem;
+  font-size: var(--ui-section-heading-size);
   margin: 0.9rem 0 0.35rem;
 }
 
 .settings-memory__body .markdown h3,
 .settings-memory__body .markdown h4 {
-  font-size: 0.9rem;
+  font-size: var(--ui-body-size);
   margin: 0.75rem 0 0.3rem;
 }
 
@@ -45,7 +45,7 @@
 }
 
 .settings-memory__body .markdown code {
-  font-size: 0.8rem;
+  font-size: var(--ui-control-size);
 }
 
 .settings-memory__body .markdown > :first-child {

@@ -4,10 +4,10 @@
   padding: 6px 8px;
   border: 1px solid #eaeaec;
   border-radius: 9px;
-  background: #fff;
+  background: var(--ui-surface);
   color: #414246;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--ui-small-size);
   text-align: right;
 }
 

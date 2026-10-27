@@ -1,200 +1,132 @@
-/**
- * Settings surface: a fixed section list and one scrolling content column.
- *
- * The content column is centred and capped, so a settings page reads like a page
- * rather than a list glued to the left edge of a wide window.
- */
+/* Settings has its own navigation layout. Only global design tokens and the
+ * basic Button/Icon primitives are shared with the conversation UI. */
 .settings-surface {
-  /* Section CSS reads these; they live on the surface so the whole tree inherits. */
-  --settings-border: #e9eaee;
-  --settings-muted: #7c8089;
-  /* The frame belongs to the shell: .app owns the gap and the columns own their
-     radius, so a top-level view is placed in that grid instead of positioned
-     against the viewport. Settings then keeps the same rounded card geometry as
-     the conversation at every breakpoint, and the gap is never duplicated here. */
-  position: relative;
+  display: grid;
   grid-column: 1 / -1;
   grid-row: 1;
-  z-index: 30;
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  background: #fff;
-  border: 1px solid #e6e9ef;
-  border-radius: 14px;
+  grid-template-columns: var(--ui-sidebar-width) minmax(0, 1fr);
+  min-height: 0;
   overflow: hidden;
+  position: relative;
+  z-index: 30;
+  border-radius: var(--ui-panel-radius);
 }
 
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px 14px 14px;
-  background: #f7f8fa;
-  border-right: 1px solid #ebedf1;
-  overflow-y: auto;
-}
-
-.settings-nav__head {
-  padding: 0 8px;
-}
-
-.settings-nav__title {
-  margin: 0;
-  color: #1c1d21;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.settings-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 4px;
-  padding: 7px 10px;
-  border: 1px solid #e6e8ec;
-  border-radius: 10px;
-  background: #fff;
-  color: #9aa0a8;
-}
-
-.settings-search input {
-  width: 100%;
   min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: #23252a;
-  font: inherit;
-  font-size: 12.5px;
+  min-height: 0;
+  padding: 12px 8px 10px;
+  border: 1px solid #e6e9ef;
+  border-right: 1px solid #e0e3e9;
+  border-radius: 14px 0 0 14px;
+  background: linear-gradient(180deg, #f9fafc 60%, #f8fcf4);
 }
 
-.settings-search input::placeholder {
-  color: #a5aab2;
-}
-
-.settings-nav__body {
+.settings-nav__scroll {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
-.settings-nav__caption {
-  margin: 0 0 6px;
-  padding: 0 8px;
-  color: #9aa0a8;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.settings-nav__group + .settings-nav__group {
+  margin-top: 22px;
+}
+
+.settings-nav__group-title {
+  margin: 8px 8px 10px;
+  color: #8d919a;
+  font-size: var(--ui-control-size);
+  font-weight: 500;
 }
 
 .settings-nav__list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  margin: 0;
+  gap: 2px;
   padding: 0;
+  margin: 0;
   list-style: none;
 }
 
 .settings-nav__item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  min-height: 31px;
+  padding: 5px 8px;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--ui-control-radius);
   background: transparent;
-  color: #4a4d54;
-  font: inherit;
-  font-size: 13px;
+  color: #555b65;
   text-align: left;
+  font-size: var(--ui-body-size);
+  line-height: 1.5;
   cursor: pointer;
+  transition: background-color 140ms ease;
 }
 
 .settings-nav__item:hover {
-  background: #eef0f4;
-  color: #23252a;
+  background: var(--ui-hover-bg);
 }
 
 .settings-nav__item.is-active {
-  background: #fff;
-  color: #1c1d21;
-  font-weight: 500;
-  box-shadow:
-    0 1px 2px rgba(16, 18, 22, 0.06),
-    0 0 0 1px rgba(16, 18, 22, 0.05);
+  background: #ecefeb;
+  color: #303640;
 }
 
-.settings-nav__item svg {
-  color: #8b9099;
+.settings-nav__item .icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
 }
 
-.settings-nav__item.is-active svg {
-  color: #2c5f95;
+.settings-nav__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.settings-nav__back {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: #6d717a;
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
+.settings-nav__footer {
+  flex: none;
+  padding: 8px 8px 10px;
+  border-top: 1px solid #e1e3e7;
 }
 
-.settings-nav__back:hover {
-  background: #eef0f4;
-  color: #23252a;
-}
-
-.settings-close {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: #8b9099;
-  cursor: pointer;
-}
-
-.settings-close:hover {
-  background: #f0f1f4;
-  color: #23252a;
+.settings-nav .settings-nav__return {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .settings-content {
+  position: relative;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
-  padding: 40px 48px 64px;
+  border: 1px solid #e6e9ef;
+  border-left: 0;
+  border-radius: 0 14px 14px 0;
+  background: var(--ui-surface);
+  outline: none;
 }
 
-.settings-content > * {
-  width: 100%;
-  max-width: 760px;
+.settings-content:focus {
+  outline: none;
+}
+
+.settings-content__inner {
+  width: min(100%, 680px);
+  padding: 63px 20px 90px;
   margin: 0 auto;
 }
 
-@media (max-width: 1000px) {
-  .settings-surface {
-    grid-template-columns: 200px minmax(0, 1fr);
-  }
-
-  .settings-content {
-    padding: 28px 24px 56px;
-  }
+.settings-search-overlay {
+  z-index: 80;
 }
 
 @media (max-width: 760px) {
@@ -207,43 +139,86 @@
     flex-direction: row;
     align-items: center;
     gap: 8px;
-    padding: 10px;
-    border-right: 0;
-    border-bottom: 1px solid #ebedf1;
-    overflow-x: auto;
+    padding: 8px;
+    border-right: 1px solid #e6e9ef;
+    border-bottom: 0;
+    border-radius: 14px 14px 0 0;
   }
 
-  .settings-nav__head,
-  .settings-nav__caption,
-  .settings-nav__back {
+  .settings-nav__group-title {
     display: none;
   }
 
-  .settings-search {
+  /* Keep the chat-style search icon reachable in the compact navigation. */
+  .settings-nav .sidebar-heading {
+    flex: none;
+    min-height: 32px;
+    width: 32px;
+    padding: 0;
+    margin: 0;
+  }
+
+  .settings-nav .sidebar-heading .sidebar-brand,
+  .settings-nav .sidebar-heading .spacer {
     display: none;
   }
 
-  .settings-nav__body {
+  .settings-nav__scroll {
+    min-width: 0;
     overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .settings-nav__group {
+    display: inline-flex;
+    vertical-align: middle;
+  }
+
+  .settings-nav__group + .settings-nav__group {
+    margin-top: 0;
+    margin-left: 6px;
   }
 
   .settings-nav__list {
     flex-direction: row;
-    gap: 6px;
+    gap: 3px;
   }
 
   .settings-nav__item {
     width: auto;
-    padding: 6px 10px;
     white-space: nowrap;
   }
 
-  .settings-content {
-    padding: 20px 16px 48px;
+  .settings-nav__footer {
+    order: -1;
+    padding: 0;
+    border: 0;
   }
 
-  .settings-close {
-    top: 8px;
-    right: 8px;
+  .settings-nav .settings-nav__return {
+    width: 32px;
+    min-width: 32px;
+    padding: 6px;
+    justify-content: center;
+  }
+
+  .settings-nav__return-label {
+    display: none;
+  }
+
+  .settings-content {
+    border-left: 1px solid #e6e9ef;
+    border-radius: 0 0 14px 14px;
+  }
+
+  .settings-content__inner {
+    padding: 28px 16px 58px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav__item {
+    transition: none;
   }
 }

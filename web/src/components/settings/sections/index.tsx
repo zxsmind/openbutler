@@ -1,10 +1,3 @@
-/**
- * Every settings section, in one list.
- *
- * The navigation, the routing and the content all read this array, so the app
- * shell stays unaware of what settings exist: adding one is a file plus a line
- * here.
- */
 import type { SettingsSectionDef } from '../settings-page.js';
 import { ModelsSettings } from './models.js';
 import { ProvidersSettings } from './providers.js';
@@ -16,16 +9,66 @@ import { TelegramSettings } from './telegram.js';
 import { ApprovalsSettings } from './approvals.js';
 import { MemorySettings } from './memory.js';
 
+/** Navigation, descriptions and sections share one authoritative registry. */
 export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
-  { id: 'providers', label: 'Providers', icon: 'network', render: () => <ProvidersSettings /> },
-  { id: 'models', label: 'Models', icon: 'cpu', render: () => <ModelsSettings /> },
-  { id: 'modal', label: 'Modal', icon: 'cloud', render: () => <ModalSettings /> },
-  { id: 'usage', label: 'Usage', icon: 'chart-no-axes-combined', render: () => <UsageSettings /> },
-  { id: 'logs', label: 'Logs', icon: 'scroll-text', render: () => <LogsSettings /> },
-  { id: 'approvals', label: 'Approvals', icon: 'shield-check', render: () => <ApprovalsSettings /> },
-  { id: 'memory', label: 'Memory', icon: 'brain', render: () => <MemorySettings /> },
-  { id: 'telegram', label: 'Telegram', icon: 'send', render: () => <TelegramSettings /> },
-  { id: 'about', label: 'About', icon: 'info', render: () => <AboutSettings /> },
+  {
+    id: 'providers',
+    label: 'Providers',
+    icon: 'network',
+    group: 'Intelligence',
+    description: 'API endpoints and credentials',
+    render: () => <ProvidersSettings />,
+  },
+  {
+    id: 'models',
+    label: 'Models',
+    icon: 'cpu',
+    group: 'Intelligence',
+    description: 'Available models and composer access',
+    render: () => <ModelsSettings />,
+  },
+  {
+    id: 'approvals',
+    label: 'Approvals',
+    icon: 'shield-check',
+    group: 'Intelligence',
+    description: 'Permissions and review policies',
+    render: () => <ApprovalsSettings />,
+  },
+  {
+    id: 'memory',
+    label: 'Memory',
+    icon: 'brain',
+    group: 'Intelligence',
+    description: 'Knowledge and indexing',
+    render: () => <MemorySettings />,
+  },
+  {
+    id: 'modal',
+    label: 'Modal',
+    icon: 'cloud',
+    group: 'Workspace',
+    description: 'Remote compute credentials',
+    render: () => <ModalSettings />,
+  },
+  {
+    id: 'telegram',
+    label: 'Telegram',
+    icon: 'send',
+    group: 'Workspace',
+    description: 'Messaging integration',
+    render: () => <TelegramSettings />,
+  },
+  {
+    id: 'usage',
+    label: 'Usage',
+    icon: 'chart-no-axes-combined',
+    group: 'System',
+    description: 'Activity and cost analytics',
+    render: () => <UsageSettings />,
+  },
+  { id: 'logs', label: 'Logs', icon: 'scroll-text', group: 'System', description: 'Runtime diagnostics', render: () => <LogsSettings /> },
+  { id: 'about', label: 'About', icon: 'info', group: 'System', description: 'Version and environment', render: () => <AboutSettings /> },
 ];
 
 export const DEFAULT_SETTINGS_SECTION = SETTINGS_SECTIONS[0]!.id;

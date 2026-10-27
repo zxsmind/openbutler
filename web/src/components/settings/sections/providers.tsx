@@ -1,10 +1,3 @@
-/**
- * Providers: the endpoints this machine can talk to.
- *
- * Separate from Models on purpose. A provider is a destination plus credentials;
- * a model is something offered in the composer. Adding a provider here does not
- * activate any of its models — that is the Models page's job.
- */
 import { useCallback, useEffect, useState } from 'react';
 import { fetchProviderCatalog, removeProvider } from '../../../api.js';
 import { Icon } from '../../icon.js';
@@ -12,7 +5,7 @@ import type { ProviderCatalogRow } from '../../../types.js';
 import { SettingsGroup, SettingsPage, SettingsRow, SettingsSection, SettingsStatus } from '../primitives.js';
 import { AddProviderDialog } from './add-provider-dialog.js';
 import { useSettingsSession } from '../settings-session.js';
-import './models.css';
+import './management.css';
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -23,6 +16,7 @@ export function ProvidersSettings() {
   const [rows, setRows] = useState<ProviderCatalogRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [query, setQuery] = useState('');
   const [removing, setRemoving] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
 
@@ -38,8 +32,8 @@ export function ProvidersSettings() {
   useEffect(() => {
     void load();
   }, [load, modelsRevision]);
-
   const configured = (rows ?? []).filter((row) => row.configured);
+  const filtered = configured.filter((row) => row.providerId.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 
   const remove = async (providerId: string) => {
     setRemoving(providerId);
@@ -56,54 +50,63 @@ export function ProvidersSettings() {
   };
 
   return (
-    <SettingsPage
-      title="Providers"
-      description="Endpoints this machine can call. A provider holds credentials; it does not decide which models are offered."
-    >
+    <SettingsPage title="Providers" description="Configure API providers and their credentials. Available models are managed separately.">
       {error ? <SettingsStatus tone="error">{error}</SettingsStatus> : null}
-
       <SettingsSection
-        title="Configured"
-        description="Everything with a stored key or a custom URL."
+        title="Connected providers"
+        description="Services configured on this machine."
         action={
           <button type="button" className="settings-add" onClick={() => setAdding(true)}>
-            <Icon name="plus" size={13} />
-            Add provider
+            <Icon name="plus" size={13} /> Add provider
           </button>
         }
       >
+        {configured.length > 5 ? (
+          <label className="settings-list-search">
+            <Icon name="search" size={14} />
+            <input
+              aria-label="Filter providers"
+              placeholder="Search providers"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+        ) : null}
         {rows === null && !error ? <SettingsStatus>Loading providers…</SettingsStatus> : null}
         {rows !== null && configured.length === 0 ? (
-          <SettingsStatus>No provider yet. Add one above, or run `ranite setup`.</SettingsStatus>
+          <SettingsStatus>No providers configured. Select Add provider to connect an API.</SettingsStatus>
         ) : null}
-        {configured.length > 0 ? (
+        {configured.length > 0 && filtered.length === 0 ? <SettingsStatus>No providers match your search.</SettingsStatus> : null}
+        {filtered.length > 0 ? (
           <SettingsGroup>
-            {configured.map((row) => (
+            {filtered.map((row) => (
               <SettingsRow
                 key={row.providerId}
                 label={row.providerId}
-                description={
-                  row.custom ? 'Custom endpoint · models come from this machine’s settings' : `${row.modelCount} models in the catalog`
-                }
+                description={row.custom ? 'Custom API endpoint' : `${row.modelCount} models in catalog`}
               >
-                <span className="settings-tag">{row.custom ? 'Custom' : 'Catalog'}</span>
                 <span className="settings-value settings-value--muted">{row.activeModels} active</span>
                 {confirming === row.providerId ? (
                   <>
+                    <button type="button" className="settings-choice" disabled={removing !== null} onClick={() => setConfirming(null)}>
+                      Cancel
+                    </button>
                     <button
                       type="button"
                       className="settings-choice settings-choice--danger"
                       disabled={removing !== null}
                       onClick={() => void remove(row.providerId)}
                     >
-                      {removing === row.providerId ? 'Removing…' : 'Remove'}
-                    </button>
-                    <button type="button" className="settings-choice" onClick={() => setConfirming(null)}>
-                      Cancel
+                      {removing === row.providerId ? 'Removing…' : 'Confirm removal'}
                     </button>
                   </>
                 ) : (
-                  <button type="button" className="settings-choice" onClick={() => setConfirming(row.providerId)}>
+                  <button
+                    type="button"
+                    className="settings-choice"
+                    disabled={removing !== null}
+                    onClick={() => setConfirming(row.providerId)}
+                  >
                     Remove
                   </button>
                 )}
@@ -112,7 +115,6 @@ export function ProvidersSettings() {
           </SettingsGroup>
         ) : null}
       </SettingsSection>
-
       {adding ? (
         <AddProviderDialog
           onClose={() => setAdding(false)}

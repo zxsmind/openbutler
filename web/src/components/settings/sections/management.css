@@ -1,0 +1,107 @@
+/* Controls shared by the Providers and Models settings sections. */
+.settings-list-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 280px);
+  min-height: var(--ui-control-height);
+  padding: 0 10px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-surface);
+  color: #9296a0;
+}
+
+.settings-list-search:focus-within {
+  border-color: #a9bfe5;
+}
+
+.settings-list-search input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--ui-control-size);
+}
+
+.settings-list-search input:focus-visible {
+  outline: 0;
+}
+
+.settings-list-search input::placeholder {
+  color: #a0a4ad;
+}
+
+.settings-native-select {
+  min-height: var(--ui-control-height);
+  min-width: 170px;
+  max-width: 280px;
+  padding: 5px 27px 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--ui-control-radius);
+  background: var(--ui-surface);
+  color: var(--text);
+  font-size: var(--ui-control-size);
+  cursor: pointer;
+}
+
+.settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  width: 29px;
+  height: 17px;
+  padding: 2px;
+  border: 0;
+  border-radius: 100px;
+  background: #dbdde1;
+  cursor: pointer;
+  transition: background 110ms ease;
+}
+
+.settings-toggle > span {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 100px;
+  background: var(--ui-surface);
+  box-shadow: 0 1px 2px #00000020;
+  transition: transform 110ms ease;
+}
+
+.settings-toggle.is-on {
+  background: var(--blue);
+}
+
+.settings-toggle.is-on > span {
+  transform: translateX(12px);
+}
+
+.settings-toggle:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.settings-model-empty {
+  margin: 0;
+  padding: 23px 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--ui-caption-size);
+}
+
+@media (max-width: 760px) {
+  .settings-native-select {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-toggle,
+  .settings-toggle > span {
+    transition: none;
+  }
+}
