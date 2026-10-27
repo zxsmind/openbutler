@@ -5,7 +5,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeBase64Image, MAX_IMAGE_BYTES } from '../image-data.js';
-import { BRAND_LOGO_URL, readBrandLogo } from '../branding.js';
+import { getBrandAsset } from '../branding.js';
 import { getDataPath } from '../paths.js';
 import {
   clearModalCredentials,
@@ -440,11 +440,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${host}:${port}`);
 
-    if (url.pathname === BRAND_LOGO_URL && (req.method === 'GET' || req.method === 'HEAD')) {
-      const svg = await readBrandLogo();
-      const etag = `"${createHash('sha256').update(svg).digest('hex').slice(0, 16)}"`;
+    const brandAsset = getBrandAsset(url.pathname);
+    if (brandAsset && (req.method === 'GET' || req.method === 'HEAD')) {
+      const data = await brandAsset.data;
+      const etag = `"${createHash('sha256').update(data).digest('hex').slice(0, 16)}"`;
       const headers = {
-        'content-type': 'image/svg+xml; charset=utf-8',
+        'content-type': brandAsset.contentType,
         'cache-control': 'public, max-age=0, must-revalidate',
         'x-content-type-options': 'nosniff',
         etag,
@@ -454,7 +455,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         res.end();
       } else {
         res.writeHead(200, headers);
-        res.end(req.method === 'HEAD' ? undefined : svg);
+        res.end(req.method === 'HEAD' ? undefined : data);
       }
       return;
     }

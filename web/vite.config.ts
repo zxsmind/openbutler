@@ -1,11 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 /** Vendored assets live outside the client package: they are repository-level
  * files, not client source. The alias lets the stylesheet reference them and
  * still go through the bundler (hashing, inlining rules). */
 const repositoryAssets = fileURLToPath(new URL('../assets', import.meta.url));
+const brandHash = createHash('sha256')
+  .update(readFileSync(new URL('../src/assets/branding/ranite.svg', import.meta.url)))
+  .digest('hex')
+  .slice(0, 12);
 
 /**
  * The client is served by the Ranite web server from `dist/client`, which means
@@ -17,7 +23,13 @@ const repositoryAssets = fileURLToPath(new URL('../assets', import.meta.url));
  * the API port would make every POST look cross-origin.
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'ranite-brand-favicon-revision',
+      transformIndexHtml: (html: string) => html.replaceAll('__RANITE_BRAND_HASH__', brandHash),
+    },
+  ],
   base: './',
   resolve: {
     alias: { '@assets': repositoryAssets },
@@ -28,6 +40,9 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://127.0.0.1:45278', changeOrigin: false, ws: true },
       '/brand': { target: 'http://127.0.0.1:45278', changeOrigin: false },
+      '/favicon.ico': { target: 'http://127.0.0.1:45278', changeOrigin: false },
+      '/favicon-32x32.png': { target: 'http://127.0.0.1:45278', changeOrigin: false },
+      '/apple-touch-icon.png': { target: 'http://127.0.0.1:45278', changeOrigin: false },
     },
   },
   build: {

@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserWebAddress, startWebServer, type WebServer } from '../../src/web/server.js';
-import { BRAND_LOGO_URL, readBrandLogo } from '../../src/branding.js';
+import {
+  BRAND_LOGO_URL,
+  BRAND_FAVICON_SVG_URL,
+  BRAND_FAVICON_ICO_URL,
+  BRAND_FAVICON_PNG_URL,
+  BRAND_APPLE_TOUCH_ICON_URL,
+  readBrandLogo,
+} from '../../src/branding.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../../src/agent-session.js';
 import type { SessionEntry } from '../../src/session-store.js';
 import { connectDaemonSession } from '../../src/daemon-client.js';
@@ -166,6 +173,34 @@ afterEach(async () => {
 });
 
 describe('browser session controls', () => {
+  it('serves real favicon formats without requiring browser pairing', async () => {
+    const icons = [
+      { path: BRAND_FAVICON_ICO_URL, type: 'image/x-icon' },
+      { path: BRAND_FAVICON_PNG_URL, type: 'image/png' },
+      { path: BRAND_FAVICON_SVG_URL, type: 'image/svg+xml' },
+      { path: BRAND_APPLE_TOUCH_ICON_URL, type: 'image/png' },
+    ];
+    for (const icon of icons) {
+      const url = new URL(icon.path + '?v=cache-key', server.url);
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain(icon.type);
+      expect(response.headers.get('cache-control')).toContain('must-revalidate');
+      const bytes = Buffer.from(await response.arrayBuffer());
+      expect(bytes.length).toBeGreaterThan(50);
+      if (icon.type === 'image/x-icon') {
+        expect(bytes.readUInt16LE(2)).toBe(1);
+        expect(bytes.readUInt16LE(4)).toBe(3);
+      }
+      if (icon.type === 'image/png') expect(bytes.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+      if (icon.path === BRAND_FAVICON_SVG_URL) expect(bytes.toString('utf8')).toContain('prefers-color-scheme: dark');
+      const etag = response.headers.get('etag');
+      expect(etag).toBeTruthy();
+      expect((await fetch(url, { headers: { 'if-none-match': etag! } })).status).toBe(304);
+    }
+    expect((await fetch(new URL('/brand/unknown.svg', server.url))).status).toBe(404);
+  });
+
   it('serves the canonical brand SVG publicly and supports HTTP cache revalidation', async () => {
     const response = await fetch(new URL(BRAND_LOGO_URL, server.url));
     expect(response.status).toBe(200);
