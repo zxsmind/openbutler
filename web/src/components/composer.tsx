@@ -28,6 +28,7 @@ interface ComposerProps {
   busy: boolean;
   disabled: boolean;
   changing: boolean;
+  modelChanging: boolean;
   empty: boolean;
   onDraft: (text: string) => void;
   onSend: (text: string, images?: DraftImage[], reasoningVariantId?: string) => Promise<void>;
@@ -69,7 +70,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   }, [props.draft]);
   const submit = async () => {
     const text = props.draft.trim();
-    if ((!text && !props.images.length) || sending.current || props.disabled || readingImages) return;
+    if ((!text && !props.images.length) || sending.current || props.disabled || props.modelChanging || readingImages) return;
     sending.current = true;
     setPending(true);
     setError(null);
@@ -287,7 +288,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
               icon="arrow-up"
               label={props.busy ? 'Queue message' : 'Send message'}
               className="send-button"
-              disabled={props.disabled || pending || readingImages || !canSend}
+              disabled={props.disabled || props.modelChanging || pending || readingImages || !canSend}
             />
           ) : props.busy ? (
             // One slot for the action that matters now: send when there is

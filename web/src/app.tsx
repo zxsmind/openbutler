@@ -166,7 +166,24 @@ export function App() {
   const navigate = async (target?: string) => {
     const from = id;
     if (await session.switchSession(target)) {
-      if (target === undefined && from) placeholderRef.current = { key: PENDING_CHAT_ID, previousId: from };
+      if (target === undefined) {
+        // Each New Chat is a fresh in-browser draft, never a persisted chat.
+        setDrafts((previous) => {
+          const next = { ...previous };
+          delete next[PENDING_CHAT_ID];
+          return next;
+        });
+        setDraftImages((previous) => {
+          const next = { ...previous };
+          delete next[PENDING_CHAT_ID];
+          return next;
+        });
+        // Repeated New Chat clicks preserve the original backing chat for handoff.
+        if (from && from !== PENDING_CHAT_ID) placeholderRef.current = { key: PENDING_CHAT_ID, previousId: from };
+      } else if (from === PENDING_CHAT_ID) {
+        // Discard the unsent draft when returning to an existing chat.
+        placeholderRef.current = null;
+      }
       setSearchOpen(false);
       setDetailsOpen(false);
       if (narrow) setSidebarVisible(false);
