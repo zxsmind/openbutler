@@ -108,6 +108,8 @@ export interface AgentEnvironment extends AgentSessionRuntimeView {
   recordUsage?: (input: UsageRecordInput, id: string) => void;
 
   selectModel: (providerId: string, modelId: string) => Promise<void>;
+  /** Activate a saved conversation's model without changing global defaults. */
+  restoreModel?: (providerId: string, modelId: string) => Promise<void>;
   /** Connect deferred tools before capturing the first turn's tool catalogue. */
   prepareForTurn?: () => Promise<void>;
   /** Refresh model credentials/options at request boundaries; reconnect tools only when all shared sessions are idle. */
@@ -439,8 +441,10 @@ export class AgentSessionController implements AgentSessionClient {
       ...this.session,
       title: this.session.title === 'New session' ? sessionTitle(this.session.entries) : this.session.title,
       updatedAt: new Date().toISOString(),
-      providerId: this.runtime.providerId,
-      modelId: this.runtime.modelId,
+      // Saved sessions own their model selection. Runtime state may have been
+      // initialized from the global default before this session was restored.
+      providerId: this.session.providerId,
+      modelId: this.session.modelId,
       conversation: this.conversation,
       ...(this.conversationArchive.length > 0 ? { conversationArchive: this.conversationArchive } : {}),
     };
@@ -586,6 +590,13 @@ export class AgentSessionController implements AgentSessionClient {
     this.runningToolEntry = null;
     this.currentReviewAuthorization = null;
     this.currentReviewMessages = [];
+    this.publish();
+  }
+
+  async restoreSessionModel(): Promise<void> {
+    if (this.runtime.providerId === this.session.providerId && this.runtime.modelId === this.session.modelId) return;
+    if (!this.runtime.restoreModel) throw new Error('This runtime cannot restore the saved session model.');
+    await this.runtime.restoreModel(this.session.providerId, this.session.modelId);
     this.publish();
   }
 
@@ -1464,8 +1475,6 @@ export class AgentSessionController implements AgentSessionClient {
         // The admitted turn's own message preferences govern it; the runtime
         // defaults only matter when an explicit settings change lands mid-run.
         this.activeTurnPreferences = currentTurn.preferences;
-        this.reasoningDefaultAtTurnStart = this.runtime.reasoningDefault;
-        this.showReasoningAtTurnStart = this.runtime.showReasoningDefault;
         const current = currentTurn.message;
         this.resetAutoReviewTurn();
         this.runError = null;
@@ -1473,6 +1482,12 @@ export class AgentSessionController implements AgentSessionClient {
         this.activeEventAssistantText = '';
         steeredTurns = [];
         this.activeTurnProgress = current.onProgress;
+        // Private and persistent sessions can share a runtime. Rebind the
+        // selected model at the turn boundary, never silently use another
+        // session's most recently activated model.
+        await this.restoreSessionModel();
+        this.reasoningDefaultAtTurnStart = this.runtime.reasoningDefault;
+        this.showReasoningAtTurnStart = this.runtime.showReasoningDefault;
         if (current.workspaceRoot) {
           if (this.runtime.selectWorkspaceRoot) await this.runtime.selectWorkspaceRoot(current.workspaceRoot);
           else if (current.workspaceRoot !== this.runtime.workspaceRoot)

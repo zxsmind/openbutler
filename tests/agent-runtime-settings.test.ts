@@ -91,6 +91,33 @@ afterEach(async () => {
 });
 
 describe('live runtime settings', () => {
+  it('restores an old session model without rewriting the global default or waiting for a stale catalog refresh', async () => {
+    const catalog = await import('../src/provider/catalog.js');
+    catalog.writeCatalogSnapshot(
+      {
+        vercel: {
+          npm: '@ai-sdk/gateway',
+          models: {
+            mimo: { limit: { context: 100_000 } },
+            minimax: { limit: { context: 100_000 } },
+          },
+        },
+      },
+      new Date(0).toISOString(),
+    );
+    const savedFetch = globalThis.fetch;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise(() => {}));
+    globalThis.fetch = fetcher;
+    try {
+      await runtime.restoreModel!('vercel', 'minimax');
+      expect(runtime.modelId).toBe('minimax');
+      expect(settings.loadSettings().defaultModel).toBe('mimo');
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
   it('borrows one daemon MCP manager across chat runtimes and refreshes each catalogue by revision', async () => {
     let revision = 0;
     const shared: import('../src/tools/mcp.js').McpConnectionManager = {

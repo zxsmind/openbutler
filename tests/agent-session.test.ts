@@ -528,6 +528,35 @@ describe('owner replies and safe steering', () => {
   });
 });
 
+describe('restored session model identity', () => {
+  it('does not overwrite the saved selection while a default-model runtime is active', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const { loadSavedSession } = await import('../src/session-store.js');
+    const runtime = runtimeFor(
+      new MockLanguageModelV3({
+        doGenerate: async () => titleResponse(),
+        doStream: async () => fixtureText('Original answer'),
+      }),
+    );
+    runtime.restoreModel = vi.fn(async (providerId, modelId) => {
+      runtime.providerId = providerId;
+      runtime.modelId = modelId;
+    });
+    session = new AgentSessionController(runtime);
+    await session.sendMessage({ text: 'Original task', images: [] }, preferences);
+    session.flushSave();
+    const id = session.getSnapshot().session.id;
+    runtime.providerId = 'different';
+    runtime.modelId = 'default-model';
+    session.loadSession(id);
+    session.flushSave();
+    expect(loadSavedSession(id, runtime.workspaceRoot)?.modelId).toBe('fixture');
+    await session.restoreSessionModel();
+    expect(runtime.modelId).toBe('fixture');
+    expect(runtime.restoreModel).toHaveBeenCalledWith('fixture', 'fixture');
+  });
+});
+
 describe('provider retry reporting', () => {
   it('keeps key selection per conversation across new sessions and reloads on a shared runtime', async () => {
     const { createRotatingModel } = await import('../src/provider/retry.js');

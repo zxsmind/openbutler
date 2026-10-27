@@ -1033,9 +1033,12 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     key: string,
     chat?: { saved: ReturnType<typeof loadSavedSession>; projectId?: string | null },
   ): Promise<WorkspaceHost> {
+    const restartSessionId = chat ? null : ledger.getState(RESTART_SESSION_KEY_PREFIX + key);
+    const restartSaved = restartSessionId ? loadSavedSession(restartSessionId, root) : null;
+    const selected = chat?.saved ?? restartSaved;
     const runtime = await createSessionRuntime(
       chat?.saved?.project?.workspaceRoot ?? (chat && !chat.saved ? resolveProjectSelection(chat.projectId ?? null).workspaceRoot : root),
-      chat?.saved ? { providerId: chat.saved.providerId, modelId: chat.saved.modelId } : undefined,
+      selected ? { providerId: selected.providerId, modelId: selected.modelId } : undefined,
     );
     if (closing) {
       await runtime.close();
@@ -1049,9 +1052,9 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     try {
       if (chat?.saved) controller.openSession(chat.saved);
       else if (chat) controller.selectProject(chat.projectId ?? null, controller.getSnapshot().session.id);
-      const restartSessionId = chat ? null : ledger.getState(RESTART_SESSION_KEY_PREFIX + key);
       if (restartSessionId) {
         controller.loadSession(restartSessionId);
+        await controller.restoreSessionModel();
         ledger.setState(RESTART_SESSION_KEY_PREFIX + key, '');
       }
     } catch (error) {
@@ -1118,7 +1121,9 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     if (closing) throw new Error('Ranite host is shutting down.');
 
     const loading = (async () => {
-      const runtime = await createSessionRuntime(scopeRoot);
+      const savedId = ledger.getState(CUSTODIAN_RESTART_SESSION_KEY) || ledger.getState(CUSTODIAN_CURRENT_SESSION_KEY);
+      const saved = savedId ? loadSavedSession(savedId, null) : null;
+      const runtime = await createSessionRuntime(scopeRoot, saved ? { providerId: saved.providerId, modelId: saved.modelId } : undefined);
       if (closing) {
         await runtime.close();
         throw new Error('Ranite host shut down while the custodian runtime was loading.');
@@ -1155,6 +1160,9 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           options.log(`Could not restore the machine custodian session: ${String(error)}`);
         }
       }
+      // A legacy-scoped restored session may not have been known at runtime
+      // construction time. Reconcile before exposing this controller to clients.
+      await controller.restoreSessionModel();
       if (restoreSessionId) {
         ledger.setState(CUSTODIAN_RESTART_SESSION_KEY, '');
         if (legacyRestartKey) ledger.setState(legacyRestartKey, '');
@@ -3396,6 +3404,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
             return;
           }
           const session = controller.loadSession(sessionId);
+          if (session) await controller.restoreSessionModel();
           pumpEvents();
           writeResponse(socket, request.id, true, session ? stripConversation(session) : null);
           return;

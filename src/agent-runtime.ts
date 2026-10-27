@@ -377,6 +377,15 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         workspaceSwitch = run.catch(() => {});
         await run;
       },
+      restoreModel: async (nextProviderId, nextModelId) => {
+        const restore = settingsReload.then(async () => {
+          if (runtimeClosed) throw new Error('The runtime is closed.');
+          if (runtime.providerId === nextProviderId && runtime.modelId === nextModelId) return;
+          await applyModel(loadSettings(), nextProviderId, nextModelId);
+        });
+        settingsReload = restore.catch(() => {});
+        await restore;
+      },
       selectModel: async (nextProviderId, nextModelId) => {
         const select = settingsReload.then(async () => {
           if (runtimeClosed) throw new Error('The runtime is closed.');
