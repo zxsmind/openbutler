@@ -2,7 +2,7 @@ import type { InboxRequest } from './inbox.js';
 import type { ParentMessageInput } from './worker-records.js';
 import { realpathSync, statSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
-import { getCatalogIndex, getCatalogRevision } from './provider/catalog.js';
+import { getCatalogIndex, getCatalogRevision, isCatalogLoaded } from './provider/catalog.js';
 import {
   createLanguageModel,
   defaultModelIsUsable,
@@ -233,10 +233,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     let runtimeClosed = false;
     async function applyModel(nextSettings: SettingsStore, nextProviderId: string, nextModelId: string) {
       const nextProvider = nextSettings.providers[nextProviderId];
-      try {
-        await getCatalogIndex();
-      } catch (error) {
-        if (!nextProvider?.npm) throw error;
+      // Model activation uses the last committed local catalog. An expired TTL
+      // must not make a session switch wait for the network refresh timeout.
+      if (!isCatalogLoaded()) {
+        try {
+          await getCatalogIndex();
+        } catch (error) {
+          if (!nextProvider?.npm) throw error;
+        }
       }
       if (!modelIsUsable(nextSettings, nextProviderId, nextModelId))
         throw new Error(`Provider ${nextProviderId} is disabled or not configured.`);
