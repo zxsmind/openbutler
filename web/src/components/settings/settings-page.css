@@ -1,110 +1,19 @@
-/* Settings has its own navigation layout. Only global design tokens and the
- * basic Button/Icon primitives are shared with the conversation UI. */
+/* Settings reuses the conversation sidebar's .sidebar-shell, .sidebar-heading,
+   .sidebar-scroll, .section-label, .session-list, .session-item and footer.
+   Only Settings-specific layout and responsive behavior are defined here. */
 .settings-surface {
   display: grid;
   grid-column: 1 / -1;
   grid-row: 1;
   grid-template-columns: var(--ui-sidebar-width) minmax(0, 1fr);
   min-height: 0;
-  overflow: hidden;
   position: relative;
   z-index: 30;
+  overflow: hidden;
   border-radius: var(--ui-panel-radius);
 }
 
-.settings-nav {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  padding: 12px 8px 10px;
-  border: 1px solid #e6e9ef;
-  border-right: 1px solid #e0e3e9;
-  border-radius: 14px 0 0 14px;
-  background: linear-gradient(180deg, #f9fafc 60%, #f8fcf4);
-}
-
-.settings-nav__scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-
-.settings-nav__group + .settings-nav__group {
-  margin-top: 22px;
-}
-
-.settings-nav__group-title {
-  margin: 8px 8px 10px;
-  color: #8d919a;
-  font-size: var(--ui-control-size);
-  font-weight: 500;
-}
-
-.settings-nav__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.settings-nav__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 31px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: var(--ui-control-radius);
-  background: transparent;
-  color: #555b65;
-  text-align: left;
-  font-size: var(--ui-body-size);
-  line-height: 1.5;
-  cursor: pointer;
-  transition: background-color 140ms ease;
-}
-
-.settings-nav__item:hover {
-  background: var(--ui-hover-bg);
-}
-
-.settings-nav__item.is-active {
-  background: #ecefeb;
-  color: #303640;
-}
-
-.settings-nav__item .icon {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 15px;
-}
-
-.settings-nav__item-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.settings-nav__footer {
-  flex: none;
-  padding: 8px 8px 10px;
-  border-top: 1px solid #e1e3e7;
-}
-
-.settings-nav .settings-nav__return {
-  width: 100%;
-  justify-content: flex-start;
-}
-
 .settings-content {
-  position: relative;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
@@ -135,35 +44,31 @@
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .settings-nav {
+  .settings-nav.sidebar-shell {
     flex-direction: row;
     align-items: center;
     gap: 8px;
     padding: 8px;
-    border-right: 1px solid #e6e9ef;
     border-bottom: 0;
     border-radius: 14px 14px 0 0;
   }
 
-  .settings-nav__group-title {
-    display: none;
-  }
-
-  /* Keep the chat-style search icon reachable in the compact navigation. */
   .settings-nav .sidebar-heading {
     flex: none;
-    min-height: 32px;
     width: 32px;
-    padding: 0;
+    min-height: 32px;
     margin: 0;
+    padding: 0;
   }
 
-  .settings-nav .sidebar-heading .sidebar-brand,
-  .settings-nav .sidebar-heading .spacer {
+  .settings-nav .sidebar-brand,
+  .settings-nav .spacer,
+  .settings-nav .section-label {
     display: none;
   }
 
-  .settings-nav__scroll {
+  .settings-nav .settings-nav__scroll {
+    display: flex;
     min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
@@ -171,39 +76,38 @@
   }
 
   .settings-nav__group {
-    display: inline-flex;
-    vertical-align: middle;
+    flex: none;
   }
 
   .settings-nav__group + .settings-nav__group {
-    margin-top: 0;
     margin-left: 6px;
   }
 
-  .settings-nav__list {
+  .settings-nav .session-list {
     flex-direction: row;
     gap: 3px;
   }
 
-  .settings-nav__item {
+  .settings-nav .session-item {
     width: auto;
     white-space: nowrap;
   }
 
-  .settings-nav__footer {
+  .settings-nav .sidebar-footer {
+    flex: none;
     order: -1;
     padding: 0;
     border: 0;
   }
 
-  .settings-nav .settings-nav__return {
+  .settings-nav .sidebar-footer .sidebar-settings {
     width: 32px;
     min-width: 32px;
     padding: 6px;
     justify-content: center;
   }
 
-  .settings-nav__return-label {
+  .settings-nav .sidebar-settings span {
     display: none;
   }
 
@@ -214,11 +118,5 @@
 
   .settings-content__inner {
     padding: 28px 16px 58px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-nav__item {
-    transition: none;
   }
 }

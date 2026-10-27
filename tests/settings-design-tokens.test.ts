@@ -2,21 +2,82 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const webRoot = join(process.cwd(), 'web', 'src');
-const settingsRoot = join(webRoot, 'components', 'settings');
-const appStyles = readFileSync(join(webRoot, 'styles.css'), 'utf8');
+const root = join(process.cwd(), 'web', 'src');
+const read = (path: string) => readFileSync(join(root, path), 'utf8');
 
-function stylesUnder(dir: string): string[] {
+function settingsCssFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const filename = join(dir, entry.name);
-    return entry.isDirectory() ? stylesUnder(filename) : entry.name.endsWith('.css') ? [filename] : [];
+    const path = join(dir, entry.name);
+    return entry.isDirectory() ? settingsCssFiles(path) : entry.name.endsWith('.css') ? [path] : [];
   });
 }
 
-describe('Settings design isolation', () => {
-  it('uses global tokens without modifying conversation sidebar selectors', () => {
+describe('shared sidebar design system', () => {
+  it('uses the same width token for chat and Settings', () => {
+    const globalCss = read('styles.css');
+    const settingsCss = read('components/settings/settings-page.css');
+    expect(globalCss).toMatch(/--ui-sidebar-width:\s*252px;/);
+    expect(globalCss).toMatch(/--sidebar-width:\s*var\(--ui-sidebar-width\)/);
+    expect(globalCss).toMatch(/\.sidebar\s*\{[^}]*width:\s*var\(--ui-sidebar-width\)/s);
+    expect(settingsCss).toContain('grid-template-columns: var(--ui-sidebar-width)');
+    expect(read('app.tsx')).not.toContain('AppRail');
+  });
+
+  it('keeps the visual primitives in one imported stylesheet', () => {
+    const chrome = read('components/sidebar-chrome.tsx');
+    const shared = read('components/sidebar.css');
+    const globalCss = read('styles.css');
+    const settingsCss = read('components/settings/settings-page.css');
+    const chat = read('components/sidebar.tsx');
+    const settings = read('components/settings/settings-page.tsx');
+
+    expect(chrome).toContain("import './sidebar.css'");
+    expect(chat).toContain("from './sidebar-chrome.js'");
+    expect(settings).toContain("from '../sidebar-chrome.js'");
+    expect(chat).toContain('className="sidebar sidebar-shell"');
+    expect(settings).toContain('className="settings-nav sidebar-shell"');
+
+    const selectors = [
+      'sidebar-shell',
+      'sidebar-heading',
+      'sidebar-brand',
+      'sidebar-footer',
+      'sidebar-scroll',
+      'section-label',
+      'recent-label',
+      'session-list',
+      'session-item',
+      'session-name',
+    ];
+    for (const className of selectors) {
+      const rule = new RegExp(`^\\.${className}\\s*\\{`, 'm');
+      expect(shared, className).toMatch(rule);
+      expect(globalCss, className).not.toMatch(rule);
+      expect(settingsCss, className).not.toMatch(rule);
+    }
+    expect(shared).toMatch(/\.sidebar-footer \.sidebar-settings\s*\{[^}]*justify-content:\s*flex-start;/s);
+    expect(shared).toContain('.session-item > .icon {');
+    expect(settingsCss).not.toContain('.settings-nav .session-item .icon');
+  });
+
+  it('reuses sidebar structure and limits Settings CSS to its own layout', () => {
+    const chat = read('components/sidebar.tsx');
+    const settings = read('components/settings/settings-page.tsx');
+    const settingsCss = read('components/settings/settings-page.css');
+    for (const cls of ['sidebar-scroll', 'section-label', 'session-list', 'session-item', 'session-name']) {
+      expect(chat).toContain(cls);
+      expect(settings).toContain(cls);
+    }
+    expect(chat).toContain('<SidebarHeader');
+    expect(settings).toContain('<SidebarHeader');
+    expect(chat).toContain('<SidebarFooter');
+    expect(settings).toContain('<SidebarFooter');
+    expect(settingsCss).toContain('padding: 63px 20px 90px;');
+  });
+
+  it('uses shared design tokens for Settings typography', () => {
+    const globalCss = read('styles.css');
     for (const token of [
-      'font-body',
       'ui-caption-size',
       'ui-small-size',
       'ui-control-size',
@@ -27,47 +88,14 @@ describe('Settings design isolation', () => {
       'ui-sidebar-width',
       'ui-surface',
       'ui-control-border',
-      'text',
-      'muted',
-      'line',
-      'blue',
     ]) {
-      expect(appStyles, token).toMatch(new RegExp(`^\\s*--${token}:\\s*.+;`, 'm'));
+      expect(globalCss).toMatch(new RegExp(`^\\s*--${token}:\\s*.+;`, 'm'));
     }
-    expect(appStyles).toContain('.sidebar {');
-    expect(appStyles).not.toContain('.sidebar-panel {');
-    expect(appStyles).not.toContain('.sidebar-quick-search {');
-  });
-
-  it('owns navigation styles and controls without changing chat components', () => {
-    const view = readFileSync(join(settingsRoot, 'settings-page.tsx'), 'utf8');
-    const css = readFileSync(join(settingsRoot, 'settings-page.css'), 'utf8');
-    const chrome = readFileSync(join(settingsRoot, 'settings-chrome.tsx'), 'utf8');
-    const app = readFileSync(join(webRoot, 'app.tsx'), 'utf8');
-    for (const className of [
-      'settings-nav__scroll',
-      'settings-nav__group-title',
-      'settings-nav__item',
-      'settings-nav__footer',
-      'settings-nav__return',
-    ]) {
-      expect(css, className).toContain(`.${className}`);
-    }
-    expect(view).toContain('<SettingsHeader');
-    expect(view).toContain('<SettingsFooter');
-    expect(chrome).toContain('Back to chat');
-    expect(view).not.toMatch(/\b(?:SidebarHeader|SidebarPrimaryAction|SidebarSettingsFooter)\b/);
-    expect(css).not.toMatch(/^\.(?:sidebar|session-item|section-label|sidebar-panel)\b/m);
-    expect(css).toContain('padding: 63px 20px 90px;');
-    expect(app).not.toContain('AppRail');
-    expect(app).not.toContain('DesktopChrome');
-  });
-
-  it('keeps Settings typography derived from tokens instead of per-page values', () => {
-    for (const filename of stylesUnder(settingsRoot)) {
-      const css = readFileSync(filename, 'utf8');
-      expect(css, filename).not.toMatch(/^\s*--settings-[\w-]+\s*:/m);
-      expect(css, filename).not.toMatch(/font-size:\s*[\d.]+(?:px|rem);/);
+    const dir = join(root, 'components', 'settings');
+    for (const file of settingsCssFiles(dir)) {
+      const css = readFileSync(file, 'utf8');
+      expect(css, file).not.toMatch(/^\s*--settings-[\w-]+\s*:/m);
+      expect(css, file).not.toMatch(/font-size:\s*[\d.]+(?:px|rem);/);
     }
   });
 });

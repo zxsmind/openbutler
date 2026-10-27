@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../ui.js';
-import { SettingsHeader, SettingsFooter } from './settings-chrome.js';
+import { SidebarHeader, SidebarFooter } from '../sidebar-chrome.js';
 import { Feedback } from '../feedback.js';
 import './settings-page.css';
 
@@ -71,26 +71,26 @@ export function SettingsView({
 
   return (
     <div className="settings-surface" role="region" aria-label="Settings">
-      <nav className="settings-nav" aria-label="Settings sections">
-        <SettingsHeader onSearch={() => setSearchOpen(true)} />
-        <div className="settings-nav__scroll">
-          {GROUPS.map((group) => {
+      <nav className="settings-nav sidebar-shell" aria-label="Settings sections">
+        <SidebarHeader onSearch={() => setSearchOpen(true)} searchLabel="Search settings" />
+        <div className="sidebar-scroll settings-nav__scroll">
+          {GROUPS.map((group, index) => {
             const grouped = sections.filter((section) => section.group === group);
             if (!grouped.length) return null;
             return (
               <div className="settings-nav__group" key={group}>
-                <h3 className="settings-nav__group-title">{group}</h3>
-                <ul className="settings-nav__list">
+                <h3 className={`section-label${index > 0 ? ' recent-label' : ''}`}>{group}</h3>
+                <ul className="session-list">
                   {grouped.map((section) => (
                     <li key={section.id}>
                       <button
                         type="button"
-                        className={`settings-nav__item${section.id === open?.id ? ' is-active' : ''}`}
+                        className={`session-item${section.id === open?.id ? ' current' : ''}`}
                         aria-current={section.id === open?.id ? 'page' : undefined}
                         onClick={() => onSelect(section.id)}
                       >
                         <Icon name={section.icon} size={15} />
-                        <span className="settings-nav__item-label">{section.label}</span>
+                        <span className="session-name">{section.label}</span>
                       </button>
                     </li>
                   ))}
@@ -99,7 +99,7 @@ export function SettingsView({
             );
           })}
         </div>
-        <SettingsFooter onReturn={onClose} />
+        <SidebarFooter icon="arrow-left" label="Back to chat" onClick={onClose} />
       </nav>
 
       <main className="settings-content" ref={content} tabIndex={-1} aria-label={open?.label}>

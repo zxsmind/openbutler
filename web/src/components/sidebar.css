@@ -1,0 +1,125 @@
+/* Shared conversation and Settings sidebar primitives. One source of geometry, typography and state. */
+.sidebar-shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 11px 10px;
+  border: 1px solid #e6e9ef;
+  border-right: 1px solid #e0e3e9;
+  border-radius: 14px 0 0 14px;
+  background: linear-gradient(180deg, #f9fafc 60%, #f8fcf4);
+}
+
+.sidebar-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 7px;
+  margin-bottom: 12px;
+}
+
+.sidebar-footer {
+  padding: 8px 8px 10px;
+  border-top: 1px solid #e1e3e7;
+}
+
+.sidebar-footer .sidebar-settings {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.section-label {
+  margin: 8px 8px 10px;
+  color: #8d919a;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.recent-label {
+  margin-top: 30px;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 31px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #555b65;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background-color 140ms ease;
+}
+
+.session-item:hover:not(:disabled) {
+  background: #eff1f5;
+}
+
+.session-item.current {
+  background: #ecefeb;
+  color: #303640;
+}
+
+.session-item:disabled {
+  color: #8a8f98;
+}
+
+.session-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-heading .brand-symbol {
+  width: 20px;
+  height: 20px;
+}
+
+.sidebar-brand {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+}
+
+.sidebar-heading .icon-button {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+}
+
+.sidebar-heading .icon-button .icon {
+  width: 15px;
+  height: 15px;
+  flex-basis: 15px;
+}
+
+.session-item > .icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}

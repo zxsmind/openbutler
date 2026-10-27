@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Project, SessionInfo } from '../types.js';
 import { Button, Icon, IconButton } from './ui.js';
 import { Feedback } from './feedback.js';
+import { SidebarHeader, SidebarFooter } from './sidebar-chrome.js';
 interface SidebarProps {
   inert?: boolean;
   sessions: SessionInfo[];
@@ -48,13 +49,8 @@ export function Sidebar(props: SidebarProps) {
     </button>
   );
   return (
-    <aside className="sidebar" aria-label="Conversations" inert={props.inert}>
-      <div className="sidebar-heading">
-        <span className="sidebar-brand">Ranite</span>
-        <span className="spacer" />
-        <IconButton icon="search" label="Search chats" onClick={props.onSearch} />
-        <IconButton icon="x" label="Close sidebar" className="mobile-only" onClick={props.onClose} />
-      </div>
+    <aside className="sidebar sidebar-shell" aria-label="Conversations" inert={props.inert}>
+      <SidebarHeader onSearch={props.onSearch} searchLabel="Search chats" onClose={props.onClose} />
       <Button className="new-chat" icon="square-pen" onClick={props.onNew} disabled={props.disabled} title={props.disabledReason}>
         New chat
       </Button>
@@ -113,12 +109,8 @@ export function Sidebar(props: SidebarProps) {
           {list.map((session) => chat(session))}
         </nav>
       </div>
-      <div className="sidebar-footer">
-        {/* Settings stays reachable while a run is going; the page is read-only then. */}
-        <Button className="sidebar-settings" icon="settings" onClick={props.onSettings}>
-          Settings
-        </Button>
-      </div>
+      {/* Settings stays reachable while a run is going; the page is read-only then. */}
+      <SidebarFooter icon="settings" label="Settings" onClick={props.onSettings} />
     </aside>
   );
 }
