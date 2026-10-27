@@ -278,6 +278,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       runtime.supportsVision = modelSupportsVision(nextProviderId, nextModelId, next.resolved);
       runtime.supportsImageToolResult = supportsImageToolResult(next.resolved, nextModelId);
       runtime.reasoningVariants = nextVariants;
+      runtime.reasoningTitles = reasoningSummaryTitles(next.resolved);
       runtime.reasoningMetadataSource = nextCatalog.inferred ? nextCatalog.sourceProviderId : null;
       runtime.reasoningSupport = reasoningSupportStatus(next.resolved, nextCatalog.model);
       runtime.reasoningDefault = resolveReasoningVariant(nextVariants, nextSettings.reasoning ?? 'default').id;
@@ -306,6 +307,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         runtime.registry = nextRegistry;
       },
       reasoningVariants,
+      reasoningTitles: reasoningSummaryTitles(resolved.resolved),
       reasoningMetadataSource: activeCatalog.inferred ? activeCatalog.sourceProviderId : null,
       reasoningSupport: reasoningSupportStatus(resolved.resolved, reasoningCatalog.model),
       reasoningDefault: resolveReasoningVariant(reasoningVariants, settings.reasoning ?? 'default').id,
