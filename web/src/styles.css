@@ -193,14 +193,19 @@ select:focus-visible,
 }
 .brand-symbol {
   display: block;
-  color: #a4a8b1;
   flex: none;
+  width: 28px;
+  height: 28px;
+  color: #292b30;
+  background: currentColor;
+  -webkit-mask: url('/brand/logo.svg') center / contain no-repeat;
+  mask: url('/brand/logo.svg') center / contain no-repeat;
 }
 .brand-symbol.large {
   width: 48px;
   height: 48px;
   margin: 0 auto 26px;
-  color: #b9bcc2;
+  color: #292b30;
 }
 .connection-dot {
   display: inline-block;

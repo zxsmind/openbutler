@@ -18,7 +18,7 @@
     "ranite": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-builtin-skills.mjs && node scripts/copy-terminal-host.mjs",
+    "build": "tsc && node scripts/copy-brand-assets.mjs && node scripts/copy-builtin-skills.mjs && node scripts/copy-terminal-host.mjs",
     "prepare": "npm run build",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm --prefix web run typecheck && vitest run",
     "dev": "tsx src/cli.ts",

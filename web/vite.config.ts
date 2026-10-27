@@ -27,6 +27,7 @@ export default defineConfig({
     fs: { allow: ['..'] },
     proxy: {
       '/api': { target: 'http://127.0.0.1:45278', changeOrigin: false, ws: true },
+      '/brand': { target: 'http://127.0.0.1:45278', changeOrigin: false },
     },
   },
   build: {

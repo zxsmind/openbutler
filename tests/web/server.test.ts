@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from '../../src/web/server.js';
+import { BRAND_LOGO_URL, readBrandLogo } from '../../src/branding.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../../src/agent-session.js';
 import type { SessionEntry } from '../../src/session-store.js';
 import { connectDaemonSession } from '../../src/daemon-client.js';
@@ -162,6 +163,22 @@ afterEach(async () => {
 });
 
 describe('browser session controls', () => {
+  it('serves the canonical brand SVG publicly and supports HTTP cache revalidation', async () => {
+    const response = await fetch(new URL(BRAND_LOGO_URL, server.url));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^image\/svg\+xml/);
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await response.text()).toBe((await readBrandLogo()).toString('utf8'));
+    const etag = response.headers.get('etag');
+    expect(etag).toMatch(/^"[a-f0-9]{16}"$/);
+    const cached = await fetch(new URL(BRAND_LOGO_URL, server.url), { headers: { 'if-none-match': etag! } });
+    expect(cached.status).toBe(304);
+    expect(await cached.text()).toBe('');
+    const head = await fetch(new URL(BRAND_LOGO_URL, server.url), { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe('');
+  });
+
   it('notifies every open browser when model settings or the catalog change on disk', async () => {
     const streams = await Promise.all([
       fetch(`${server.url}/api/events`, { headers: { cookie }, signal: AbortSignal.timeout(5000) }),
