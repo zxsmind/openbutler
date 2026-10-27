@@ -28,7 +28,6 @@ import { createLogger, fileSink } from '../logging.js';
 import { getRaniteVersion } from '../version.js';
 import { forgetRememberedPermission, listRememberedPermissions } from '../tool-permissions.js';
 import { bucketUsage, bucketUsageByHour, groupHoursByDay, summarizeUsage } from '../usage/report.js';
-import { buildActionsReport } from '../usage/actions-report.js';
 import { readMemorySnapshot } from '../memory-view.js';
 import { readLogRecords } from '../cli/logs.js';
 import { createProject, listProjects, projectFolder, ProjectInputError, resolveProjectSelection } from '../projects/store.js';
@@ -651,18 +650,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         .filter((record) => order[record.level] <= order[level])
         .filter((record) => !event || record.event.includes(event));
       return sendJson(res, 200, { records: records.slice(-Math.min(5000, Math.max(1, Math.floor(lines)))) });
-    }
-
-    if (url.pathname === '/api/usage-actions' && req.method === 'GET') {
-      const days = Number(url.searchParams.get('days') ?? 30);
-      const window = Number.isFinite(days) ? Math.min(3650, Math.max(1, Math.floor(days))) : 30;
-      const since = new Date(Date.now() - window * 24 * 60 * 60 * 1000).toISOString();
-      const ledger = new ActivityLedger(undefined, { readOnly: true });
-      try {
-        return sendJson(res, 200, buildActionsReport(ledger.actionReportRows(since), since));
-      } finally {
-        ledger.close();
-      }
     }
 
     if (url.pathname === '/api/usage' && req.method === 'GET') {

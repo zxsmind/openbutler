@@ -1,5 +1,4 @@
 import type {
-  ActionsReport,
   AboutInfo,
   ApprovalsInfo,
   LogRecord,
@@ -196,7 +195,6 @@ export function subscribe(
   };
 }
 export const fetchUsage = (days: number) => request<UsageReport>(`/api/usage?days=${days}`);
-export const fetchUsageActions = (days: number) => request<ActionsReport>(`/api/usage-actions?days=${days}`);
 export const fetchSnapshot = (sessionId?: string) =>
   request<SessionPayload>(`/api/snapshot${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`);
 /**

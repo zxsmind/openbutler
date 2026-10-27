@@ -3,8 +3,8 @@
  * only draws them: a summary, a heatmap of the last weeks, and the daily table.
  */
 import { useEffect, useState } from 'react';
-import { fetchUsage, fetchUsageActions, fetchUsageHours } from '../../../api.js';
-import type { ActionsReport, UsageHoursReport, UsageReport } from '../../../types.js';
+import { fetchUsage, fetchUsageHours } from '../../../api.js';
+import type { UsageHoursReport, UsageReport } from '../../../types.js';
 import {
   SettingsDisclosure,
   SettingsFigures,
@@ -49,8 +49,6 @@ export function UsageSettings() {
   const [range, setRange] = useState<number>(365);
   const [report, setReport] = useState<UsageReport | null>(null);
   const [hours, setHours] = useState<UsageHoursReport | null>(null);
-  const [actions, setActions] = useState<ActionsReport | null>(null);
-  const [actionsError, setActionsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
@@ -90,23 +88,6 @@ export function UsageSettings() {
     };
   }, [reload]);
 
-  // Tool activity follows the same window as the model report.
-  useEffect(() => {
-    let cancelled = false;
-    setActions(null);
-    setActionsError(null);
-    fetchUsageActions(range)
-      .then((value) => {
-        if (!cancelled) setActions(value);
-      })
-      .catch((problem: unknown) => {
-        if (!cancelled) setActionsError(problem instanceof Error ? problem.message : String(problem));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [range, reload]);
-
   return (
     <SettingsPage title="Usage">
       <SettingsSection title="Overview" action={<SettingsRange label="Usage period" options={RANGES} value={range} onChange={setRange} />}>
@@ -126,99 +107,6 @@ export function UsageSettings() {
               { value: money(report.summary.costUsd), label: 'Recorded cost' },
             ]}
           />
-        ) : null}
-      </SettingsSection>
-
-      <SettingsSection title="Tool activity" description="Every recorded call, per tool, per MCP server and per skill">
-        {actionsError ? <SettingsStatus tone="error">{actionsError}</SettingsStatus> : null}
-        {actions === null && !actionsError ? <SettingsStatus>Reading recorded tool calls…</SettingsStatus> : null}
-        {actions && actions.windowCalls === 0 ? <SettingsStatus>No tool calls recorded in this period.</SettingsStatus> : null}
-        {actions && actions.windowCalls > 0 ? (
-          <>
-            <SettingsFigures
-              items={[
-                { value: actions.windowCalls.toLocaleString('en'), label: 'Tool calls' },
-                { value: actions.windowFailed.toLocaleString('en'), label: 'Failed' },
-                { value: actions.mcp.length.toLocaleString('en'), label: 'MCP servers' },
-                { value: actions.skills.length.toLocaleString('en'), label: 'Skills used' },
-              ]}
-            />
-            <SettingsDisclosure title="Tools" description="Calls per tool, failures kept visible">
-              <div className="settings-table-scroll" tabIndex={0} role="region" aria-label="Tool calls">
-                <table className="settings-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Tool</th>
-                      <th scope="col">Calls</th>
-                      <th scope="col">Failed</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {actions.tools.map((tool) => (
-                      <tr key={`${tool.provider}:${tool.tool}`}>
-                        <td>
-                          {tool.provider}:{tool.tool}
-                        </td>
-                        <td>{tool.calls.toLocaleString('en')}</td>
-                        <td>{tool.failed ? tool.failed.toLocaleString('en') : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </SettingsDisclosure>
-            {actions.mcp.length ? (
-              <SettingsDisclosure title="MCP servers" description="Calls routed through each connected server">
-                <div className="settings-table-scroll" tabIndex={0} role="region" aria-label="MCP server calls">
-                  <table className="settings-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Server</th>
-                        <th scope="col">Calls</th>
-                        <th scope="col">Top tools</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {actions.mcp.map((server) => (
-                        <tr key={server.server}>
-                          <td>{server.server}</td>
-                          <td>{server.calls.toLocaleString('en')}</td>
-                          <td>
-                            {server.tools
-                              .slice(0, 3)
-                              .map((tool) => tool.tool)
-                              .join(', ')}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </SettingsDisclosure>
-            ) : null}
-            {actions.skills.length ? (
-              <SettingsDisclosure title="Skills" description="File touches under skills directories">
-                <div className="settings-table-scroll" tabIndex={0} role="region" aria-label="Skill usage">
-                  <table className="settings-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Skill</th>
-                        <th scope="col">Uses</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {actions.skills.map((skill) => (
-                        <tr key={skill.skill}>
-                          <td>{skill.skill}</td>
-                          <td>{skill.uses.toLocaleString('en')}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </SettingsDisclosure>
-            ) : null}
-          </>
         ) : null}
       </SettingsSection>
 

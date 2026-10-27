@@ -268,5 +268,3 @@ export interface ApprovalsInfo {
   /** Active models the reviewer may be set to. */
   models: Array<{ providerId: string; modelId: string }>;
 }
-
-export type { ActionsReport, McpStat, SkillStat, ToolStat } from '../../src/usage/actions-report.js';
