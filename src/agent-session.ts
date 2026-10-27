@@ -584,7 +584,9 @@ export class AgentSessionController implements AgentSessionClient {
     if (this.sessionHasUserMessage || this.session.project?.locked || this.queuedMessages.some((turn) => !turn.automatic))
       throw new ProjectInputError("This chat's project was fixed by its first message. Start a new chat.");
     if (this.busy) throw new ProjectInputError('Wait for the running task to finish before choosing a project.');
-    this.session = saveSession({ ...this.session, project: sessionProject(projectId) }, { allowEmpty: true });
+    // No file write: a chat whose first message has not landed is not a store
+    // entry. The binding stays in memory and is persisted with that message.
+    this.session = saveSession({ ...this.session, project: sessionProject(projectId) });
     this.publish(false);
   }
 
@@ -599,7 +601,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.runtime.contextWindowTokens ?? undefined,
       this.sessionWorkspaceScope ?? undefined,
     );
-    if (project) this.session = saveSession({ ...this.session, project }, { allowEmpty: true });
+    if (project) this.session = saveSession({ ...this.session, project });
     this.conversation = [];
     this.conversationArchive = [];
     this.frozenSystem = null;
@@ -1423,7 +1425,9 @@ export class AgentSessionController implements AgentSessionClient {
         ...(binding.id && binding.name ? { projectContext: { id: binding.id, name: binding.name, folders } } : {}),
       };
       if (!binding.locked) {
-        this.session = saveSession({ ...this.session, project: { ...binding, locked: true } }, { allowEmpty: true });
+        // Locked in memory until the first entry lands; an entry-less chat is
+        // not a store file, so the message's own save persists the lock.
+        this.session = saveSession({ ...this.session, project: { ...binding, locked: true } });
         this.publish(false);
       }
     }

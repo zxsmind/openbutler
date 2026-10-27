@@ -135,20 +135,15 @@ export class WebSessions {
       ]),
     );
     for (const [id, connection] of this.connections) {
+      const previous = saved.get(id);
+      // The store is the only catalog: a chat it has not recorded yet (no
+      // message has landed) is not a list entry, so a live connection only
+      // refreshes what is already listed, never invents a row.
+      if (previous === undefined) continue;
       const snapshot = connection.client.getSnapshot();
       if (snapshot.session.id !== id) continue;
-      const previous = saved.get(id);
       saved.set(id, {
-        ...(previous ?? {
-          id,
-          preview: '',
-          // A chat the store has not seen yet is ordered by when it was born,
-          // never by connection access: reloads must not reshuffle the list.
-          updatedAt: snapshot.session.createdAt,
-          lastActivityAt: snapshot.session.createdAt,
-          providerId: connection.client.runtime.providerId,
-          modelId: connection.client.runtime.modelId,
-        }),
+        ...previous,
         title: snapshot.session.title,
         running: snapshot.busy,
         ...(snapshot.session.project ? { project: snapshot.session.project } : {}),

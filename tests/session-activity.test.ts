@@ -9,8 +9,8 @@ import { ToolRegistry } from '../src/tools/registry.js';
 
 type Store = typeof import('../src/session-store.js');
 
-// A new chat the daemon only holds in memory: the web layer must order it by
-// its birth, not by when a connection last touched it.
+// A new chat the daemon only holds in memory: the store is the only catalog,
+// so the web layer must show nothing for it until a message has been saved.
 vi.mock('../src/daemon-client.js', () => ({ connectDaemonSession: vi.fn() }));
 
 function runtimeFor(model: MockLanguageModelV3): AgentEnvironment {
@@ -70,8 +70,10 @@ afterEach(async () => {
 
 describe('recent ordering reads content activity', () => {
   it('ignores a later file rewrite that carries no conversation activity', () => {
-    const alpha = withUser(store, 'Alpha');
-    const beta = withUser(store, 'Beta');
+    // Explicit stamps: two sessions born in the same millisecond would fall to
+    // the id tiebreak and make the expected order a coin flip.
+    const alpha = { ...withUser(store, 'Alpha'), lastActivityAt: '2026-10-27T10:00:00.000Z' };
+    const beta = { ...withUser(store, 'Beta'), lastActivityAt: '2026-10-27T10:00:01.000Z' };
     store.saveSession(alpha);
     store.saveSession(beta);
 
@@ -142,21 +144,43 @@ describe('recent ordering reads content activity', () => {
   });
 });
 
-describe('web catalog orders unsaved chats by birth, not connection access', () => {
-  it('keeps the summary identical across gets that touch connections', async () => {
+describe('a chat without a message is not a store file', () => {
+  it('creation and project selection write nothing until the first message lands', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const model = new MockLanguageModelV3({ modelId: 'model-a', doStream: async () => Promise.reject(new Error('unused')) });
+    controller = new AgentSessionController(runtimeFor(model));
+    const id = controller.getSnapshot().session.id;
+
+    // Picking a project on the fresh chat must not create the file either.
+    controller.selectProject(null, id);
+    controller.createNewSession(null);
+    expect(store.listSessionFiles()).toHaveLength(0);
+    expect(store.listSavedSessions()).toEqual([]);
+
+    // The first message is what brings the chat into existence.
+    controller.addEntry({ kind: 'user', text: 'first' });
+    controller.flushSave();
+    const files = store.listSessionFiles();
+    expect(files).toHaveLength(1);
+    expect(store.readSessionHeader(files[0]!.path, files[0]!.id)).toMatchObject({ hasUserMessage: true });
+  });
+});
+
+describe('web catalog lists only chats the store knows', () => {
+  const fakeClient = (session: ReturnType<Store['createSession']>, busy = false) =>
+    ({
+      getSnapshot: () => ({ session, busy, runningTurnId: null, queuedMessageCount: 0 }),
+      subscribe: () => () => {},
+      close: async () => {},
+      isBusy: busy,
+      runtime: { providerId: session.providerId, modelId: session.modelId },
+      listSessions: async () => [],
+    }) as unknown as AgentSessionClient;
+
+  it('leaves a live but unsaved chat out of the list, across gets that touch connections', async () => {
     const bornAt = '2026-10-26T10:00:00.000Z';
     const defaultSession = { ...store.createSession('fixture', 'model-a'), createdAt: bornAt };
     const freshSession = { ...store.createSession('fixture', 'model-a'), createdAt: bornAt };
-
-    const fakeClient = (session: typeof defaultSession) =>
-      ({
-        getSnapshot: () => ({ session, busy: false, runningTurnId: null, queuedMessageCount: 0 }),
-        subscribe: () => () => {},
-        close: async () => {},
-        isBusy: false,
-        runtime: { providerId: 'fixture', modelId: 'model-a' },
-        listSessions: async () => [],
-      }) as unknown as AgentSessionClient;
 
     const { connectDaemonSession } = await import('../src/daemon-client.js');
     vi.mocked(connectDaemonSession).mockResolvedValue(fakeClient(freshSession));
@@ -164,20 +188,40 @@ describe('web catalog orders unsaved chats by birth, not connection access', () 
     const { WebSessions } = await import('../src/web/sessions.js');
     const web = new WebSessions(fakeClient(defaultSession), dataDir);
     try {
-      const created = await web.create(null);
+      await web.create(null);
       const before = await web.list();
       await new Promise((finish) => setTimeout(finish, 25));
-      // A get updates connection.touched; under the old scheme that alone
-      // reshuffled every unsaved chat on the next reload.
-      await web.get(created.getSnapshot().session.id);
+      await web.get(freshSession.id);
       const after = await web.list();
 
-      expect(after.map((entry) => [entry.id, entry.updatedAt, entry.lastActivityAt])).toEqual(
-        before.map((entry) => [entry.id, entry.updatedAt, entry.lastActivityAt]),
-      );
-      const fresh = after.find((entry) => entry.id === freshSession.id)!;
-      expect(fresh.updatedAt).toBe(bornAt);
-      expect(fresh.lastActivityAt).toBe(bornAt);
+      // No store record, no row: a draft chat is not part of the catalog.
+      expect(after.map((entry) => entry.id)).toEqual([]);
+      expect(after.map((entry) => entry.id)).toEqual(before.map((entry) => entry.id));
+    } finally {
+      await web.close();
+    }
+  });
+
+  it('overlays live title and running state onto a store-listed chat without reordering it', async () => {
+    const saved = store.saveSession({ ...withUser(store, 'Saved title'), lastActivityAt: '2026-10-26T09:00:00.000Z' });
+    const summary = store.listSavedSessions()[0]!;
+    const live = { ...store.loadSavedSession(saved.id)!, title: 'Live title' };
+    const listSessions = vi.fn(async () => [summary]);
+
+    const { WebSessions } = await import('../src/web/sessions.js');
+    // The default client is the live connection to the saved chat: its own
+    // snapshot carries the fresher title and the running flag.
+    const web = new WebSessions({ ...fakeClient(live, true), listSessions } as unknown as AgentSessionClient, dataDir);
+    try {
+      const listed = await web.list();
+
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({
+        id: saved.id,
+        title: 'Live title',
+        running: true,
+        lastActivityAt: '2026-10-26T09:00:00.000Z',
+      });
     } finally {
       await web.close();
     }

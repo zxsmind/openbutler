@@ -5,7 +5,7 @@ import { Feedback } from './feedback.js';
 interface SidebarProps {
   inert?: boolean;
   sessions: SessionInfo[];
-  current?: { id: string; title: string };
+  current?: { id: string; title: string; hasUserMessage?: boolean };
   projects: Project[];
   selectedProjectId: string | null;
   projectSelectionDisabled?: boolean;
@@ -27,8 +27,10 @@ interface SidebarProps {
 }
 export function Sidebar(props: SidebarProps) {
   const [showAll, setShowAll] = useState(false);
+  // The store is the catalog: a chat without a message is not a row yet, so
+  // the placeholder only appears once its first message has landed.
   const list: SessionInfo[] =
-    props.current && !props.sessions.some((session) => session.id === props.current?.id)
+    props.current && props.current.hasUserMessage && !props.sessions.some((session) => session.id === props.current?.id)
       ? [{ ...props.current }, ...props.sessions]
       : props.sessions;
   const chat = (session: SessionInfo) => (
