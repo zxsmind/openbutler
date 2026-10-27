@@ -1,9 +1,10 @@
-﻿import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getDataPath } from './paths.js';
 import { redactSensitive, redactSensitiveText } from './sensitive-data.js';
+import { skillNameFromPath } from './skill-path.js';
 import type { ToolEffect } from './tools/registry.js';
 
 /**
@@ -169,6 +170,7 @@ const LEDGER_SCHEMA = `
     event_id TEXT,
     provider_id TEXT NOT NULL,
     tool_name TEXT NOT NULL,
+    skill TEXT,
     state TEXT NOT NULL ${stateCheck('state', TOOL_ACTION_STATES)},
     effect_json TEXT NOT NULL,
     input_json TEXT NOT NULL,
@@ -281,6 +283,25 @@ export class ActivityLedger {
     const actionColumns = this.database.prepare('PRAGMA table_info(ranite_actions)').all() as unknown as Array<{ name: string }>;
     if (!actionColumns.some((column) => column.name === 'event_id'))
       this.database.exec('ALTER TABLE ranite_actions ADD COLUMN event_id TEXT');
+    if (!actionColumns.some((column) => column.name === 'skill')) {
+      this.database.exec('ALTER TABLE ranite_actions ADD COLUMN skill TEXT');
+      // One-time backfill: existing history counts for skills too, derived from
+      // the stored input path exactly like new rows.
+      const recorded = this.database.prepare('SELECT request_id, input_json FROM ranite_actions').all() as unknown as Array<{
+        request_id: string;
+        input_json: string;
+      }>;
+      const claim = this.database.prepare('UPDATE ranite_actions SET skill = ? WHERE request_id = ?');
+      for (const row of recorded) {
+        let path: unknown;
+        try {
+          path = (JSON.parse(row.input_json) as { path?: unknown }).path;
+        } catch {
+          path = null;
+        }
+        claim.run(typeof path === 'string' ? skillNameFromPath(path) : null, row.request_id);
+      }
+    }
     try {
       chmodSync(path, 0o600);
     } catch {
@@ -295,6 +316,7 @@ export class ActivityLedger {
     const inputHash = createHash('sha256').update(JSON.stringify(action.input)).digest('hex');
     const safeResult = action.result === undefined ? null : safeJson(action.result);
     const completedAt = TERMINAL_ACTION_STATES.has(action.state) ? now : null;
+    const skill = skillNameFromPath(typeof action.input.path === 'string' ? action.input.path : null);
 
     this.database.exec('BEGIN IMMEDIATE');
     try {
@@ -303,10 +325,10 @@ export class ActivityLedger {
           .prepare(
             `
         INSERT INTO ranite_actions (
-          request_id, workspace_root, session_id, event_id, provider_id, tool_name, state,
+          request_id, workspace_root, session_id, event_id, provider_id, tool_name, skill, state,
           effect_json, input_json, input_sha256, result_json, error,
           created_at, updated_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(request_id) DO NOTHING
         `,
           )
@@ -317,6 +339,7 @@ export class ActivityLedger {
             action.eventId ?? null,
             action.providerId,
             action.name,
+            skill,
             action.state,
             JSON.stringify(action.effect),
             safeInput,
