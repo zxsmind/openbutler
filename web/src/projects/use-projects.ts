@@ -55,10 +55,17 @@ export function useProjects(
       throw new Error('The project was created, but the chat could not be selected. Open a new chat in it from the sidebar.');
     return project;
   };
+  const selectedProject = session?.project?.id ? projects.find((item) => item.id === session.project?.id) : undefined;
   return {
     projects,
     selectedId: session?.project?.id ?? null,
-    selected: session?.project?.id ? session.project : null,
+    selected: session?.project?.id
+      ? {
+          ...session.project,
+          name: session.project.name ?? selectedProject?.name ?? null,
+          folders: session.project.folders.length ? session.project.folders : (selectedProject?.folders ?? []),
+        }
+      : null,
     locked: session?.projectLocked === true,
     loading,
     selecting,
