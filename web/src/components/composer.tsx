@@ -3,7 +3,7 @@ import type { ApprovalMode, DraftImage, ModelChoice, RuntimeInfo } from '../type
 import type { ReactNode } from 'react';
 import { readImage } from '../image-input.js';
 import { useDictation } from '../use-dictation.js';
-import { Brand, Button, Icon, IconButton } from './ui.js';
+import { Button, Icon, IconButton } from './ui.js';
 import { Popover } from './popover.js';
 import { ModelSelector } from './model-selector.js';
 import { useModelSelection } from '../use-model-selection.js';
@@ -13,7 +13,6 @@ import { MessageQueue } from './message-queue.js';
 import { Feedback } from './feedback.js';
 import { moveHistory, type ComposerHistory } from '../composer-state.js';
 interface ComposerProps {
-  projectName?: string;
   context?: ReactNode;
   queuedMessages?: import('../types.js').SessionPayload['queuedMessages'];
   onQueueAction: (id: string, action: 'steer' | 'remove') => Promise<void>;
@@ -29,7 +28,6 @@ interface ComposerProps {
   disabled: boolean;
   changing: boolean;
   modelChanging: boolean;
-  empty: boolean;
   onDraft: (text: string) => void;
   onSend: (text: string, images?: DraftImage[], reasoningVariantId?: string) => Promise<void>;
   onStop: () => void;
@@ -113,21 +111,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   };
   const canSend = Boolean(props.draft.trim()) || props.images.length > 0;
   return (
-    <div className={`composer-dock${props.empty ? ' composer-empty' : ''}`}>
-      {props.empty ? (
-        <div className="welcome">
-          <Brand large />
-          <h1>
-            {props.projectName ? (
-              <>
-                <span>{props.projectName}</span> project: what should we build?
-              </>
-            ) : (
-              'What do you want to do?'
-            )}
-          </h1>
-        </div>
-      ) : null}
+    <div className="composer-dock">
       {error ? (
         <Feedback tone="error" onDismiss={() => setError(null)}>
           {error}

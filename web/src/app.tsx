@@ -14,6 +14,7 @@ import { SettingsView } from './components/settings/settings-page.js';
 import { DEFAULT_SETTINGS_SECTION, SETTINGS_SECTIONS } from './components/settings/sections/index.js';
 import { SettingsSessionProvider } from './components/settings/settings-session.js';
 import { Composer } from './components/composer.js';
+import { ConversationWelcome } from './components/conversation-welcome.js';
 import { PendingActions } from './components/pending-actions.js';
 import { SessionDetails } from './components/session-details.js';
 import { Button, IconButton } from './components/ui.js';
@@ -275,6 +276,7 @@ export function App() {
                     footer={typingIndicator}
                   />
                 ) : null}
+                {turns.length === 0 && connected ? <ConversationWelcome projectName={projects.selected?.name ?? undefined} /> : null}
                 <div className="action-dock">
                   {session.notice ? (
                     <Feedback tone="error" onDismiss={session.clearNotice}>
@@ -296,7 +298,6 @@ export function App() {
                   <Composer
                     key={id}
                     ref={composer}
-                    projectName={projects.selected?.name ?? undefined}
                     context={
                       !projects.locked && payload ? (
                         <ProjectContextBar
@@ -322,7 +323,6 @@ export function App() {
                     disabled={!connected || projects.selecting}
                     modelChanging={session.changing && session.pendingNewChatId === null}
                     changing={session.changing || queued > 0}
-                    empty={turns.length === 0 && connected}
                     onDraft={(value) => {
                       setDrafts((previous) => ({ ...previous, [id]: value }));
                       // The placeholder chat has no persisted draft: storage stays
