@@ -249,6 +249,37 @@ async function replaceFixtureHost() {
 }
 
 describe('shared host and session IPC', () => {
+  it('keeps the original IPC binding when a custodian moves between live workspace sessions', async () => {
+    const custodian = await connect(root, { custodian: true });
+    clients.push(custodian);
+    const workspaceClient = await client({ isolatedSession: true });
+    const custodianSessionId = custodian.getSnapshot().session.id;
+    const workspaceSessionId = workspaceClient.getSnapshot().session.id;
+    const bound = custodian as AgentSessionClient & { workspaceKey: string };
+    const originalKey = bound.workspaceKey;
+
+    expect(workspaceSessionId).not.toBe(custodianSessionId);
+    await custodian.loadSession(workspaceSessionId);
+    expect(custodian.getSnapshot().session.id).toBe(workspaceSessionId);
+    expect(bound.workspaceKey).toBe(originalKey);
+    expect(Array.isArray(await custodian.listSessions())).toBe(true);
+    await custodian.flushSave();
+
+    // The live controller can change; the socket must still reject a different binding.
+    try {
+      bound.workspaceKey = root;
+      await expect(custodian.listSessions()).rejects.toThrow('This IPC client is not attached to that workspace.');
+    } finally {
+      bound.workspaceKey = originalKey;
+    }
+    expect(Array.isArray(await custodian.listSessions())).toBe(true);
+
+    await custodian.loadSession(custodianSessionId);
+    expect(custodian.getSnapshot().session.id).toBe(custodianSessionId);
+    expect(bound.workspaceKey).toBe(originalKey);
+    expect(Array.isArray(await custodian.listSessions())).toBe(true);
+  });
+
   it('runs independent web chats concurrently and stops only the addressed chat', async () => {
     const { createProject } = await import('../src/projects/store.js');
     const folderA = join(root, 'project-a');

@@ -175,6 +175,8 @@ interface PrivateSessionHost {
 }
 
 interface ClientAttachment {
+  /** Immutable IPC identity established by attach, independent of the current session workspace. */
+  readonly bindingKey: string;
   /** A fixed chat binding; changing the visible chat opens another attachment. */
   interactive?: boolean;
   clientKind: LocalClientKind;
@@ -3166,6 +3168,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           target.workspace.lastActivityAt = Date.now();
           attachments.set(socket, {
             ...target,
+            bindingKey: target.workspace.root,
             clientKind,
             scopeRoot,
             interactive: true,
@@ -3234,6 +3237,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         if (privateSession) privateSession.clients.add(socket);
         else workspace.clients.add(socket);
         attachments.set(socket, {
+          bindingKey: legacyCustodian ? scopeRoot : workspace.root,
           clientKind,
           workspace,
           controller,
@@ -3259,10 +3263,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
 
       const key = requireString(request.workspaceKey, 'workspaceKey', MAX_WORKSPACE_PATH_BYTES);
       const attachment = attachments.get(socket);
-      const matchesIdentity = attachment && normalizeWorkspaceKey(key) === normalizeWorkspaceKey(attachment.workspace.root);
-      const matchesLegacyScope =
-        attachment?.legacyCustodian === true && normalizeWorkspaceKey(key) === normalizeWorkspaceKey(attachment.scopeRoot);
-      if (!attachment || (!matchesIdentity && !matchesLegacyScope)) {
+      // A session can move to another live workspace, but the socket's attach identity never changes.
+      if (!attachment || normalizeWorkspaceKey(key) !== normalizeWorkspaceKey(attachment.bindingKey)) {
         throw new Error('This IPC client is not attached to that workspace.');
       }
       const { workspace, controller } = attachment;
@@ -3384,6 +3386,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
               session.clients.add(socket);
             } else targetWorkspace.clients.add(socket);
             attachments.set(socket, {
+              bindingKey: attachment.bindingKey,
               clientKind: attachment.clientKind,
               workspace: targetWorkspace,
               controller: activeController,
