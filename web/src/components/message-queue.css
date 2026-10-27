@@ -6,6 +6,9 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.message-queue__row {
+  flex-wrap: wrap;
+}
 .message-queue__row + .message-queue__row {
   border-top: 1px solid #f0f0f0;
 }
@@ -51,4 +54,12 @@
   gap: 3px;
   color: #969699;
   font-size: 11px;
+}
+/* The refusal message sits on its own line inside the row it came from. */
+.message-queue__row-error {
+  flex: 0 0 100%;
+  width: 100%;
+  padding: 0 0 6px 21px;
+  font-size: 11.5px;
+  line-height: 1.45;
 }
