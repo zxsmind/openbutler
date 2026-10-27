@@ -27,7 +27,6 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
 
   ui.section('Ranite web');
   ui.kv('Workspace', workspaceRoot);
-  ui.kv('Address', `http://${host}:${port}`);
   if (host !== DEFAULT_WEB_HOST) {
     ui.warn('This server is reachable from the network. Keep the pairing link private.');
   }
@@ -42,6 +41,11 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
     ui.failure(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
     return;
+  }
+
+  ui.kv('Address', server.url);
+  if (host === '0.0.0.0' || host === '::') {
+    ui.info("For another device on your network, replace 127.0.0.1 in the link with this computer's LAN IP.");
   }
 
   const pairUrl = server.pairUrl;

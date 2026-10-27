@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { startWebServer, type WebServer } from '../../src/web/server.js';
+import { browserWebAddress, startWebServer, type WebServer } from '../../src/web/server.js';
 import { BRAND_LOGO_URL, readBrandLogo } from '../../src/branding.js';
 import type { AgentSessionClient, AgentSessionSnapshot } from '../../src/agent-session.js';
 import type { SessionEntry } from '../../src/session-store.js';
@@ -177,6 +177,37 @@ describe('browser session controls', () => {
     const head = await fetch(new URL(BRAND_LOGO_URL, server.url), { method: 'HEAD' });
     expect(head.status).toBe(200);
     expect(await head.text()).toBe('');
+  });
+
+  it('keeps the listening address separate from the browser address', () => {
+    expect(browserWebAddress('0.0.0.0', 45278)).toBe('http://127.0.0.1:45278');
+    expect(browserWebAddress('::', 45278)).toBe('http://127.0.0.1:45278');
+    expect(browserWebAddress('127.0.0.1', 45278)).toBe('http://127.0.0.1:45278');
+    expect(browserWebAddress('192.168.1.20', 45278)).toBe('http://192.168.1.20:45278');
+    expect(browserWebAddress('::1', 45278)).toBe('http://[::1]:45278');
+  });
+
+  it('serves usable pairing links when listening on all IPv4 interfaces', async () => {
+    const wildcard = await startWebServer({
+      workspaceRoot: 'C:/workspace',
+      port: 0,
+      host: '0.0.0.0',
+      assetsDir: 'missing-test-assets',
+    });
+    try {
+      expect(new URL(wildcard.url).hostname).toBe('127.0.0.1');
+      expect(new URL(wildcard.pairUrl).origin).toBe(wildcard.url);
+      const response = await fetch(wildcard.pairUrl, { redirect: 'manual' });
+      expect(response.status).toBe(302);
+      expect(response.headers.get('set-cookie')).toContain('HttpOnly');
+      expect((await fetch(wildcard.pairUrl, { redirect: 'manual' })).status).toBe(403);
+
+      const refreshed = wildcard.newPairUrl();
+      expect(new URL(refreshed).origin).toBe(wildcard.url);
+      expect((await fetch(refreshed, { redirect: 'manual' })).status).toBe(302);
+    } finally {
+      await wildcard.close();
+    }
   });
 
   it('notifies every open browser when model settings or the catalog change on disk', async () => {

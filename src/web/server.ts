@@ -70,6 +70,13 @@ export const DEFAULT_WEB_PORT = 45278;
 
 export const DEFAULT_WEB_HOST = '127.0.0.1';
 
+/** Address to open in a browser; wildcard addresses are only for listening. */
+export function browserWebAddress(host: string, port: number): string {
+  const name = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+  const hostname = name.includes(':') && !name.startsWith('[') ? `[${name}]` : name;
+  return `http://${hostname}:${port}`;
+}
+
 const PAIR_TTL_MS = 5 * 60 * 1000;
 const SESSION_COOKIE = 'ranite_web';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -251,7 +258,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     pairToken = randomBytes(32).toString('base64url');
     pairExpiresAt = Date.now() + PAIR_TTL_MS;
     pairUsed = false;
-    return `http://${host}:${port}/auth/pair?t=${encodeURIComponent(pairToken)}`;
+    return `${browserWebAddress(host, port)}/auth/pair?t=${encodeURIComponent(pairToken)}`;
   };
 
   const snapshotPayload = (entries: Entry[], reset: boolean, from: number, source: AgentSessionClient) => {
@@ -1219,7 +1226,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   );
 
   return {
-    url: `http://${host}:${port}`,
+    url: browserWebAddress(host, port),
     pairUrl,
     newPairUrl: issuePairToken,
     async close() {
