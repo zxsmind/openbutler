@@ -24,6 +24,8 @@ export function readPort(parsed: Parsed): number {
 }
 
 const PAIR_HINT = 'Pair another device with `ranite web --pair`; paired browsers reconnect on their own.';
+const LOCAL_ONLY_HINT = 'Local only on this computer. For phone or LAN access, run `ranite web --hostname 0.0.0.0`.';
+const isLoopback = (host: string): boolean => host === '127.0.0.1' || host === '::1';
 
 /**
  * Serves the browser client from this machine. The server only reads static
@@ -47,6 +49,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
     const running = webProcessStatus();
     if (running) {
       ui.success(`Web server already running (pid ${running.pid}) at ${browserWebAddress(running.host, running.port)}.`);
+      if (isLoopback(running.host)) ui.info(LOCAL_ONLY_HINT);
       ui.info(PAIR_HINT);
       return;
     }
@@ -62,6 +65,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
       const child = await startWebProcess(process.argv[1], port, host, workspaceRoot);
       ui.success(`Web server running in the background (pid ${child.pid}).`);
       ui.kv('Address', browserWebAddress(child.host, child.port));
+      if (isLoopback(child.host)) ui.info(LOCAL_ONLY_HINT);
       ui.info(PAIR_HINT);
     } catch (error) {
       ui.failure(error instanceof Error ? error.message : String(error));
@@ -107,6 +111,8 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
   ui.kv('Address', server.url);
   if (host === '0.0.0.0' || host === '::') {
     ui.info("For another device on your network, replace 127.0.0.1 in the link with this computer's LAN IP.");
+  } else if (isLoopback(host)) {
+    ui.info(LOCAL_ONLY_HINT);
   }
 
   const pairUrl = server.pairUrl;

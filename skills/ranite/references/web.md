@@ -14,9 +14,16 @@ ranite web --port 45278 --hostname 0.0.0.0 --dir <existing-directory>
 
 Defaults are port 45278, loopback host 127.0.0.1 and the launch directory for web's
 workspace. `--dir` is web scope, not a substitute for installing the application.
-The command starts/attaches the background host and keeps the web-server process
-alive. It prints a one-time pairing URL. Enter in that terminal produces a fresh
-URL; Ctrl+C stops the web server, not the agent host.
+Plain `ranite web` starts/attaches the background host, launches the web server as
+a tracked background process and returns. A loopback bind prints a hint that
+another device needs `--hostname 0.0.0.0`; a wildcard bind prints the network
+warning instead. Pairing is explicit: `ranite web --pair` runs a pairing session
+in that terminal and prints a one-time pairing URL. Enter produces a fresh URL;
+Ctrl+C stops that session. If a tracked server already runs, `--pair` stops it
+first to take over the same port, so an already-paired browser keeps its cookie
+while a new device pairs. `ranite restart` recycles the tracked web server
+together with the host, preserving its port, hostname and workspace;
+`ranite stop` stops both.
 
 Open the printed URL in the intended browser. Pair tokens expire after five
 minutes and are consumed on use. Pairing establishes an HttpOnly session cookie.

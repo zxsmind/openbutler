@@ -59,7 +59,7 @@ ranite daemon autostart [on|off|status]
 ranite daemon autostart-status
 ranite stop
 ranite restart
-ranite web [--port <1-65535>] [--hostname <address>] [--dir <directory>]
+ranite web [--port <1-65535>] [--hostname <address>] [--dir <directory>] [--pair]
 ```
 
 `daemon` defaults to status. `daemon run` is the internal child-process entry,
