@@ -934,6 +934,23 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
+    // Unlike the model, the effort is a preference: it may change while a run
+    // is going, and the next model request picks it up from the runtime.
+    if (url.pathname === '/api/reasoning' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}') as { reasoningVariantId?: unknown; sessionId?: unknown };
+      if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });
+      if (
+        typeof body.reasoningVariantId !== 'string' ||
+        body.reasoningVariantId.length > 256 ||
+        !client.runtime.reasoningVariants.some((variant) => variant.id === body.reasoningVariantId)
+      )
+        return sendJson(res, 400, { error: 'Choose a supported effort level.' });
+      client.runtime.saveReasoningPreference(body.reasoningVariantId);
+      const entries = client.getServerEntries();
+      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
+    }
+
     if (url.pathname === '/api/approval-mode' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req)) || '{}') as { mode?: unknown; sessionId?: unknown };
       if (body.sessionId !== client.getSnapshot().session.id) return sendJson(res, 409, { error: 'The active chat changed. Try again.' });

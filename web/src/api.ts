@@ -101,6 +101,8 @@ export const changeSession = (currentSessionId: string, sessionId?: string, proj
       : { action: 'new', currentSessionId, ...(projectId === undefined ? {} : { projectId }) },
   );
 export const changeModel = (model: ModelChoice, sessionId: string) => request<SessionPayload>('/api/model', { ...model, sessionId });
+export const changeReasoning = (reasoningVariantId: string, sessionId: string) =>
+  request<SessionPayload>('/api/reasoning', { reasoningVariantId, sessionId });
 export const changeApprovalMode = (mode: ApprovalMode, sessionId: string) =>
   request<SessionPayload>('/api/approval-mode', { mode, sessionId });
 export const fetchOlder = (before: number, sessionId: string, limit = 50) =>

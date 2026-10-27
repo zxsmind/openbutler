@@ -13,7 +13,7 @@ export interface ComposerModelSelectorControl {
   pending: boolean;
   error: string | null;
   onSelectModel: (route: { providerId: string; modelId: string }) => Promise<boolean>;
-  onSelectReasoning: (value: string | null) => Promise<boolean>;
+  onSelectReasoning: (value: string) => Promise<boolean>;
   onRetry: () => void;
 }
 
@@ -120,20 +120,6 @@ export function ModelSelector({
                         <Icon name="chevron-right" size={11} />
                       </span>
                     </button>
-                    {projection.reasoning.canSelect ? (
-                      <button
-                        className="composer-model-selector__reset"
-                        type="button"
-                        aria-label={projection.copy.reset}
-                        title={projection.copy.reset}
-                        aria-disabled={pending || !projection.reasoning.canReset}
-                        onClick={() => {
-                          if (!pending && projection.reasoning.canReset) void onSelectReasoning(null);
-                        }}
-                      >
-                        <Icon name="rotate-ccw" size={14} />
-                      </button>
-                    ) : null}
                   </div>
                   <StepSlider
                     label={projection.copy.reasoning}
@@ -144,7 +130,8 @@ export function ModelSelector({
                     busy={pending}
                     onPreviewChange={setPreviewLabel}
                     onChange={async (value) => {
-                      await onSelectReasoning(value);
+                      // The slider's null means "unselected"; effort always commits a concrete option.
+                      if (value !== null) await onSelectReasoning(value);
                     }}
                   />
                 </div>

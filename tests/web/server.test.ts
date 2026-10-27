@@ -51,6 +51,9 @@ const client = {
       { id: 'high', label: 'High' },
     ],
     reasoningDefault: 'default',
+    saveReasoningPreference: vi.fn((variantId: string) => {
+      Object.assign(client.runtime, { reasoningDefault: variantId });
+    }),
   },
   get isBusy() {
     return snapshot.busy;
@@ -185,6 +188,31 @@ describe('browser session controls', () => {
     expect(browserWebAddress('127.0.0.1', 45278)).toBe('http://127.0.0.1:45278');
     expect(browserWebAddress('192.168.1.20', 45278)).toBe('http://192.168.1.20:45278');
     expect(browserWebAddress('::1', 45278)).toBe('http://[::1]:45278');
+  });
+
+  it('applies an effort change while a run is going, unlike a model change', async () => {
+    snapshot.busy = true;
+    publish();
+    // No session header: the busy gate must hold on the default client itself.
+    const postDefault = (path: string, body: unknown) =>
+      fetch(`${server.url}${path}`, {
+        method: 'POST',
+        headers: { cookie, origin: server.url, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const modelChange = await postDefault('/api/model', { providerId: 'local', modelId: 'model-a', sessionId: 'session-a' });
+    expect(modelChange.status).toBe(409);
+    // The effort is a preference: no busy gate, and the payload carries the new default.
+    const effort = await postDefault('/api/reasoning', { reasoningVariantId: 'high', sessionId: 'session-a' });
+    expect(effort.status).toBe(200);
+    expect(client.runtime.saveReasoningPreference).toHaveBeenCalledWith('high');
+    expect(((await effort.json()) as { runtime: { reasoningDefault: string } }).runtime.reasoningDefault).toBe('high');
+    const unsupported = await postDefault('/api/reasoning', { reasoningVariantId: 'nope', sessionId: 'session-a' });
+    expect(unsupported.status).toBe(400);
+    const stale = await postDefault('/api/reasoning', { reasoningVariantId: 'high', sessionId: 'session-b' });
+    expect(stale.status).toBe(409);
+    snapshot.busy = false;
+    publish();
   });
 
   it('serves usable pairing links when listening on all IPv4 interfaces', async () => {

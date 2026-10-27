@@ -342,6 +342,7 @@ export function App() {
                     }}
                     onStop={() => void session.stop()}
                     onModel={session.selectModel}
+                    onReasoning={session.saveReasoning}
                     onApprovalMode={session.selectApprovalMode}
                     onDetails={() => setDetailsOpen(!detailsOpen)}
                   />

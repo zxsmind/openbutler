@@ -5,12 +5,14 @@ export interface NewChatDraft {
   sourceSessionId: string;
   projectId: string | null;
   model: ModelChoice | null;
+  /** The effort picked before the host session exists; applied at materialization. */
+  reasoningVariantId: string | null;
   approvalMode: ApprovalMode | null;
   creation: Promise<SessionPayload> | null;
 }
 
 export function newChatDraft(sourceSessionId: string, projectId: string | null): NewChatDraft {
-  return { sourceSessionId, projectId, model: null, approvalMode: null, creation: null };
+  return { sourceSessionId, projectId, model: null, reasoningVariantId: null, approvalMode: null, creation: null };
 }
 
 /** The first send materializes the draft. Concurrent sends reuse the same request. */

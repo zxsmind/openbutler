@@ -11,7 +11,6 @@ export interface ModelSelectionView {
     description: string | null;
     options: Array<{ value: string; label: string }>;
     canSelect: boolean;
-    canReset: boolean;
   };
   copy: {
     triggerLabel: string;
@@ -19,7 +18,6 @@ export interface ModelSelectionView {
     chooseModel: string;
     back: string;
     reasoning: string;
-    reset: string;
     empty: string;
   };
 }
@@ -28,18 +26,13 @@ export function modelRouteKey(runtime?: Pick<RuntimeInfo, 'providerId' | 'modelI
   return JSON.stringify([runtime?.providerId, runtime?.modelId]);
 }
 
-export function projectModelSelection(
-  runtime: RuntimeInfo | undefined,
-  models: ModelChoice[],
-  effort: string | null,
-): ModelSelectionView | null {
+export function projectModelSelection(runtime: RuntimeInfo | undefined, models: ModelChoice[]): ModelSelectionView | null {
   if (!runtime?.modelId || !runtime.providerId) return null;
   const current = models.find((model) => modelRouteKey(model) === modelRouteKey(runtime));
   const options = (runtime.reasoningVariants ?? []).map(({ id, label }) => ({ value: id, label }));
   const defaultOption = options.find((option) => option.value === runtime.reasoningDefault) ?? options[0];
-  const effectiveOption = options.find((option) => option.value === effort) ?? defaultOption;
   const modelLabel = current?.name ?? runtime.modelId;
-  const label = effectiveOption?.label ?? 'Default';
+  const label = defaultOption?.label ?? 'Default';
   return {
     modelLabel,
     providerLabel: runtime.providerId,
@@ -51,21 +44,19 @@ export function projectModelSelection(
       disabled: false,
     })),
     reasoning: {
-      value: effectiveOption?.value ?? null,
+      value: defaultOption?.value ?? null,
       label,
       description: null,
       options,
       canSelect: options.length > 1,
-      canReset: effectiveOption?.value !== defaultOption?.value,
     },
     copy: {
-      triggerLabel: `${modelLabel} · ${label}`,
-      chooseReasoning: 'Choose a reasoning level',
-      chooseModel: 'Choose a model',
+      triggerLabel: modelLabel,
+      chooseReasoning: 'Choose reasoning effort',
+      chooseModel: 'Choose model',
       back: 'Back',
-      reasoning: 'Reasoning level',
-      reset: 'Back to the default level',
-      empty: 'No model is activated. Open Settings → Models to choose one.',
+      reasoning: 'Reasoning effort',
+      empty: 'No models are configured.',
     },
   };
 }

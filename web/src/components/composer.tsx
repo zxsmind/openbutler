@@ -32,6 +32,7 @@ interface ComposerProps {
   onSend: (text: string, images?: DraftImage[], reasoningVariantId?: string) => Promise<void>;
   onStop: () => void;
   onModel: (model: ModelChoice) => Promise<boolean>;
+  onReasoning: (value: string) => Promise<boolean>;
   onApprovalMode: (mode: ApprovalMode) => Promise<void>;
   onDetails: () => void;
 }
@@ -48,7 +49,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   const [pending, setPending] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const modelSelection = useModelSelection(props.runtime, props.models, props.onModel);
+  const modelSelection = useModelSelection(props.runtime, props.models, props.onModel, props.onReasoning);
   const dictation = useDictation((text) => props.onDraft([props.draft, text].filter(Boolean).join(' ')), setError);
   useLayoutEffect(() => {
     const node = input.current;

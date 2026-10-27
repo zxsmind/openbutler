@@ -278,6 +278,33 @@ export function useSession() {
       setChanging(false);
     }
   };
+  /**
+   * Effort is a runtime preference, not a model binding: it applies to the next
+   * model request even while a run is going, so it is never deferred.
+   */
+  const saveReasoning = async (value: string): Promise<boolean> => {
+    if (!sessionId || status !== 'open') return false;
+    const draft = draftChat.current;
+    if (draft && sessionId === PENDING_CHAT_ID && state.payload) {
+      draft.reasoningVariantId = value;
+      dispatch({
+        type: 'payload',
+        payload: {
+          ...state.payload,
+          runtime: { ...state.payload.runtime, reasoningDefault: value },
+        },
+        receivedAt: performance.now(),
+      });
+      return true;
+    }
+    try {
+      applyNow(await api.changeReasoning(value, sessionId));
+      return true;
+    } catch (error) {
+      report(error);
+      return false;
+    }
+  };
   useEffect(() => {
     if (!deferredModel) return;
     if (deferredModel.sessionId !== sessionId) {
@@ -356,6 +383,8 @@ export function useSession() {
         target = snapshot.session.id;
         if (draft.model && (draft.model.providerId !== snapshot.runtime?.providerId || draft.model.modelId !== snapshot.runtime?.modelId))
           snapshot = await api.changeModel(draft.model, target);
+        if (draft.reasoningVariantId && draft.reasoningVariantId !== snapshot.runtime?.reasoningDefault)
+          snapshot = await api.changeReasoning(draft.reasoningVariantId, target);
         if (draft.approvalMode && draft.approvalMode !== snapshot.runtime?.approvalMode)
           snapshot = await api.changeApprovalMode(draft.approvalMode, target);
         bind(target);
@@ -421,6 +450,7 @@ export function useSession() {
     followRequest,
     switchSession,
     selectModel,
+    saveReasoning,
     selectProject,
     selectApprovalMode,
     loadOlder,
