@@ -95,11 +95,11 @@ function usage(): void {
     ['ranite usage', 'Show recorded token use and cost: --days, --session, --model, --json.'],
     ['ranite logs', 'Read the machine log: --lines, --level, --event, --json.'],
     ['ranite stop', 'Stop the background host.'],
-    ['ranite restart', 'Restart the background host and reconnect open sessions.'],
+    ['ranite restart', 'Restart the background host and the browser server, then reconnect open sessions.'],
     ['ranite mcp', 'Manage global MCP servers.'],
     ['ranite schedule', 'List, add, run, and open scheduled wakeups.'],
     ['ranite telegram', 'Configure and pair the owner Telegram channel.'],
-    ['ranite web', 'Serve the browser client (--port, --hostname, --dir).'],
+    ['ranite web', 'Serve the browser client in the background; --pair pairs a new device (--port, --hostname, --dir).'],
     ['ranite team <subcommand>', 'Form a closed team of ranites over the tailnet (init, invite, join, …).'],
     ['ranite events', 'Inspect the durable event ledger.'],
     ['ranite actions', 'Inspect the durable tool action ledger.'],
@@ -1601,7 +1601,7 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
       const { readPort } = await import('./cli/web.js');
       const port = readPort(parsed);
       const host = parsed.flags.get('hostname') ?? DEFAULT_WEB_HOST;
-      const web = await startWebProcess(process.argv[1], port, host);
+      const web = await startWebProcess(process.argv[1], port, host, resolve(parsed.flags.get('dir') ?? process.cwd()));
       ui.success(`Web server running (pid ${web.pid}) at http://${host}:${web.port}`);
     }
     return;
@@ -1729,8 +1729,10 @@ async function main(): Promise<void> {
       if (parsed.words.length > 0) throw new Error('Usage: ranite restart');
 
       ui.info('Stopping active runs and saving sessions…');
-      const status = await restartDaemon();
+      const { status, web, webFailure } = await restartDaemon();
       ui.success(`Background host restarted (pid ${status.pid}).`);
+      if (web) ui.success(`Web server running (pid ${web.pid}).`);
+      if (webFailure) ui.warn(`The browser server did not come back up: ${webFailure}`);
       ui.info('Open sessions reconnect automatically.');
       return;
     }

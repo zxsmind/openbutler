@@ -229,9 +229,30 @@ export async function stopDaemon(restarting = false): Promise<boolean> {
   throw new Error(`Ranite host process ${active.pid} could not be terminated.`);
 }
 
-export async function restartDaemon(_legacyWorkspaceScope?: string): Promise<DaemonStatus> {
+export type RestartOutcome = { status: DaemonStatus; web: WebPidRecord | null; webFailure: string | null };
+
+/**
+ * Restarts the background host and, when a tracked browser server is running,
+ * that server too: both children share one code vintage, so recycling only the
+ * host would leave the browser client serving the previous build. The host
+ * result stays authoritative; a web child that fails to return is reported
+ * instead of thrown, because the host is already running again.
+ */
+export async function restartDaemon(_legacyWorkspaceScope?: string): Promise<RestartOutcome> {
+  const previousWeb = readWebPidRecord();
+  await stopWebProcess();
   await stopDaemon(true);
-  return startDaemon();
+  const status = await startDaemon();
+  if (!previousWeb) return { status, web: null, webFailure: null };
+  try {
+    return {
+      status,
+      web: await startWebProcess(process.argv[1], previousWeb.port, previousWeb.host, previousWeb.dir ?? process.cwd()),
+      webFailure: null,
+    };
+  } catch (error) {
+    return { status, web: null, webFailure: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /** The optional web server `ranite daemon start --web` opens: its own pid record so stop reaches it. */
@@ -239,7 +260,7 @@ function webPidPath(): string {
   return getDataPath('web.pid');
 }
 
-type WebPidRecord = { pid: number; startedAt: string; port: number; host: string };
+export type WebPidRecord = { pid: number; startedAt: string; port: number; host: string; dir?: string };
 
 function readWebPidRecord(): WebPidRecord | null {
   const path = webPidPath();
@@ -261,15 +282,21 @@ function readWebPidRecord(): WebPidRecord | null {
       return null;
     }
     if (typeof record.startedAt !== 'string' || typeof record.port !== 'number' || typeof record.host !== 'string') return null;
+    // Records written before the workspace root was tracked simply fall back to the caller's cwd.
+    if (record.dir !== undefined && typeof record.dir !== 'string') return null;
     return record as WebPidRecord;
   } catch {
     return null;
   }
 }
 
-/** Mirrors how the daemon itself is launched, so the web child runs the same code vintage as this CLI. */
-export function webSpawnArgs(entry: string, port: number): string[] {
-  const webCommand = [entry, 'web', '--port', String(port)];
+/**
+ * Mirrors how the daemon itself is launched, so the web child runs the same code vintage as
+ * this CLI. `--serve` marks the detached child: it runs the server in its own process instead
+ * of spawning again, and `--hostname` keeps the binding the parent chose.
+ */
+export function webSpawnArgs(entry: string, port: number, host: string): string[] {
+  const webCommand = [entry, 'web', '--serve', '--port', String(port), '--hostname', host];
   return /\.tsx?$/i.test(entry) ? ['--import', import.meta.resolve('tsx'), ...webCommand] : webCommand;
 }
 
@@ -278,7 +305,7 @@ export function webSpawnArgs(entry: string, port: number): string[] {
  * An already-running tracked server is returned as-is: the boot command stays
  * idempotent the way `startDaemon` is.
  */
-export async function startWebProcess(entry: string | undefined, port: number, host: string): Promise<WebPidRecord> {
+export async function startWebProcess(entry: string | undefined, port: number, host: string, dir: string): Promise<WebPidRecord> {
   const existing = readWebPidRecord();
   if (existing) return existing;
   if (!entry) throw new Error('Could not locate the Ranite CLI entry point.');
@@ -289,7 +316,10 @@ export async function startWebProcess(entry: string | undefined, port: number, h
   const logOffset = fstatSync(logFd).size;
   let child;
   try {
-    child = spawn(process.execPath, webSpawnArgs(entry, port), {
+    child = spawn(process.execPath, webSpawnArgs(resolve(entry), port, host), {
+      // The child resolves `--dir` from its own cwd, so the recorded workspace root is
+      // what it serves even when this CLI was launched from somewhere else.
+      cwd: dir,
       env: { ...process.env },
       detached: true,
       stdio: ['ignore', logFd, logFd],
@@ -307,7 +337,7 @@ export async function startWebProcess(entry: string | undefined, port: number, h
     child.once('spawn', () => resolveSpawn());
   });
   child.unref();
-  const record: WebPidRecord = { pid: child.pid!, startedAt: new Date().toISOString(), port, host };
+  const record: WebPidRecord = { pid: child.pid!, startedAt: new Date().toISOString(), port, host, dir };
   writeFileSync(webPidPath(), JSON.stringify(record), { mode: 0o600 });
   const pollHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
@@ -362,6 +392,21 @@ export async function stopWebProcess(): Promise<boolean> {
 /** The tracked web process, pruned when it is no longer alive. */
 export function webProcessStatus(): WebPidRecord | null {
   return readWebPidRecord();
+}
+
+/** Registers the process serving the browser client so stop and restart reach it. */
+export function trackWebProcess(record: WebPidRecord): void {
+  writeFileSync(webPidPath(), JSON.stringify(record), { mode: 0o600 });
+}
+
+/** Drops the tracking record; only the recorded process may remove it. */
+export function untrackWebProcess(pid: number): void {
+  if (readWebPidRecord()?.pid !== pid) return;
+  try {
+    unlinkSync(webPidPath());
+  } catch {
+    /* already removed */
+  }
 }
 
 /** Internal child-process entry point for `ranite daemon run`. */
