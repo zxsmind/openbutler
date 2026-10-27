@@ -142,7 +142,10 @@ export class WebSessions {
         ...(previous ?? {
           id,
           preview: '',
-          updatedAt: new Date(connection.touched).toISOString(),
+          // A chat the store has not seen yet is ordered by when it was born,
+          // never by connection access: reloads must not reshuffle the list.
+          updatedAt: snapshot.session.createdAt,
+          lastActivityAt: snapshot.session.createdAt,
           providerId: connection.client.runtime.providerId,
           modelId: connection.client.runtime.modelId,
         }),
@@ -151,7 +154,9 @@ export class WebSessions {
         ...(snapshot.session.project ? { project: snapshot.session.project } : {}),
       });
     }
-    return [...saved.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return [...saved.values()].sort(
+      (a, b) => (b.lastActivityAt ?? b.updatedAt).localeCompare(a.lastActivityAt ?? a.updatedAt) || a.id.localeCompare(b.id),
+    );
   }
 
   async close(): Promise<void> {

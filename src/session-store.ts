@@ -108,6 +108,13 @@ export interface SavedSession {
   title: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * When conversation content last changed - a message landed or a turn
+   * completed. Recent lists order by this; opening or switching a chat never
+   * rewrites it. Absent on sessions saved before this field existed; listing
+   * falls back to `updatedAt` for those.
+   */
+  lastActivityAt?: string;
   providerId: string;
   modelId: string;
   /** Canonical workspace that supplied this session's tool and memory scope. */
@@ -148,6 +155,8 @@ export interface SessionSummary {
   title: string;
   preview: string;
   updatedAt: string;
+  /** Content-activity stamp used for ordering; see SavedSession.lastActivityAt. */
+  lastActivityAt?: string;
   providerId: string;
   modelId: string;
   workspaceRoot?: string;
@@ -162,6 +171,7 @@ export function createSession(providerId: string, modelId: string, contextWindow
     title: 'New session',
     createdAt: now,
     updatedAt: now,
+    lastActivityAt: now,
     providerId,
     modelId,
     ...(workspaceRoot ? { workspaceRoot: resolve(workspaceRoot) } : {}),
@@ -246,6 +256,7 @@ export function listSavedSessions(workspaceRoot?: string | null): SessionSummary
         title: session.title,
         preview: session.preview ?? '',
         updatedAt: session.updatedAt,
+        ...(session.lastActivityAt ? { lastActivityAt: session.lastActivityAt } : {}),
         providerId: session.providerId,
         modelId: session.modelId,
         ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
@@ -256,7 +267,10 @@ export function listSavedSessions(workspaceRoot?: string | null): SessionSummary
     }
   }
 
-  return sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return sessions.sort(
+    (left, right) =>
+      (right.lastActivityAt ?? right.updatedAt).localeCompare(left.lastActivityAt ?? left.updatedAt) || left.id.localeCompare(right.id),
+  );
 }
 
 /**
@@ -282,6 +296,7 @@ export interface StoredSessionHeader {
   title: string;
   createdAt: string;
   updatedAt: string;
+  lastActivityAt?: string;
   providerId: string;
   modelId: string;
   workspaceRoot?: string;
@@ -372,6 +387,7 @@ function fullSessionHeader(text: string): StoredSessionHeader | null {
     title: full.title,
     createdAt: full.createdAt,
     updatedAt: full.updatedAt,
+    ...(full.lastActivityAt ? { lastActivityAt: full.lastActivityAt } : {}),
     providerId: full.providerId,
     modelId: full.modelId,
     ...(full.workspaceRoot ? { workspaceRoot: full.workspaceRoot } : {}),
@@ -401,6 +417,7 @@ function tryParseHeader(text: string, id: string): StoredSessionHeader | null {
     title: value.title,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+    ...(typeof value.lastActivityAt === 'string' ? { lastActivityAt: value.lastActivityAt } : {}),
     providerId: value.providerId,
     modelId: value.modelId,
     ...(typeof value.workspaceRoot === 'string' ? { workspaceRoot: value.workspaceRoot } : {}),
@@ -472,6 +489,7 @@ export function saveSession(session: SavedSession, options: { allowEmpty?: boole
     title: session.title === 'New session' ? sessionTitle(session.entries) : session.title,
     createdAt: session.createdAt,
     updatedAt: new Date().toISOString(),
+    ...(session.lastActivityAt === undefined ? {} : { lastActivityAt: session.lastActivityAt }),
     providerId: session.providerId,
     modelId: session.modelId,
     ...(session.workspaceRoot === undefined ? {} : { workspaceRoot: session.workspaceRoot }),
@@ -539,6 +557,7 @@ function isSavedSession(value: unknown): value is SavedSession {
     typeof value.title === 'string' &&
     typeof value.createdAt === 'string' &&
     typeof value.updatedAt === 'string' &&
+    (value.lastActivityAt === undefined || typeof value.lastActivityAt === 'string') &&
     typeof value.providerId === 'string' &&
     typeof value.modelId === 'string' &&
     (value.keyPositions === undefined ||

@@ -283,6 +283,8 @@ export class AgentSessionController implements AgentSessionClient {
   private sessionHasUserMessage = false;
   private latestSessionSnapshot: SavedSession | null = null;
   private sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Persistable content of the last successful save or open; a navigation that matches it writes nothing. */
+  private lastPersistedContent: string | null = null;
   private sessionSaveError: string | null = null;
   private streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private streamedAssistantEntry: SessionEntry | null = null;
@@ -452,11 +454,29 @@ export class AgentSessionController implements AgentSessionClient {
     };
   }
 
+  /** The content a save would write, with the write timestamp normalised away. */
+  private persistableContentKey(): string {
+    return JSON.stringify({ ...this.persistableSession(), updatedAt: '' });
+  }
+
+  /**
+   * Conversation content changed - a message landed or a turn finished. The
+   * recent lists order by this stamp, so navigation must never touch it.
+   */
+  private touchActivity(): void {
+    this.session = { ...this.session, lastActivityAt: new Date().toISOString() };
+  }
+
   private persistLatest(allowEmpty = false): void {
     const latest = this.latestSessionSnapshot;
     if (!latest || (!allowEmpty && !latest.entries.some((entry) => entry.kind === 'user'))) return;
+    // Opening or switching conversations carries no content change; rewriting
+    // the file there would move the chat in every recent list without a reason.
+    const key = JSON.stringify({ ...latest, updatedAt: '' });
+    if (key === this.lastPersistedContent) return;
     try {
       this.session = saveSession(latest, { allowEmpty });
+      this.lastPersistedContent = this.persistableContentKey();
       this.options.onSessionSaved?.(this.session);
       this.sessionSaveError = null;
     } catch (error) {
@@ -479,6 +499,7 @@ export class AgentSessionController implements AgentSessionClient {
     if (stamped.at === undefined) stamped.at = Date.now();
     if (stamped.turnId === undefined && this.activeTurnId !== undefined) stamped.turnId = this.activeTurnId;
     this.session = { ...this.session, entries: [...this.session.entries, stamped] };
+    if (stamped.kind === 'user') this.touchActivity();
     this.publish();
   }
 
@@ -546,6 +567,8 @@ export class AgentSessionController implements AgentSessionClient {
     this.contextUsageBaseline = session.contextTokens;
     this.contextGrowthThisTurn = session.contextGrowthTokens;
     this.sessionHasUserMessage = session.entries.some((entry) => entry.kind === 'user');
+    // Content is clean on open: a pure navigation must never rewrite the file.
+    this.lastPersistedContent = this.persistableContentKey();
     this.pendingApproval = null;
     this.pendingApprovalId = null;
     this.streamedAssistantEntry = null;
@@ -1837,6 +1860,7 @@ export class AgentSessionController implements AgentSessionClient {
         runTurnId = undefined;
         currentTurn.resolve();
         settleSteeredTurns(current.eventId);
+        this.touchActivity();
         this.activeSteeringMessage = null;
         activeTurn = null;
         if (abortController.signal.aborted) break;
