@@ -60,6 +60,7 @@ import {
 } from './telegram-setup.js';
 import type { ScheduleState, McpServerState } from './settings.js';
 import { defaultModelIsUsable, readiness, summarizeProviders } from './cli/config-edit.js';
+import { resolveDefaultModel } from './usage/default-model.js';
 import { runUninstall } from './uninstall.js';
 import * as ui from './cli/ui.js';
 
@@ -173,7 +174,13 @@ async function runConfig(): Promise<void> {
     ]),
   );
   ui.line();
-  ui.kv('Default', settings.defaultProvider ? `${settings.defaultProvider} / ${settings.defaultModel || '(none)'}` : '(none)');
+  const defaultChoice = resolveDefaultModel(settings);
+  ui.kv(
+    'Default',
+    defaultChoice
+      ? `${defaultChoice.providerId} / ${defaultChoice.modelId}${defaultChoice.source === 'usage' ? ' (from usage)' : ''}`
+      : '(none)',
+  );
   ui.kv('Reasoning', describeReasoningPreference(settings));
   ui.kv('Show reasoning', settings.showReasoning !== false ? 'on' : 'off');
   ui.line();
@@ -181,7 +188,7 @@ async function runConfig(): Promise<void> {
   if (report.ready) ui.success('Ready to run.');
   else for (const problem of report.problems) ui.failure(problem);
   for (const hint of report.hints) ui.info(hint);
-  if (!defaultModelIsUsable(settings)) ui.info('Change the default model: ranite setup');
+  if (!defaultChoice) ui.info('Change the default model: ranite setup');
 }
 
 async function runPermissions(parsed: Parsed): Promise<void> {
@@ -618,10 +625,13 @@ function timeAgo(timestamp: number): string {
 
 async function defaultModelReady(): Promise<boolean> {
   const settings = loadSettings();
+  if (!settings.defaultProvider || !settings.defaultModel) {
+    // No explicit default: recorded usage decides, and only usable picks count.
+    return resolveDefaultModel(settings) !== null;
+  }
   const providerId = settings.defaultProvider;
-  const modelId = settings.defaultModel;
   const provider = settings.providers[providerId];
-  if (!providerId || !modelId || !provider?.enabled || !providerIsConfigured(providerId, provider)) return false;
+  if (!provider?.enabled || !providerIsConfigured(providerId, provider)) return false;
 
   if (!provider.npm) {
     try {

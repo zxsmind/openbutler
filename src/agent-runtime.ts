@@ -25,6 +25,7 @@ import {
   withReasoningVisibility,
 } from './provider/registry.js';
 import { createPayloadFetch } from './provider/request-payload.js';
+import { resolveDefaultModel } from './usage/default-model.js';
 import {
   loadSettings,
   providerModelRouting,
@@ -86,8 +87,11 @@ export interface CreateAgentRuntimeOptions {
 /** Creates the shared model/tool runtime without depending on a terminal UI. */
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}): Promise<AgentEnvironment> {
   const settings = loadSettings();
-  const providerId = options.initialModel?.providerId ?? settings.defaultProvider;
-  const modelId = options.initialModel?.modelId ?? settings.defaultModel;
+  // A session's initial model wins; otherwise the default is explicit or, when
+  // unset, the most-used usable model from recorded usage.
+  const defaultChoice = options.initialModel ?? resolveDefaultModel(settings);
+  const providerId = defaultChoice?.providerId ?? '';
+  const modelId = defaultChoice?.modelId ?? '';
   const provider = settings.providers[providerId];
   if (!providerId || !modelId || !provider?.enabled || !providerIsConfigured(providerId, provider)) {
     throw new Error('No ready default provider and model. Run `ranite setup` first.');
@@ -376,10 +380,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
           if (runtimeClosed) throw new Error('The runtime is closed.');
           const latest = loadSettings();
           await applyModel(latest, nextProviderId, nextModelId);
+          // A selection belongs to this session: the global default changes only
+          // through the explicit settings commands, never by picking a model.
           rememberProviderModel(latest, latest.defaultProvider, latest.defaultModel);
           rememberProviderModel(latest, nextProviderId, nextModelId);
-          latest.defaultProvider = nextProviderId;
-          latest.defaultModel = nextModelId;
           saveSettings(latest);
         });
         settingsReload = select.catch(() => {});

@@ -2,6 +2,7 @@ import { rememberProviderModel, saveSettings, type SettingsStore } from '../sett
 import { canUseTools, listCatalogModels } from '../provider/registry.js';
 import { isCatalogLoaded } from '../provider/catalog.js';
 import { providerIsConfigured } from '../provider/registry.js';
+import { resolveDefaultModel } from '../usage/default-model.js';
 
 export { defaultModelIsUsable } from '../provider/registry.js';
 // Settings mutations live beside the settings they mutate; re-exported so the
@@ -110,8 +111,11 @@ export function readiness(settings: SettingsStore): ReadinessReport {
     hints.push('Load it: ranite config  (needs network or a warm cache)');
   }
 
-  if (!settings.defaultProvider || !settings.defaultModel) {
+  const defaultChoice = resolveDefaultModel(settings);
+  if (!defaultChoice) {
     hints.push('No default model is selected, so ranite --c will not run.');
+  } else if (defaultChoice.source === 'usage') {
+    hints.push(`Default model comes from usage: ${defaultChoice.providerId} / ${defaultChoice.modelId}.`);
   }
 
   return { ready: problems.length === 0, problems, hints };
