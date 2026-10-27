@@ -250,6 +250,151 @@ describe('owner replies and safe steering', () => {
     expect(() => session!.manageQueuedMessage('missing', 'steer', session!.getSnapshot().session.id)).toThrow('no running task');
   });
 
+  it('admits an explicitly steered message even when the current model request finishes without tools', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          started = true;
+          await gate;
+          return fixtureText('Initial response.');
+        })
+        .mockImplementationOnce(async () => fixtureText('Updated response.')),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model), undefined, { sessionWorkspaceRoot: null });
+    const communication = { source: 'terminal' as const, replyTo: { channel: 'terminal' as const } };
+    const first = session.sendMessage({ text: 'Original request', images: [], communication }, preferences);
+    await vi.waitFor(() => expect(started).toBe(true));
+    const second = session.sendMessage({ text: 'Change the current request', images: [], communication }, preferences);
+    const queued = session.getSnapshot().queuedMessages[0]!;
+    session.manageQueuedMessage(queued.id!, 'steer', session.getSnapshot().session.id);
+    release();
+    await Promise.all([first, second]);
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doStreamCalls[1]!.prompt)).toContain('follow-up steering for the task already in progress');
+    expect(JSON.stringify(model.doStreamCalls[1]!.prompt)).toContain('Change the current request');
+    const users = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'user');
+    expect(users).toHaveLength(2);
+    expect(users[1]!.turnId).toBe(users[0]!.turnId);
+    expect(session.getSnapshot().queuedMessageCount).toBe(0);
+  });
+
+  it.each(['terminal', 'web'] as const)(
+    'steers %s owner corrections into workspace-bound runs after a parallel tool batch',
+    async (source) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let started = 0;
+      const registry = new ToolRegistry();
+      registry.register({
+        providerId: 'host',
+        name: 'inspect',
+        description: 'Fixture',
+        inputSchema: { type: 'object', properties: {} },
+        effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+        autoApprove: () => true,
+        execute: async () => {
+          started += 1;
+          await gate;
+          return { message: 'Tool batch completed' };
+        },
+      });
+      const model = new MockLanguageModelV3({
+        doGenerate: async () => titleResponse(),
+        doStream: vi
+          .fn()
+          .mockImplementationOnce(async () =>
+            delayedStream(
+              [
+                { type: 'tool-call', toolCallId: 'one', toolName: 'inspect', input: '{}' },
+                { type: 'tool-call', toolCallId: 'two', toolName: 'inspect', input: '{}' },
+              ],
+              'tool-calls',
+            ),
+          )
+          .mockImplementationOnce(async () => fixtureText('Revised the running task.')),
+      });
+      const { AgentSessionController } = await import('../src/agent-session.js');
+      // Unlike a custodian chat, a workspace controller has a non-null scope.
+      session = new AgentSessionController(runtimeFor(model, registry));
+      const communication = { source, replyTo: { channel: 'terminal' as const } };
+      const first = session.sendMessage({ text: 'Inspect the project.', images: [], communication }, preferences);
+      await vi.waitFor(() => expect(started).toBeGreaterThan(0));
+      const second = session.sendMessage({ text: 'Steer: inspect only, do not edit.', images: [], communication }, preferences);
+      const id = session.getSnapshot().queuedMessages[0]!.id!;
+      session.manageQueuedMessage(id, 'steer', session.getSnapshot().session.id);
+      release();
+      await Promise.all([first, second]);
+      expect(started).toBe(2);
+      expect(model.doStreamCalls).toHaveLength(2);
+      const prompt = JSON.stringify(model.doStreamCalls[1]!.prompt);
+      expect(prompt).toContain('Steer: inspect only, do not edit.');
+      expect(prompt).toContain('follow-up steering for the task already in progress');
+      const users = session.getSnapshot().session.entries.filter((entry) => entry.kind === 'user');
+      expect(users[1]!.turnId).toBe(users[0]!.turnId);
+    },
+  );
+
+  it('does not let an incompatible notification block a later valid owner steer', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const registry = new ToolRegistry();
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'Fixture',
+      inputSchema: { type: 'object', properties: {} },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => {
+        started = true;
+        await gate;
+        return { message: 'Evidence' };
+      },
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi
+        .fn()
+        .mockImplementationOnce(async () =>
+          delayedStream([{ type: 'tool-call', toolCallId: 'one', toolName: 'inspect', input: '{}' }], 'tool-calls'),
+        )
+        .mockImplementationOnce(async () => fixtureText('Revised first task.'))
+        .mockImplementationOnce(async () => fixtureText('Handled notification.')),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
+    const communication = { source: 'terminal' as const, replyTo: { channel: 'terminal' as const } };
+    const first = session.sendMessage({ text: 'Initial task', images: [], communication }, preferences);
+    await vi.waitFor(() => expect(started).toBe(true));
+    const notification = session.sendEvent(
+      { text: 'UNRELATED_NOTIFICATION', images: [], communication: { source: 'inbox' } },
+      { ...preferences, reasoningVariantId: 'different' },
+    );
+    const correction = session.sendMessage({ text: 'OWNER_CORRECTION', images: [], communication }, preferences);
+    const owner = session.getSnapshot().queuedMessages.find((message) => message.text === 'OWNER_CORRECTION')!;
+    session.manageQueuedMessage(owner.id!, 'steer', session.getSnapshot().session.id);
+    release();
+    await Promise.all([first, notification, correction]);
+    expect(model.doStreamCalls).toHaveLength(3);
+    const active = JSON.stringify(model.doStreamCalls[1]!.prompt);
+    expect(active).toContain('OWNER_CORRECTION');
+    expect(active).not.toContain('UNRELATED_NOTIFICATION');
+    expect(JSON.stringify(model.doStreamCalls[2]!.prompt)).toContain('UNRELATED_NOTIFICATION');
+  });
+
   it('steers actual owner text after tool results, shares one reply, and excludes tool traces', async () => {
     let started = false;
     let release!: () => void;

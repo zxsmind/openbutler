@@ -239,6 +239,8 @@ export class AgentSessionController implements AgentSessionClient {
   private readonly queuedMessages: QueuedTurn[] = [];
   /** Id of the user message whose turn is currently producing entries. */
   private activeTurnId: string | undefined;
+  /** Owner message currently executing; steering must target its route and scope. */
+  private activeSteeringMessage: QueuedMessage | null = null;
   /**
    * Set by an Esc-style stop: queued messages are kept visible in the chat but
    * never start a run on their own. The next explicit send releases the hold
@@ -1313,12 +1315,39 @@ export class AgentSessionController implements AgentSessionClient {
     return this.enqueueMessage(message, preferences, true);
   }
 
+  /** Steer only across a compatible response route, workspace and reasoning mode. */
+  private canAdmitSteering(turn: QueuedTurn, current: QueuedMessage): boolean {
+    if (!turn.steering) return false;
+    const source = turn.message.communication?.source;
+    const localOwner = !turn.automatic && (source === undefined || source === 'terminal' || source === 'web');
+    const notification = source === 'inbox' || source === 'owner-inbox' || source === 'team' || source === 'worker';
+    const currentRoute = current.communication?.replyTo;
+    const nextRoute = turn.message.communication?.replyTo;
+    const sameRoute = sameReplyRoute(currentRoute, nextRoute) || (!currentRoute && !nextRoute && localOwner);
+    const live = this.liveTurnPreferences();
+    return (
+      (this.options.sessionWorkspaceRoot === null || localOwner || source === 'inbox' || source === 'worker') &&
+      (notification || sameRoute) &&
+      (turn.message.workspaceRoot ?? this.runtime.workspaceRoot) === (current.workspaceRoot ?? this.runtime.workspaceRoot) &&
+      turn.message.projectContext?.id === current.projectContext?.id &&
+      turn.preferences.reasoningVariantId === live.reasoningVariantId &&
+      turn.preferences.showReasoning === live.showReasoning
+    );
+  }
+
   manageQueuedMessage(id: string, action: 'steer' | 'remove', sessionId: string): void {
     if (this.session.id !== sessionId) throw new Error('The active session has changed.');
     if (action === 'steer' && !this.busy) throw new Error('There is no running task to steer.');
     const index = this.queuedMessages.findIndex((turn) => turn.id === id && !turn.entryAdded && !turn.automatic);
     if (index < 0) throw new Error('This message is no longer queued.');
     if (action === 'steer' && this.queuedMessages[index]!.steering) return;
+    if (
+      action === 'steer' &&
+      this.activeSteeringMessage &&
+      !this.canAdmitSteering({ ...this.queuedMessages[index]!, steering: true }, this.activeSteeringMessage)
+    ) {
+      throw new Error('This message cannot steer the current reply route, workspace or reasoning mode. It remains queued.');
+    }
     const [turn] = this.queuedMessages.splice(index, 1);
     if (action === 'remove') turn.resolve();
     else {
@@ -1466,6 +1495,7 @@ export class AgentSessionController implements AgentSessionClient {
       while (nextTurn) {
         const currentTurn = nextTurn;
         activeTurn = currentTurn;
+        this.activeSteeringMessage = null;
         if (!(await this.prepareQueuedTurn(currentTurn, abortController.signal))) {
           activeTurn = null;
           if (abortController.signal.aborted) break;
@@ -1493,6 +1523,7 @@ export class AgentSessionController implements AgentSessionClient {
           else if (current.workspaceRoot !== this.runtime.workspaceRoot)
             throw new Error('This session runtime cannot change workspace scope.');
         }
+        this.activeSteeringMessage = current;
         this.currentReviewAuthorization = current.reviewAuthorization ?? null;
         this.activeEventId = current.eventId;
         this.reportTurnProgress({ kind: 'start' });
@@ -1660,25 +1691,11 @@ export class AgentSessionController implements AgentSessionClient {
                 // Ordinary owner messages wait for the next turn; only opted-in steering enters here.
                 const admitted: ReturnType<typeof queuedUserMessageToModelMessage>[] = [];
                 for (;;) {
-                  const index = this.queuedMessages.findIndex((turn) => turn.steering);
-                  const next = this.queuedMessages[index];
-                  const live = this.liveTurnPreferences();
-                  if (
-                    (this.options.sessionWorkspaceRoot !== null &&
-                      next?.message.communication?.source !== 'inbox' &&
-                      next?.message.communication?.source !== 'worker') ||
-                    !next ||
-                    (next.message.communication?.source !== 'inbox' &&
-                      next.message.communication?.source !== 'owner-inbox' &&
-                      next.message.communication?.source !== 'team' &&
-                      next.message.communication?.source !== 'worker' &&
-                      !sameReplyRoute(current.communication?.replyTo, next.message.communication?.replyTo)) ||
-                    (next.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot) ||
-                    next.message.projectContext?.id !== current.projectContext?.id ||
-                    next.preferences.reasoningVariantId !== live.reasoningVariantId ||
-                    next.preferences.showReasoning !== live.showReasoning
-                  )
-                    break;
+                  // Skip incompatible steering rather than letting one queued
+                  // message block later eligible owner corrections or notifications.
+                  const index = this.queuedMessages.findIndex((turn) => this.canAdmitSteering(turn, current));
+                  if (index < 0) break;
+                  const next = this.queuedMessages[index]!;
                   this.queuedMessages.splice(index, 1);
                   if (!(await this.prepareQueuedTurn(next, abortController.signal))) {
                     if (abortController.signal.aborted) break;
@@ -1738,6 +1755,14 @@ export class AgentSessionController implements AgentSessionClient {
             }
             if (tools.shouldRestart()) refreshTools = true;
             else if (tools.shouldStop()) this.addNotice('The tool call was denied; this run has stopped.', 'warn');
+            else if (this.queuedMessages.some((turn) => this.canAdmitSteering(turn, current))) {
+              // A provider may finish the current request without another SDK
+              // prepareStep (for example after a parallel batch or final text).
+              // Start a new model request in this same turn so the explicitly
+              // promoted message enters before the run is marked complete.
+              refreshTools = true;
+              finalResponseReceived = false;
+            }
           } catch (error) {
             this.flushStreamedEntries();
             this.flushEventAssistantText();
@@ -1812,6 +1837,7 @@ export class AgentSessionController implements AgentSessionClient {
         runTurnId = undefined;
         currentTurn.resolve();
         settleSteeredTurns(current.eventId);
+        this.activeSteeringMessage = null;
         activeTurn = null;
         if (abortController.signal.aborted) break;
         nextTurn = this.queuedMessages.shift() ?? null;
@@ -1856,6 +1882,7 @@ export class AgentSessionController implements AgentSessionClient {
       this.activeEventId = undefined;
       this.busy = false;
       this.activeTurnId = undefined;
+      this.activeSteeringMessage = null;
       this.activeTurnPreferences = null;
       // No run is active any more, so a late retry event must not write here.
       this.runtime.reportRetry?.(null);
