@@ -1340,24 +1340,33 @@ export class AgentSessionController implements AgentSessionClient {
     return this.enqueueMessage(message, preferences, true);
   }
 
-  /** Steer only across a compatible response route, workspace and reasoning mode. */
-  private canAdmitSteering(turn: QueuedTurn, current: QueuedMessage): boolean {
-    if (!turn.steering) return false;
+  /**
+   * Why a queued message cannot join the running task right now; null when it
+   * can. The live run's effort governs every steered message, so an effort
+   * difference is never a reason to refuse — only a different destination,
+   * workspace or project is.
+   */
+  private steeringRefusal(turn: QueuedTurn, current: QueuedMessage): string | null {
     const source = turn.message.communication?.source;
     const localOwner = !turn.automatic && (source === undefined || source === 'terminal' || source === 'web');
     const notification = source === 'inbox' || source === 'owner-inbox' || source === 'team' || source === 'worker';
     const currentRoute = current.communication?.replyTo;
     const nextRoute = turn.message.communication?.replyTo;
     const sameRoute = sameReplyRoute(currentRoute, nextRoute) || (!currentRoute && !nextRoute && localOwner);
-    const live = this.liveTurnPreferences();
-    return (
-      (this.options.sessionWorkspaceRoot === null || localOwner || source === 'inbox' || source === 'worker') &&
-      (notification || sameRoute) &&
-      (turn.message.workspaceRoot ?? this.runtime.workspaceRoot) === (current.workspaceRoot ?? this.runtime.workspaceRoot) &&
-      turn.message.projectContext?.id === current.projectContext?.id &&
-      turn.preferences.reasoningVariantId === live.reasoningVariantId &&
-      turn.preferences.showReasoning === live.showReasoning
-    );
+    if (!(this.options.sessionWorkspaceRoot === null || localOwner || source === 'inbox' || source === 'worker'))
+      return "This message's source cannot steer this task. It stays queued and runs next.";
+    if (!(notification || sameRoute))
+      return 'This message replies to a different destination than the running task. It stays queued and runs next.';
+    if ((turn.message.workspaceRoot ?? this.runtime.workspaceRoot) !== (current.workspaceRoot ?? this.runtime.workspaceRoot))
+      return 'This message targets a different workspace than the running task. It stays queued and runs next.';
+    if (turn.message.projectContext?.id !== current.projectContext?.id)
+      return 'This message targets a different project than the running task. It stays queued and runs next.';
+    return null;
+  }
+
+  /** Steer only across a compatible response route, workspace and project. */
+  private canAdmitSteering(turn: QueuedTurn, current: QueuedMessage): boolean {
+    return turn.steering && this.steeringRefusal(turn, current) === null;
   }
 
   manageQueuedMessage(id: string, action: 'steer' | 'remove', sessionId: string): void {
@@ -1366,12 +1375,9 @@ export class AgentSessionController implements AgentSessionClient {
     const index = this.queuedMessages.findIndex((turn) => turn.id === id && !turn.entryAdded && !turn.automatic);
     if (index < 0) throw new Error('This message is no longer queued.');
     if (action === 'steer' && this.queuedMessages[index]!.steering) return;
-    if (
-      action === 'steer' &&
-      this.activeSteeringMessage &&
-      !this.canAdmitSteering({ ...this.queuedMessages[index]!, steering: true }, this.activeSteeringMessage)
-    ) {
-      throw new Error('This message cannot steer the current reply route, workspace or reasoning mode. It remains queued.');
+    if (action === 'steer' && this.activeSteeringMessage) {
+      const refusal = this.steeringRefusal({ ...this.queuedMessages[index]!, steering: true }, this.activeSteeringMessage);
+      if (refusal) throw new Error(refusal);
     }
     const [turn] = this.queuedMessages.splice(index, 1);
     if (action === 'remove') turn.resolve();

@@ -380,7 +380,14 @@ describe('owner replies and safe steering', () => {
     const first = session.sendMessage({ text: 'Initial task', images: [], communication }, preferences);
     await vi.waitFor(() => expect(started).toBe(true));
     const notification = session.sendEvent(
-      { text: 'UNRELATED_NOTIFICATION', images: [], communication: { source: 'inbox' } },
+      {
+        text: 'UNRELATED_NOTIFICATION',
+        images: [],
+        communication: { source: 'inbox' },
+        // A foreign project is what makes this notification incompatible; an
+        // effort difference alone never does (the live run governs effort).
+        projectContext: { id: 'project-other', name: 'Other', folders: [] },
+      },
       { ...preferences, reasoningVariantId: 'different' },
     );
     const correction = session.sendMessage({ text: 'OWNER_CORRECTION', images: [], communication }, preferences);
@@ -393,6 +400,71 @@ describe('owner replies and safe steering', () => {
     expect(active).toContain('OWNER_CORRECTION');
     expect(active).not.toContain('UNRELATED_NOTIFICATION');
     expect(JSON.stringify(model.doStreamCalls[2]!.prompt)).toContain('UNRELATED_NOTIFICATION');
+  });
+
+  it('admits a steer whose effort differs from the running turn but refuses a foreign project', async () => {
+    let started = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registry = new ToolRegistry();
+    registry.register({
+      providerId: 'host',
+      name: 'inspect',
+      description: 'Fixture',
+      inputSchema: { type: 'object', properties: {} },
+      effect: { change: 'none', data: 'local', network: 'none', reversible: 'full', outbound: 'model' },
+      autoApprove: () => true,
+      execute: async () => {
+        started = true;
+        await gate;
+        return { message: 'Evidence' };
+      },
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: vi
+        .fn()
+        .mockImplementationOnce(async () =>
+          delayedStream([{ type: 'tool-call', toolCallId: 'one', toolName: 'inspect', input: '{}' }], 'tool-calls'),
+        )
+        .mockImplementationOnce(async () => fixtureText('Handled with the new effort.'))
+        .mockImplementationOnce(async () => fixtureText('Handled in the other project.')),
+    });
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(model, registry), undefined, { sessionWorkspaceRoot: null });
+    const communication = { source: 'terminal' as const, replyTo: { channel: 'terminal' as const } };
+    const first = session.sendMessage({ text: 'Initial task', images: [], communication }, preferences);
+    await vi.waitFor(() => expect(started).toBe(true));
+
+    // The running turn governs the live effort, so a queued message carrying another
+    // effort must still be admitted — the owner changed the setting, newest wins.
+    const correction = session.sendMessage(
+      { text: 'Narrow it to the failing case.', images: [], communication },
+      { ...preferences, reasoningVariantId: 'high' },
+    );
+    const queued = session.getSnapshot().queuedMessages[0]!;
+    expect(queued.steering).toBe(false);
+    session.manageQueuedMessage(queued.id!, 'steer', session.getSnapshot().session.id);
+    expect(session.getSnapshot().queuedMessages[0]!.steering).toBe(true);
+
+    // A different project is a real incompatibility: it stays queued.
+    const foreign = session.sendMessage(
+      { text: 'Start something else.', images: [], communication, projectContext: { id: 'project-x', name: 'Other', folders: [] } },
+      preferences,
+    );
+    const foreignQueued = session.getSnapshot().queuedMessages.find((message) => message.text === 'Start something else.')!;
+    expect(() => session!.manageQueuedMessage(foreignQueued.id!, 'steer', session!.getSnapshot().session.id)).toThrow('different project');
+    expect(session.getSnapshot().queuedMessages.some((message) => message.text === 'Start something else.' && !message.steering)).toBe(
+      true,
+    );
+
+    release();
+    await Promise.all([first, correction, foreign]);
+    expect(model.doStreamCalls).toHaveLength(3);
+    expect(JSON.stringify(model.doStreamCalls[1]!.prompt)).toContain('Narrow it to the failing case.');
+    expect(JSON.stringify(model.doStreamCalls[2]!.prompt)).toContain('Start something else.');
   });
 
   it('steers actual owner text after tool results, shares one reply, and excludes tool traces', async () => {
