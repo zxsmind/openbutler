@@ -1,4 +1,5 @@
 import { toolEntryDetails } from '../tool-display.js';
+import { dividerLabel } from '../divider-label.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { savedSessionFilePath } from '../session-paths.js';
@@ -224,7 +225,10 @@ function projectEntry(entry: TranscriptEntry, index: number): { value: Record<st
       truncated: command.truncated || result.truncated,
     };
   }
-  const text = truncateText(redactSensitiveText(entry.kind === 'compaction' ? compactionText(entry) : entry.text), MAX_ENTRY_TEXT_CHARS);
+  const text = truncateText(
+    redactSensitiveText(entry.kind === 'compaction' ? compactionText(entry) : entry.kind === 'divider' ? dividerLabel(entry) : entry.text),
+    MAX_ENTRY_TEXT_CHARS,
+  );
   return {
     value: {
       index,

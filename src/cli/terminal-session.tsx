@@ -1,4 +1,5 @@
 import { toolEntryCommand, toolEntryDetails } from '../tool-display.js';
+import { dividerLabel } from '../divider-label.js';
 import { Transform } from 'node:stream';
 import { Box, measureElement, render, Text, useApp, useBoxMetrics, useInput, usePaste, useWindowSize, type DOMElement } from 'ink';
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -2967,7 +2968,7 @@ export function estimateTranscriptEntryHeight(
       1
     );
   }
-  const noticeText = entry.kind === 'compaction' ? compactionLabel(entry) : entry.text;
+  const noticeText = entry.kind === 'compaction' ? compactionLabel(entry) : dividerLabel(entry);
   if (entry.kind === 'notice' && entry.detail) {
     const showDetail = expandedNotice || !mouseSupported;
     return wrappedRows(clipped(noticeText, 1_200), width - 2) + (showDetail ? wrappedRows(entry.detail, width - 4) : 0) + 1;
@@ -3139,7 +3140,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({
   }
 
   if (entry.kind === 'divider' || entry.kind === 'compaction') {
-    const label = clipped(entry.kind === 'compaction' ? compactionLabel(entry) : (entry.text ?? ''), Math.max(8, width - 4));
+    const label = clipped(entry.kind === 'compaction' ? compactionLabel(entry) : dividerLabel(entry), Math.max(8, width - 4));
     const fill = Math.max(0, width - label.length - 3);
     const left = Math.floor(fill / 2);
     return (

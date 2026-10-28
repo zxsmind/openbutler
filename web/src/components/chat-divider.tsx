@@ -1,12 +1,14 @@
+import { dividerLabel } from '../../../src/divider-label.js';
+
 /**
- * A stored transcript boundary: a settings change the backend announced or the
- * day a message opened. The text arrives with the entry, so every client draws
- * the same line without deciding anything.
+ * The global transcript boundary: a settings statement, a compaction or a day
+ * break. Day labels are derived from the stored moment at render time by the
+ * shared rule, so the web and the terminal always read the same words.
  */
-export function ChatDivider({ text }: { text: string }) {
+export function ChatDivider({ entry }: { entry: { at?: number | undefined; text?: string | undefined } }) {
   return (
     <div className="chat-divider" role="separator" data-divider="">
-      <span>{text}</span>
+      <span>{dividerLabel(entry)}</span>
     </div>
   );
 }

@@ -125,12 +125,15 @@ it('keeps a divider row through save and load', async () => {
   try {
     const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
     const entries = [
+      { kind: 'divider' as const },
       { kind: 'divider' as const, text: 'Wednesday 03:49' },
       { kind: 'user' as const, text: 'after the boundary' },
     ];
     const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries });
     const restored = loadSavedSession(saved.id)!;
-    expect(restored.entries[0]).toMatchObject({ kind: 'divider', text: 'Wednesday 03:49' });
+    expect(restored.entries[0]).toMatchObject({ kind: 'divider' });
+    expect(restored.entries[0]).not.toHaveProperty('text');
+    expect(restored.entries[1]).toMatchObject({ kind: 'divider', text: 'Wednesday 03:49' });
   } finally {
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });

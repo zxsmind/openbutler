@@ -46,7 +46,7 @@ function CompactionRow({ entry }: { entry: Entry }) {
       : entry.beforeTokens !== undefined
         ? `${formatTokens(entry.beforeTokens)} → …`
         : null;
-  return <ChatDivider text={sizes ? `${label} · ${sizes}` : label} />;
+  return <ChatDivider entry={{ text: sizes ? `${label} · ${sizes}` : label }} />;
 }
 
 function failed(entry: Entry): boolean {
@@ -258,7 +258,7 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
         ) : null;
       })}
       {leadingDividers.map((group, index) => (
-        <ChatDivider key={`leading-divider-${index}`} text={group.entry.text ?? ''} />
+        <ChatDivider key={`leading-divider-${index}`} entry={group.entry} />
       ))}
       {workDetails.length > 0 ? (
         <button
@@ -288,7 +288,7 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
               />
             );
           if (group.kind === 'compaction') return <CompactionRow key={`compaction-${index}`} entry={group.entry} />;
-          if (group.kind === 'divider') return <ChatDivider key={`divider-${index}`} text={group.entry.text ?? ''} />;
+          if (group.kind === 'divider') return <ChatDivider key={`divider-${index}`} entry={group.entry} />;
           const entry = group.entry;
           // A message the owner sent into a running turn is still their words, not
           // a notice: it renders like the opening ask, in its place in the timeline.
@@ -320,7 +320,7 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
         </div>
       ) : null}
       {afterword.map((entry, index) => (
-        <ChatDivider key={`afterword-divider-${index}`} text={entry.text ?? ''} />
+        <ChatDivider key={`afterword-divider-${index}`} entry={entry} />
       ))}
     </section>
   );

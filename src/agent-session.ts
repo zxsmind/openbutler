@@ -556,9 +556,9 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   /**
-   * Day boundary above the next message. The label is absolute (weekday plus
-   * local time) because a stored divider is read on later days, where a stored
-   * "Today" would be a lie.
+   * Day boundary above the next message. Only the moment is stored; the shared
+   * divider label turns it into Today/Yesterday/weekday at read time, so the
+   * same entry reads correctly on later days in every client.
    */
   private ensureTimeDivider(): void {
     const now = new Date();
@@ -571,9 +571,7 @@ export class AgentSessionController implements AgentSessionClient {
       }
     }
     if (last !== undefined && new Date(last).toDateString() === now.toDateString()) return;
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const pad = (value: number) => String(value).padStart(2, '0');
-    this.addDivider(`${days[now.getDay()]} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
+    this.addEntry({ kind: 'divider' });
   }
 
   listSessions(): SessionSummary[] {

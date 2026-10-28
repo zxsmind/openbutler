@@ -371,7 +371,7 @@ export class SessionIndex {
       if (entry.kind === 'tool') {
         if (toolEntryDetails(entry).trim()) rows.push(indexedRow(entryNumber, 0, 'command', toolEntryDetails(entry)));
         if (entry.result.trim()) rows.push(indexedRow(entryNumber, 1, 'output', entry.result));
-      } else if (entry.text.trim()) {
+      } else if (entry.text?.trim()) {
         rows.push(indexedRow(entryNumber, 0, entry.kind, entry.text));
       }
     }

@@ -2218,21 +2218,30 @@ describe('stored transcript dividers', () => {
       .getSnapshot()
       .session.entries.filter(
         (entry): entry is Extract<SessionEntry, { kind: 'divider' }> =>
-          entry.kind === 'divider' && (typeof prefix === 'string' ? entry.text.startsWith(prefix) : prefix.test(entry.text)),
+          entry.kind === 'divider' &&
+          entry.text !== undefined &&
+          (typeof prefix === 'string' ? entry.text.startsWith(prefix) : prefix.test(entry.text)),
       );
 
-  it('writes one absolute day divider above the first message and stays quiet the same day', async () => {
+  const dayDividersOf = (session: AgentSessionController) =>
+    session
+      .getSnapshot()
+      .session.entries.filter(
+        (entry): entry is Extract<SessionEntry, { kind: 'divider' }> => entry.kind === 'divider' && entry.text === undefined,
+      );
+
+  it('stores one day divider above the first message and stays quiet the same day', async () => {
     const { AgentSessionController } = await import('../src/agent-session.js');
     session = new AgentSessionController(runtimeFor(dividerModel()));
     await session.sendMessage({ text: 'First message', images: [] }, preferences);
     await session.waitUntilIdle(1000);
-    const dayDividers = dividersOf(session, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) /);
+    const dayDividers = dayDividersOf(session);
     expect(dayDividers).toHaveLength(1);
-    expect(dayDividers[0]!.text).toMatch(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) \d{2}:\d{2}$/);
+    expect(Math.abs((dayDividers[0]!.at ?? 0) - Date.now())).toBeLessThan(60_000);
 
     await session.sendMessage({ text: 'Second message', images: [] }, preferences);
     await session.waitUntilIdle(1000);
-    expect(dividersOf(session, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) /)).toHaveLength(1);
+    expect(dayDividersOf(session)).toHaveLength(1);
 
     const entries = session.getSnapshot().session.entries;
     const dividerIndex = entries.findIndex((entry) => entry.kind === 'divider');
@@ -2245,7 +2254,7 @@ describe('stored transcript dividers', () => {
     session.addEntry({ kind: 'notice', text: 'archived earlier', at: Date.now() - 2 * 86_400_000 });
     await session.sendMessage({ text: 'Back after a gap', images: [] }, preferences);
     await session.waitUntilIdle(1000);
-    const dayDividers = dividersOf(session, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) /);
+    const dayDividers = dayDividersOf(session);
     expect(dayDividers).toHaveLength(1);
     const entries = session.getSnapshot().session.entries;
     expect(entries.indexOf(dayDividers[0]!)).toBeLessThan(entries.findIndex((entry) => entry.kind === 'user'));

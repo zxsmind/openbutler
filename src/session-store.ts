@@ -69,7 +69,7 @@ type SessionEntryBody =
     }
   | { kind: 'assistant'; text: string }
   | { kind: 'notice'; text: string; detail?: string; tone?: NoticeTone }
-  | { kind: 'divider'; text: string }
+  | { kind: 'divider'; text?: string }
   | { kind: 'reasoning'; text: string; durationMs?: number }
   | {
       // Compaction is a visible event in the transcript: it changes how much
@@ -624,8 +624,11 @@ function isSessionEntry(value: unknown): value is SessionEntry {
       (value.afterTokens === undefined ||
         (typeof value.afterTokens === 'number' && Number.isSafeInteger(value.afterTokens) && value.afterTokens >= 0))
     );
+  if (value.kind === 'divider')
+    // A day divider carries only its moment; a statement divider carries words.
+    return value.text === undefined || typeof value.text === 'string';
   return (
-    ['assistant', 'notice', 'reasoning', 'divider'].includes(String(value.kind)) &&
+    ['assistant', 'notice', 'reasoning'].includes(String(value.kind)) &&
     typeof value.text === 'string' &&
     (value.internal === undefined || value.internal === 'compaction') &&
     // A reasoning entry may carry how long the model thought, so the transcript
