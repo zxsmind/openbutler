@@ -9,6 +9,7 @@ import { Collapsible } from './components/collapsible.js';
 import { Icon } from './components/ui.js';
 import { Feedback } from './components/feedback.js';
 import { MessageAttachments } from './components/message-attachments.js';
+import { ChatDivider } from './components/chat-divider.js';
 import {
   activeGroupIndex,
   formatDuration,
@@ -227,10 +228,14 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const detailsId = useId();
   const groups = groupTimeline(turn);
-  const { details, answer } = turnContents(turn);
+  const { details, answer, afterword } = turnContents(turn);
   const firstWork = details.findIndex((group) => group.kind !== 'message' || group.entry.kind !== 'user');
   const leadingUsers = details.slice(0, firstWork < 0 ? details.length : firstWork);
   const workDetails = details.slice(leadingUsers.length);
+  // A divider at the head of the work introduces what follows; it must stay
+  // visible instead of folding with the disclosure it opens.
+  const leadingDividers: Array<{ kind: 'divider'; entry: Entry }> = [];
+  while (workDetails[0]?.kind === 'divider') leadingDividers.push(workDetails.shift() as { kind: 'divider'; entry: Entry });
   // A reader's explicit choice takes precedence over the automatic live/finished state.
   const open = expanded ?? (live || workDetails.some((group) => group.kind === 'message' && group.entry.kind === 'user'));
   const duration = live && turn.startedAt !== null ? Math.max(0, Date.now() - turn.startedAt) : turnDuration(turn);
@@ -260,6 +265,9 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
           </div>
         ) : null;
       })}
+      {leadingDividers.map((group, index) => (
+        <ChatDivider key={`leading-divider-${index}`} text={group.entry.text ?? ''} />
+      ))}
       {workDetails.length > 0 ? (
         <button
           type="button"
@@ -288,6 +296,7 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
               />
             );
           if (group.kind === 'compaction') return <CompactionRow key={`compaction-${index}`} entry={group.entry} />;
+          if (group.kind === 'divider') return <ChatDivider key={`divider-${index}`} text={group.entry.text ?? ''} />;
           const entry = group.entry;
           // A message the owner sent into a running turn is still their words, not
           // a notice: it renders like the opening ask, in its place in the timeline.
@@ -318,6 +327,9 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
           </div>
         </div>
       ) : null}
+      {afterword.map((entry, index) => (
+        <ChatDivider key={`afterword-divider-${index}`} text={entry.text ?? ''} />
+      ))}
     </section>
   );
 }

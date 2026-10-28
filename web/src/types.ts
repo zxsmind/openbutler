@@ -1,4 +1,4 @@
-export type EntryKind = 'user' | 'assistant' | 'reasoning' | 'tool' | 'notice' | 'error' | 'system' | 'compaction';
+export type EntryKind = 'user' | 'assistant' | 'reasoning' | 'tool' | 'notice' | 'error' | 'system' | 'compaction' | 'divider';
 export type ApprovalMode = 'workspace' | 'auto-review' | 'full-access';
 export type { Project, ProjectCatalog } from '../../src/projects/types.js';
 import type { SessionProject } from '../../src/projects/types.js';

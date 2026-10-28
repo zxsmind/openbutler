@@ -144,7 +144,11 @@ export function awaitingFirstChunk(turns: Turn[], liveTurnId: string | undefined
   return last !== undefined && last.id === liveTurnId && last.timeline.length === 0;
 }
 
-export type TurnGroup = { kind: 'steps'; entries: Entry[] } | { kind: 'message'; entry: Entry } | { kind: 'compaction'; entry: Entry };
+export type TurnGroup =
+  | { kind: 'steps'; entries: Entry[] }
+  | { kind: 'message'; entry: Entry }
+  | { kind: 'compaction'; entry: Entry }
+  | { kind: 'divider'; entry: Entry };
 /** Work and diagnostics share a group; only conversation messages close it. */
 export function groupTimeline(turn: Turn): TurnGroup[] {
   const groups: TurnGroup[] = [];
@@ -159,6 +163,12 @@ export function groupTimeline(turn: Turn): TurnGroup[] {
     // into a step group would hide the moment the context changed.
     if (entry.kind === 'compaction') {
       groups.push({ kind: 'compaction', entry });
+      continue;
+    }
+    // A divider is a boundary the backend wrote (settings change, day break):
+    // folding it into a step group would hide the moment the context changed.
+    if (entry.kind === 'divider') {
+      groups.push({ kind: 'divider', entry });
       continue;
     }
     const previous = groups[groups.length - 1];
@@ -183,12 +193,17 @@ export function activeGroupIndex(groups: readonly TurnGroup[], current: boolean)
 }
 
 /** Keep the latest answer outside the work disclosure; interrupted text stays in the log. */
-export function turnContents(turn: Turn): { details: TurnGroup[]; answer: Entry | null } {
+export function turnContents(turn: Turn): { details: TurnGroup[]; answer: Entry | null; afterword: Entry[] } {
   const groups = groupTimeline(turn);
   let answerIndex = groups.length - 1;
   // Connection/status notices appended after an answer do not turn it back into work.
+  // Neither do dividers: they record when the transcript changed, not more work.
   while (answerIndex >= 0) {
     const group = groups[answerIndex];
+    if (group.kind === 'divider') {
+      answerIndex--;
+      continue;
+    }
     if (
       group.kind !== 'steps' ||
       !group.entries.every((entry) => (entry.kind === 'notice' || entry.kind === 'system') && entry.tone !== 'error')
@@ -199,7 +214,24 @@ export function turnContents(turn: Turn): { details: TurnGroup[]; answer: Entry 
   const last = groups[answerIndex];
   const interrupted = turn.user?.turnOutcome === 'cancelled' || turn.user?.turnOutcome === 'failed';
   const answer = !interrupted && last?.kind === 'message' && last.entry.kind === 'assistant' && last.entry.text?.trim() ? last.entry : null;
-  return { details: answer ? groups.filter((_, index) => index !== answerIndex) : groups, answer };
+  // Trailing dividers render at section level: folding them with the work would
+  // hide the boundary the reader came back for.
+  const afterword: Entry[] = answer
+    ? groups
+        .slice(answerIndex + 1)
+        .filter((group): group is Extract<TurnGroup, { kind: 'divider' }> => group.kind === 'divider')
+        .map((group) => group.entry)
+    : [];
+  const details = answer
+    ? groups.filter((group, index) => index !== answerIndex && !(index > answerIndex && group.kind === 'divider'))
+    : [...groups];
+  if (!answer) {
+    while (details.length > 0 && details[details.length - 1]!.kind === 'divider') {
+      const tail = details.pop() as Extract<TurnGroup, { kind: 'divider' }>;
+      afterword.unshift(tail.entry);
+    }
+  }
+  return { details, answer, afterword };
 }
 
 /** A thinking block names its own duration, the way the terminal header does. */

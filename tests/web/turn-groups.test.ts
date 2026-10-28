@@ -24,6 +24,43 @@ function onlyTurn(entries: Entry[]) {
   return turn;
 }
 
+describe('divider groups', () => {
+  it('gives a stored divider its own group instead of folding it into work', () => {
+    const groups = groupTimeline(
+      onlyTurn([
+        { kind: 'user', text: 'Task', turnId: 't' },
+        { kind: 'divider', text: 'Reasoning effort changed from "default" to "high"', turnId: 't' },
+        { kind: 'assistant', text: 'Answer', turnId: 't' },
+      ]),
+    );
+    expect(groups.map((group) => group.kind)).toEqual(['divider', 'message']);
+  });
+
+  it('keeps a trailing divider out of the answer and out of the disclosure', () => {
+    const entries: Entry[] = [
+      { kind: 'user', text: 'Task', turnId: 't' },
+      { kind: 'assistant', text: 'Answer', turnId: 't' },
+      { kind: 'divider', text: 'Wednesday 03:49' },
+    ];
+    const { details, answer, afterword } = turnContents(onlyTurn(entries));
+    expect(answer?.text).toBe('Answer');
+    expect(afterword.map((entry) => entry.text)).toEqual(['Wednesday 03:49']);
+    expect(details.some((group) => group.kind === 'divider')).toBe(false);
+  });
+
+  it('does not let a divider between the answer and a notice swallow the answer', () => {
+    const turn = onlyTurn([
+      { kind: 'user', text: 'Task', turnId: 't' },
+      { kind: 'assistant', text: 'Answer', turnId: 't' },
+      { kind: 'divider', text: 'Model changed from "a" to "b"', turnId: 't' },
+      { kind: 'notice', text: 'Reconnected', turnId: 't' },
+    ]);
+    const { answer, afterword } = turnContents(turn);
+    expect(answer?.text).toBe('Answer');
+    expect(afterword.map((entry) => entry.text)).toEqual(['Model changed from "a" to "b"']);
+  });
+});
+
 describe('whole-turn disclosure', () => {
   it('keeps commentary, steering and tools in details and leaves only the final answer outside', () => {
     const entries: Entry[] = [

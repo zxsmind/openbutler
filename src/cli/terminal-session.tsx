@@ -3138,6 +3138,17 @@ export const TranscriptEntry = memo(function TranscriptEntry({
     );
   }
 
+  if (entry.kind === 'divider') {
+    const label = clipped(entry.text ?? '', Math.max(8, width - 4));
+    const fill = Math.max(0, width - label.length - 3);
+    const left = Math.floor(fill / 2);
+    return (
+      <Box width="100%" marginBottom={1} flexShrink={0}>
+        <Text dimColor={dimmed}>{`${'─'.repeat(left)} ${label} ${'─'.repeat(Math.max(0, fill - left))}`}</Text>
+      </Box>
+    );
+  }
+
   if (entry.kind === 'notice' && entry.detail) {
     const showDetail = expandedNotice || !mouseSupported;
     const mark = noticeMark(entry.tone, tokens);
