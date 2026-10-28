@@ -60,11 +60,7 @@ export interface ProviderCatalogRow {
   custom: boolean;
 }
 
-/** A provider's models as the settings page sees them: catalog plus activation. */
-export interface ModelCatalogRow {
-  providerId: string;
-  models: Array<{ modelId: string; name: string; active: boolean }>;
-}
+export type { ModelCatalogRow, ModelPresentation } from '../../src/provider/model-types.js';
 
 export interface ApprovalRequest {
   id: string;
@@ -83,6 +79,8 @@ export interface PendingQuestion {
 export interface RuntimeInfo {
   supportsSessionAttachments?: boolean;
   modelName?: string;
+  /** Readable provider name; absent from an older host, so views fall back to providerId. */
+  providerName?: string;
   providerId?: string;
   modelId?: string;
   contextWindowTokens?: number | null;
@@ -124,11 +122,7 @@ export interface SessionInfo {
   workspaceRoot?: string;
 }
 
-export interface ModelChoice {
-  providerId: string;
-  modelId: string;
-  name: string;
-}
+export type { ModelPresentation as ModelChoice } from '../../src/provider/model-types.js';
 
 export interface DraftImage {
   id: string;
@@ -266,5 +260,5 @@ export interface ApprovalsInfo {
   /** Who reviews risky calls in auto-review mode; null means the conversation model. */
   autoReview: { providerId: string | null; modelId: string | null; timeoutSeconds: number | null };
   /** Active models the reviewer may be set to. */
-  models: Array<{ providerId: string; modelId: string }>;
+  models: Array<{ providerId: string; modelId: string; name: string }>;
 }

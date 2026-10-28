@@ -61,7 +61,7 @@ describe('new chat draft lifecycle', () => {
   it('keeps choosing project or model entirely local until the draft is sent', () => {
     const draft = newChatDraft('source', null);
     draft.projectId = 'updated-project';
-    draft.model = { providerId: 'provider', modelId: 'model', name: 'Model' };
+    draft.model = { providerId: 'provider', providerName: 'provider', modelId: 'model', name: 'Model' };
     draft.approvalMode = 'auto-review';
     expect(draft.creation).toBeNull();
     expect(newChatPayload(snapshot('source'), draft.projectId).session.project?.id).toBe('updated-project');

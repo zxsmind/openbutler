@@ -127,12 +127,12 @@ export function ApprovalsSettings() {
     },
     ...(info?.models ?? [])
       .filter((model) =>
-        `${model.providerId} ${model.modelId}`.toLocaleLowerCase('en').includes(reviewQuery.trim().toLocaleLowerCase('en')),
+        `${model.providerId} ${model.modelId} ${model.name}`.toLocaleLowerCase('en').includes(reviewQuery.trim().toLocaleLowerCase('en')),
       )
       .map((model) => ({
         id: `${model.providerId}/${model.modelId}`,
-        label: model.modelId,
-        description: model.providerId,
+        label: model.name,
+        description: `${model.providerId} · ${model.modelId}`,
         selected: info?.autoReview.providerId === model.providerId && info?.autoReview.modelId === model.modelId,
         onSelect: () => {
           setReviewOpen(false);

@@ -18,7 +18,7 @@ export function SessionDetails({ payload, onClose }: { payload: SessionPayload |
         <dt>Model</dt>
         <dd>{runtime?.modelName || runtime?.modelId || '—'}</dd>
         <dt>Provider</dt>
-        <dd>{runtime?.providerId || '—'}</dd>
+        <dd>{runtime?.providerName || runtime?.providerId || '—'}</dd>
         <dt>Workspace</dt>
         <dd>{runtime?.workspaceRoot || '—'}</dd>
         <dt>Permissions</dt>

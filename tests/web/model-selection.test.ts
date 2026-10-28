@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { modelRouteKey, projectModelSelection } from '../../web/src/model-selection.js';
 
 const models = [
-  { providerId: 'first', modelId: 'model', name: 'Model' },
-  { providerId: 'second', modelId: 'model', name: 'Other route' },
+  { providerId: 'first', providerName: 'first', modelId: 'model', name: 'Model' },
+  { providerId: 'second', providerName: 'second', modelId: 'model', name: 'Other route' },
 ];
 const runtime = {
   providerId: 'first',
