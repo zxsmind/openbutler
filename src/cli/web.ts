@@ -41,7 +41,8 @@ const isLoopback = (host: string): boolean => host === '127.0.0.1' || host === '
 export async function runWebCommand(parsed: Parsed): Promise<void> {
   const port = readPort(parsed);
   const host = parsed.flags.get('hostname') ?? DEFAULT_WEB_HOST;
-  const workspaceRoot = resolveServerScope({ explicitDir: parsed.flags.get('dir'), cwd: process.cwd() }).root;
+  const scope = resolveServerScope({ explicitDir: parsed.flags.get('dir'), cwd: process.cwd() });
+  const workspaceRoot = scope.root;
   const wantsPair = parsed.booleans.has('pair') || parsed.flags.get('pair') === 'true';
   const serving = parsed.booleans.has('serve') || parsed.flags.get('serve') === 'true';
 
@@ -54,7 +55,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
       return;
     }
     ui.section('Ranite web');
-    ui.kv('Workspace', workspaceRoot);
+    ui.kv('Workspace', `${workspaceRoot} (from ${scope.source})`);
     try {
       // The browser server attaches to a running host; only daemon verbs start one.
       // Verifying here keeps the friendly message and the vintage warning on this
@@ -86,7 +87,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
   }
 
   ui.section('Ranite web');
-  ui.kv('Workspace', workspaceRoot);
+  ui.kv('Workspace', `${workspaceRoot} (from ${scope.source})`);
   if (host !== DEFAULT_WEB_HOST) {
     ui.warn('This server is reachable from the network. Keep the pairing link private.');
   }

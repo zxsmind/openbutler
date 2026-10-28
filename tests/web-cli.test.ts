@@ -140,6 +140,7 @@ describe('ranite web pairing gate', () => {
     const started = await runCli(['web', '--port', String(port)]);
     expect(started.code, started.stderr).toBe(0);
     expect(started.stdout).toContain('running in the background');
+    expect(started.stdout).toContain('(from launch)');
     expect(started.stdout).toContain(`:${port}`);
     expect(started.stdout).toContain('ranite web --pair');
     expect(started.stdout).not.toContain('one-time link');
