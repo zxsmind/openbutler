@@ -35,6 +35,7 @@ import { connectDaemonSession } from './daemon-client.js';
 import { parseRetentionDuration, selectFilesToPrune } from './retention.js';
 import { getRaniteVersion } from './version.js';
 import { getCatalogIndex } from './provider/catalog.js';
+import { resolveModelName } from './provider/model-presentation.js';
 import {
   findReasoningCatalogMatch,
   listReasoningVariants,
@@ -531,8 +532,8 @@ async function runListModels(parsed: Parsed): Promise<void> {
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : DEFAULT_MODEL_LIMIT;
 
   ui.table(
-    ['PROVIDER', 'MODEL'],
-    shown.slice(0, limit).map((entry) => [entry.providerId, entry.model]),
+    ['PROVIDER', 'MODEL', 'NAME'],
+    shown.slice(0, limit).map((entry) => [entry.providerId, entry.model, resolveModelName(entry.providerId, entry.model, settings)]),
   );
   if (shown.length > limit) {
     ui.line();
@@ -637,9 +638,11 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
   if (vintageWarning) ui.warn(vintageWarning);
   const controller = await connectDaemonSession(workspaceRoot, { isolatedSession: true });
   const runtime = controller.runtime;
+  const destination = runtime.providerName ?? runtime.providerId;
   ui.section('Ranite agent');
   ui.kv('Model', `${runtime.modelName} / ${runtime.modelId}`);
-  ui.info(`Your request, tool definitions, and approved tool results will be sent to ${runtime.modelName}.`);
+  ui.kv('Provider', destination);
+  ui.info(`Your request, tool definitions, and approved tool results will be sent to ${destination}.`);
 
   let runStarted = false;
   let finished = false;
@@ -873,11 +876,12 @@ async function approveToolCall(request: ToolCallRequest, runtime: AgentSessionRu
   ui.line(JSON.stringify(request.input, null, 2));
   const mcpAction =
     request.providerId === 'host' && request.name === 'mcp_manage' && typeof request.input.action === 'string' ? request.input.action : '';
+  const destination = runtime.providerName ?? runtime.providerId;
   ui.warn(
     request.providerId === 'host' && request.name === 'file_read'
-      ? `File contents or image data will be sent to ${runtime.modelName} if you allow this read.`
+      ? `File contents or image data will be sent to ${destination} if you allow this read.`
       : request.providerId === 'host' && request.name === 'grep'
-        ? `Matching lines from local files will be sent to ${runtime.modelName}.`
+        ? `Matching lines from local files will be sent to ${destination}.`
         : request.providerId === 'host' && (request.name === 'file_write' || request.name === 'file_edit')
           ? request.name === 'file_edit'
             ? 'This modifies an existing file in place.'
@@ -886,7 +890,7 @@ async function approveToolCall(request: ToolCallRequest, runtime: AgentSessionRu
             ? 'Ranite will start or contact this MCP server. It receives the configured environment variables; its tools require separate approvals.'
             : mcpAction === 'disconnect' || mcpAction === 'remove'
               ? 'This changes the active global MCP connection and removes its tools from the agent.'
-              : `Tool input goes to ${request.providerId}; its result will be sent to ${runtime.modelName}.`,
+              : `Tool input goes to ${request.providerId}; its result will be sent to ${destination}.`,
   );
   const { select } = await import('@inquirer/prompts');
   const decision = await select({

@@ -13,6 +13,7 @@ import { mergeMarkdownTokenSegments } from './markdown-merge.js';
 import type { ApprovalDecision } from '../agent-session.js';
 import type { AgentSessionClient } from '../agent-session.js';
 import { getCatalogIndex, getProvider, listProviderSummaries } from '../provider/catalog.js';
+import { resolveModelName } from '../provider/model-presentation.js';
 import { listSupportedPackages, listCatalogModels, providerIsConfigured, resolveReasoningVariant } from '../provider/registry.js';
 import { loadSettings, rememberProviderModel } from '../settings.js';
 import { listSavedSessions, type SessionEntry, type SessionSummary, type NoticeTone } from '../session-store.js';
@@ -25,7 +26,7 @@ type Entry = SessionEntry;
 
 type SessionChoice = { kind: 'new' } | { kind: 'saved'; session: SessionSummary };
 type ProviderChoice = { kind: 'catalog' | 'custom' | 'add-custom'; id: string; name: string; modelCount: number };
-type ModelChoice = { providerId: string; modelId: string };
+type ModelChoice = { providerId: string; modelId: string; name?: string };
 type ClipboardImage = { base64: string; mediaType: 'image/png' };
 const MAX_PASTED_TEXT_BYTES = 5 * 1024;
 const MAX_CLIPBOARD_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -2003,7 +2004,7 @@ function ProviderPicker({
             const key = `${providerId}\0${modelId}`;
             if (!modelId || knownChoices.has(key)) return;
             knownChoices.add(key);
-            available.push({ providerId, modelId });
+            available.push({ providerId, modelId, name: resolveModelName(providerId, modelId, settings) });
           };
           for (const entry of listCatalogModels(configuredProviders)) {
             addModel(entry.providerId, entry.model);
@@ -2074,7 +2075,7 @@ function ProviderPicker({
   );
   const normalizedModelSearch = modelSearch.trim().toLocaleLowerCase('en-US');
   const filteredModels = models.filter((model) =>
-    `${getProvider(model.providerId)?.name ?? model.providerId} ${model.providerId} ${model.modelId}`
+    `${getProvider(model.providerId)?.name ?? model.providerId} ${model.providerId} ${model.modelId} ${model.name ?? ''}`
       .toLocaleLowerCase('en-US')
       .includes(normalizedModelSearch),
   );
@@ -2120,7 +2121,7 @@ function ProviderPicker({
         const key = `${providerId}\0${modelId}`;
         if (!modelId || knownChoices.has(key)) return;
         knownChoices.add(key);
-        available.push({ providerId, modelId });
+        available.push({ providerId, modelId, name: resolveModelName(providerId, modelId, latest) });
       };
       for (const entry of listCatalogModels([providerId])) addModel(entry.model);
       for (const modelId of latest.providers[providerId]?.models ?? []) addModel(modelId);
@@ -2546,7 +2547,7 @@ function ProviderPicker({
                     {selected ? `${glyphs.prompt} ` : '  '}
                   </Text>
                   <Text {...(selected ? { color: tokens.onAccent } : { dimColor: true })}>
-                    {enterModelId ? 'Enter model ID…' : `${model?.providerId} / ${model?.modelId}`}
+                    {enterModelId ? 'Enter model ID…' : `${model?.providerId} / ${model?.name ?? model?.modelId}`}
                     {!enterModelId && model?.providerId === currentProviderId && model.modelId === currentModelId ? ' · current' : ''}
                   </Text>
                 </Box>
