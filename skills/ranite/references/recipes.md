@@ -13,10 +13,10 @@ request. [Environment](environment.md), [observability](observability.md).
 
 ## "Open web on this machine"
 
-Choose workspace/port, start `ranite web --dir <directory>`, open the printed
-one-time URL in the intended browser and confirm Connected plus intended chat.
-Keep the web process alive. If an existing server owns the port, identify it
-before replacing it. [Web](web.md).
+Choose workspace/port and start `ranite web --dir <directory>`; it returns with
+the server in the background. Pair a new browser with `ranite web --pair` and
+confirm Connected plus intended chat. If an existing server owns the port,
+identify it before replacing it. [Web](web.md).
 
 ## "Let me open it from my phone"
 

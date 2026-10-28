@@ -60,7 +60,8 @@ reload after noticing a changed build when idle, but the web server's captured
 identity and the currently loaded bundle must be considered. A hard refresh can
 load new assets without proving backend code was replaced.
 
-`ranite restart` stops active host work. For a coordinated update, identify busy
+`ranite restart` stops active host work and recycles a tracked web server. For a
+coordinated update, identify busy
 and queued state, settle/save appropriately, replace host, replace web server when
 its adapter/build identity changed, then confirm both process identities and
 browser connection. Closing a terminal is not a host restart. Existing browser

@@ -447,10 +447,10 @@ ranite team <subcommand>  init, invite, invites, invite-revoke, join, join-statu
                           log, rejoin, say, dm, inbox, read, history, send-file,
                           files, get
 ranite telegram setup|pair|status|disable|unpair|reset
-ranite web                Serve the browser client (--port, --hostname, --dir)
+ranite web                Serve the browser client (--port, --hostname, --dir; --pair)
 ranite daemon start|status|stop|install|uninstall|autostart on|off|status
 ranite stop               Stop the background host
-ranite restart            Restart the host and reconnect open sessions
+ranite restart            Restart the host and browser server, reconnect open sessions
 ranite sessions index [--rebuild]        Build the session search index
 ranite sessions prune --older-than 30d [--yes]
                           Delete old session files
@@ -465,8 +465,9 @@ ranite --help             Show all commands
 ranite --version          Print the installed version
 ```
 
-`ranite restart` stops active runs, saves sessions, and waits for the previous
-host to exit before starting the replacement. Open sessions reconnect and restore
+`ranite restart` stops active runs, saves sessions, waits for the previous
+host to exit before starting the replacement, and recycles a tracked browser
+server with it. Open sessions reconnect and restore
 their history. Closing the TUI only detaches it; use this command after updating
 Ranite to reload the background host. `ranite` narrates the lifecycle on launch
 (workspace, host pid, automatic-startup state) and on exit (whether the host keeps

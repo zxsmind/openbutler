@@ -87,7 +87,8 @@ longer than starting the process. A model/provider may be configured but not rea
 ## Lifecycle and automatic startup
 
 `ranite stop` / `ranite daemon stop` stop the host. `ranite restart` saves sessions,
-stops active runs, waits for exit and starts a replacement. Clients reconnect and
+stops active runs, waits for exit, starts a replacement, and recycles a tracked
+web server with it. Clients reconnect and
 recover history; interrupted side effects are not retroactively completed. TUI
 `/stop` and web Stop target work, not daemon ownership; see [sessions](terminal-sessions.md).
 
