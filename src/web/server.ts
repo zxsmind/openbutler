@@ -87,6 +87,20 @@ const HEARTBEAT_MS = 15_000;
  * sending everything would cost megabytes per page load.
  */
 const WINDOW_ENTRIES = 100;
+
+/**
+ * A reader window opens at the next message boundary. A blind tail slice can
+ * start inside a work-heavy turn whose ask lives before the window — the turn
+ * then has no owner line and, with no answer in the tail, renders as an empty
+ * section whose only affordance is the collapsed work toggle.
+ */
+export function tailWindowStart(entries: readonly { kind: string }[], window: number = WINDOW_ENTRIES): number {
+  const blind = Math.max(0, entries.length - window);
+  for (let from = blind; from < entries.length; from += 1) {
+    if (entries[from]!.kind === 'user') return from;
+  }
+  return blind;
+}
 const MAX_PAGE_ENTRIES = 200;
 
 type Entry = AgentSessionSnapshot['session']['entries'][number];
@@ -338,7 +352,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       let resetReason: string | null = null;
       if (!previous || sessionChanged || entries.length < previous.length) {
         resetReason = !previous ? 'first' : sessionChanged ? 'session' : 'shrunk';
-        const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+        const from = tailWindowStart(entries);
         payload = snapshotPayload(entries.slice(from), true, from, client);
       } else {
         const updated: { index: number; entry: Entry }[] = [];
@@ -355,7 +369,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         // sends back what the reader already has.
         if (updated.length * 2 > entries.length && entries.length > WINDOW_ENTRIES) {
           resetReason = 'rewritten';
-          const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+          const from = tailWindowStart(entries);
           payload = snapshotPayload(entries.slice(from), true, from, client);
         } else {
           payload = {
@@ -548,13 +562,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       resolveProjectSelection(body.projectId);
       await client.selectProject(body.projectId as string | null, body.sessionId as string);
       const entries = client.getServerEntries() as Entry[];
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
     if (url.pathname === '/api/snapshot' && req.method === 'GET') {
       const entries = client.getServerEntries() as Entry[];
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
@@ -915,7 +929,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         next = await sessions.get(sessionId);
       } else return sendJson(res, 400, { error: 'Invalid session action.' });
       const entries = next.getServerEntries();
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, next));
     }
 
@@ -931,7 +945,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         return sendJson(res, 400, { error: 'Choose a configured model.' });
       await client.selectModel(body.providerId, body.modelId);
       const entries = client.getServerEntries();
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
@@ -948,7 +962,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         return sendJson(res, 400, { error: 'Choose a supported effort level.' });
       client.runtime.saveReasoningPreference(body.reasoningVariantId);
       const entries = client.getServerEntries();
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
@@ -959,7 +973,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         return sendJson(res, 400, { error: 'Choose a supported approval mode.' });
       await client.setApprovalMode(body.mode);
       const entries = client.getServerEntries();
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       return sendJson(res, 200, snapshotPayload(entries.slice(from), true, from, client));
     }
 
@@ -1034,7 +1048,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       clients.add(target);
       const entries = client.getServerEntries() as Entry[];
       target.lastEntries = entries;
-      const from = Math.max(0, entries.length - WINDOW_ENTRIES);
+      const from = tailWindowStart(entries);
       writeEvent(target, 'snapshot', snapshotPayload(entries.slice(from), true, from, client));
       const heartbeat = setInterval(() => {
         if (res.writableEnded || res.destroyed) return;

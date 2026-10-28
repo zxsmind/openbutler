@@ -229,7 +229,11 @@ export function TurnView({ turn, live, sessionId, runtime }: { turn: Turn; live:
   const leadingDividers: Array<{ kind: 'divider'; entry: Entry }> = [];
   while (workDetails[0]?.kind === 'divider') leadingDividers.push(workDetails.shift() as { kind: 'divider'; entry: Entry });
   // A reader's explicit choice takes precedence over the automatic live/finished state.
-  const open = expanded ?? (live || workDetails.some((group) => group.kind === 'message' && group.entry.kind === 'user'));
+  // A turn whose ask lives before the loaded window has nothing collapsible to
+  // hide: opening it keeps the tail readable without the click that used to be
+  // required to discover the messages at all.
+  const open =
+    expanded ?? (live || turn.user === null || workDetails.some((group) => group.kind === 'message' && group.entry.kind === 'user'));
   const duration = live && turn.startedAt !== null ? Math.max(0, Date.now() - turn.startedAt) : turnDuration(turn);
   const outcome = turn.user?.turnOutcome;
   const label = live ? 'Working for' : outcome === 'cancelled' ? 'Stopped after' : outcome === 'failed' ? 'Failed after' : 'Took';

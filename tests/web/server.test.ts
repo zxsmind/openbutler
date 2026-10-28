@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { browserWebAddress, startWebServer, type WebServer } from '../../src/web/server.js';
+import { browserWebAddress, startWebServer, tailWindowStart, type WebServer } from '../../src/web/server.js';
 import {
   BRAND_LOGO_URL,
   BRAND_FAVICON_SVG_URL,
@@ -173,6 +173,18 @@ afterEach(async () => {
 });
 
 describe('browser session controls', () => {
+  it('opens a reader window at the next message boundary, not mid-turn', () => {
+    const work = (count: number, offset = 0): { kind: string; result: string }[] =>
+      Array.from({ length: count }, (_, index) => ({ kind: 'tool', result: `t${offset + index}` }));
+    // A blind tail of 100 would cut at index 11, inside the work before the ask.
+    const entries = [...work(50), { kind: 'user', text: 'boundary' }, ...work(60)];
+    expect(tailWindowStart(entries)).toBe(50);
+    // A work-only tail has no boundary to open on; the blind tail stands.
+    expect(tailWindowStart(work(120))).toBe(20);
+    const short: { kind: string }[] = [{ kind: 'assistant' }];
+    expect(tailWindowStart(short, 100)).toBe(0);
+  });
+
   it('serves real favicon formats without requiring browser pairing', async () => {
     const icons = [
       { path: BRAND_FAVICON_ICO_URL, type: 'image/x-icon' },
