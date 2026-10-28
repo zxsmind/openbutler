@@ -33,7 +33,7 @@ import { bucketUsage, bucketUsageByHour, groupHoursByDay, summarizeUsage } from 
 import { readMemorySnapshot } from '../memory-view.js';
 import { readLogRecords } from '../cli/logs.js';
 import { createProject, listProjects, projectFolder, ProjectInputError, resolveProjectSelection } from '../projects/store.js';
-import { pickProjectFolder } from './folder-picker.js';
+import { listFolders } from './folder-listing.js';
 import { attachTerminalServer } from './terminal-server.js';
 import { readWorkspaceFiles, readWorkspaceFileTree, WorkspaceFilesError } from './files.js';
 import { WebSessions, SessionRequestError } from './sessions.js';
@@ -542,8 +542,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const body = JSON.parse(await readBody(req, 65536)) as { path?: unknown };
       return sendJson(res, 200, { path: projectFolder(body.path) });
     }
-    if (url.pathname === '/api/project-folder-picker' && req.method === 'POST') {
-      return sendJson(res, 200, { path: await pickProjectFolder() });
+    if (url.pathname === '/api/folders' && req.method === 'GET') {
+      return sendJson(res, 200, listFolders(url.searchParams.get('path')));
     }
     if (url.pathname === '/api/session-project' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req, 4096)) as { sessionId?: unknown; projectId?: unknown };

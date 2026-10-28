@@ -39,6 +39,12 @@ export interface Entry extends TurnCompletion {
 }
 
 /** Modal control-plane state: whether this machine can provision GPU work. */
+export interface FolderListing {
+  path: string | null;
+  parent: string | null;
+  folders: { name: string; path: string }[];
+}
+
 export interface ModalInfo {
   configured: boolean;
   verified: boolean;

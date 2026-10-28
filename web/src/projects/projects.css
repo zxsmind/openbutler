@@ -301,3 +301,109 @@
     padding-inline: 6px;
   }
 }
+
+/* The folder picker walks this machine's directories inside the dialog itself. */
+.folder-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 218px;
+  padding: 10px 12px 12px;
+  border: 1px solid #ebebed;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.folder-browser__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.folder-browser__up {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: #f3f3f4;
+  color: #737477;
+  font-size: 12px;
+}
+
+.folder-browser__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #737477;
+}
+
+.folder-browser__list {
+  flex: 1;
+  min-height: 132px;
+  max-height: 252px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid #ebebed;
+}
+
+.folder-browser__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+
+.folder-browser__row:hover:not(:disabled) {
+  background: #f6f6f7;
+}
+
+.folder-browser__row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-browser__hint {
+  padding: 13px 6px;
+  font-size: 12px;
+  color: #85868b;
+}
+
+.folder-browser__error {
+  margin: 0;
+  font-size: 12px;
+  color: #a33b3b;
+}
+
+.folder-browser__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.folder-browser__actions .create-project__cancel,
+.folder-browser__actions .create-project__submit {
+  min-height: 32px;
+  padding: 5px 17px;
+  border: 0;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.folder-browser__actions button:disabled {
+  opacity: 0.4;
+}
