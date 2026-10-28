@@ -3609,6 +3609,7 @@ function toRuntimeView(runtime: AgentEnvironment, workspaceRoot = runtime.worksp
     supportsProjects: Boolean(runtime.selectWorkspaceRoot),
     workspaceRoot,
     modelName: runtime.modelName,
+    providerName: runtime.providerName,
     providerId: runtime.providerId,
     modelId: runtime.modelId,
     contextWindowTokens: runtime.contextWindowTokens,

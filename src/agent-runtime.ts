@@ -3,6 +3,7 @@ import type { ParentMessageInput } from './worker-records.js';
 import { canonicalScopeRoot as canonicalWorkspaceRoot } from './workspace-origin.js';
 import type { LanguageModel } from 'ai';
 import { getCatalogIndex, getCatalogRevision, isCatalogLoaded } from './provider/catalog.js';
+import { resolveModelName, resolveProviderName } from './provider/model-presentation.js';
 import {
   createLanguageModel,
   defaultModelIsUsable,
@@ -274,7 +275,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       activeRouting = routingProviderOptions(next.resolved, providerModelRouting(nextProvider, nextModelId));
       activeInputModalities = nextInputModalities;
       runtime.model = next.model;
-      runtime.modelName = next.resolved.displayName;
+      runtime.modelName = resolveModelName(nextProviderId, nextModelId);
+      runtime.providerName = resolveProviderName(nextProviderId);
       runtime.providerId = nextProviderId;
       runtime.modelId = nextModelId;
       runtime.contextWindowTokens = nextContextWindowTokens;
@@ -295,7 +297,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       get workspaceRoot() {
         return workspaceRoot;
       },
-      modelName: resolved.resolved.displayName,
+      modelName: resolveModelName(providerId, modelId),
+      providerName: resolveProviderName(providerId),
       providerId,
       modelId,
       contextWindowTokens,

@@ -102,6 +102,7 @@ class DaemonSessionClient implements AgentSessionClient {
     this.runtime = {
       workspaceRoot,
       modelName: 'Connecting…',
+      providerName: 'Connecting…',
       providerId: '',
       modelId: '',
       contextWindowTokens: null,
@@ -624,6 +625,7 @@ function isRuntimeViewData(value: unknown): value is RuntimeViewData {
     isRecord(value) &&
     typeof value.workspaceRoot === 'string' &&
     typeof value.modelName === 'string' &&
+    (value.providerName === undefined || typeof value.providerName === 'string') &&
     typeof value.providerId === 'string' &&
     typeof value.modelId === 'string' &&
     (value.approvalMode === undefined ||

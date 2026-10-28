@@ -72,6 +72,8 @@ export interface AgentSessionRuntimeView {
   supportsProjects?: boolean;
   workspaceRoot: string;
   modelName: string;
+  /** Readable provider name; absent until the host supplies one, so views fall back to providerId. */
+  providerName?: string | undefined;
   providerId: string;
   modelId: string;
   contextWindowTokens: number | null;
