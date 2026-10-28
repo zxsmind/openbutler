@@ -6,6 +6,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart, LanguageModelV3StreamResult } from '@ai-sdk/provider';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEnvironment, AgentSessionController } from '../src/agent-session.js';
+import type { SessionEntry } from '../src/session-store.js';
 import type { ModelMessage } from 'ai';
 import { ToolRegistry } from '../src/tools/registry.js';
 
@@ -1048,10 +1049,11 @@ describe('session streaming message boundaries', () => {
     await session.sendMessage({ text: 'inspect', images: [] }, preferences);
 
     const entries = session.getSnapshot().session.entries;
-    expect(entries.map((entry) => entry.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
-    expect(entries[1]).toMatchObject({ kind: 'assistant', text: 'Checking the result.' });
-    expect(entries[2]).toMatchObject({ kind: 'tool', running: false });
-    expect(entries[3]).toMatchObject({ kind: 'assistant', text: 'Completed successfully.' });
+    expect(entries.map((entry) => entry.kind)).toEqual(['divider', 'user', 'assistant', 'tool', 'assistant']);
+    expect(entries[1]).toMatchObject({ kind: 'user', text: 'inspect' });
+    expect(entries[2]).toMatchObject({ kind: 'assistant', text: 'Checking the result.' });
+    expect(entries[3]).toMatchObject({ kind: 'tool', running: false });
+    expect(entries[4]).toMatchObject({ kind: 'assistant', text: 'Completed successfully.' });
   });
 
   it('previews a tool call while its arguments stream, then shows the executed form', async () => {
@@ -1175,10 +1177,11 @@ describe('session streaming message boundaries', () => {
     await session.sendMessage({ text: 'inspect', images: [] }, preferences);
 
     const entries = session.getSnapshot().session.entries;
-    expect(entries.map((entry) => entry.kind)).toEqual(['user', 'assistant', 'tool', 'assistant']);
-    expect(entries[1]).toMatchObject({ kind: 'assistant', text: 'I am updating the notes (including the details).' });
-    expect(entries[2]).toMatchObject({ kind: 'tool', running: false });
-    expect(entries[3]).toMatchObject({ kind: 'assistant', text: 'Done.' });
+    expect(entries.map((entry) => entry.kind)).toEqual(['divider', 'user', 'assistant', 'tool', 'assistant']);
+    expect(entries[1]).toMatchObject({ kind: 'user', text: 'inspect' });
+    expect(entries[2]).toMatchObject({ kind: 'assistant', text: 'I am updating the notes (including the details).' });
+    expect(entries[3]).toMatchObject({ kind: 'tool', running: false });
+    expect(entries[4]).toMatchObject({ kind: 'assistant', text: 'Done.' });
   });
 
   it('keeps a completed tool step in the session if the next provider step fails', async () => {
@@ -2199,5 +2202,93 @@ describe('run turn identity at send time', () => {
     const settled = session.getSnapshot();
     expect(settled.busy).toBe(false);
     expect(settled.runningTurnId).toBeNull();
+  });
+});
+
+describe('stored transcript dividers', () => {
+  function dividerModel() {
+    return new MockLanguageModelV3({
+      doGenerate: async () => titleResponse(),
+      doStream: async () => fixtureText('Completed answer'),
+    });
+  }
+
+  const dividersOf = (session: AgentSessionController, prefix: string | RegExp) =>
+    session
+      .getSnapshot()
+      .session.entries.filter(
+        (entry): entry is Extract<SessionEntry, { kind: 'divider' }> =>
+          entry.kind === 'divider' && (typeof prefix === 'string' ? entry.text.startsWith(prefix) : prefix.test(entry.text)),
+      );
+
+  it('writes one absolute day divider above the first message and stays quiet the same day', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(dividerModel()));
+    await session.sendMessage({ text: 'First message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    const dayDividers = dividersOf(session, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) /);
+    expect(dayDividers).toHaveLength(1);
+    expect(dayDividers[0]!.text).toMatch(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) \d{2}:\d{2}$/);
+
+    await session.sendMessage({ text: 'Second message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    expect(dividersOf(session, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) /)).toHaveLength(1);
+
+    const entries = session.getSnapshot().session.entries;
+    const dividerIndex = entries.findIndex((entry) => entry.kind === 'divider');
+    expect(entries.findIndex((entry) => entry.kind === 'user')).toBe(dividerIndex + 1);
+  });
+
+  it('writes a fresh day divider when the last entry belongs to an earlier day', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(dividerModel()));
+    session.addEntry({ kind: 'notice', text: 'archived earlier', at: Date.now() - 2 * 86_400_000 });
+    await session.sendMessage({ text: 'Back after a gap', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    const dayDividers = dividersOf(session, /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) /);
+    expect(dayDividers).toHaveLength(1);
+    const entries = session.getSnapshot().session.entries;
+    expect(entries.indexOf(dayDividers[0]!)).toBeLessThan(entries.findIndex((entry) => entry.kind === 'user'));
+  });
+
+  it('announces an idle effort change once, above the message that will use it', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const runtime = runtimeFor(dividerModel());
+    session = new AgentSessionController(runtime);
+    await session.sendMessage({ text: 'Baseline', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    expect(dividersOf(session, 'Reasoning effort')).toHaveLength(0);
+
+    runtime.reasoningDefault = 'high';
+    await session.sendMessage({ text: 'Uses the new effort', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    const effort = dividersOf(session, 'Reasoning effort');
+    expect(effort).toHaveLength(1);
+    expect(effort[0]!.text).toBe('Reasoning effort changed from "default" to "high"');
+
+    await session.sendMessage({ text: 'Quiet again', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+    expect(dividersOf(session, 'Reasoning effort')).toHaveLength(1);
+
+    const entries = session.getSnapshot().session.entries;
+    const effortIndex = entries.indexOf(effort[0]!);
+    const users = entries.filter((entry) => entry.kind === 'user');
+    expect(effortIndex).toBeLessThan(entries.indexOf(users[1]!));
+    expect(effortIndex).toBeGreaterThan(entries.indexOf(users[0]!));
+  });
+
+  it('records a model switch when the runtime accepts it', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    session = new AgentSessionController(runtimeFor(dividerModel()));
+    await session.sendMessage({ text: 'First message', images: [] }, preferences);
+    await session.waitUntilIdle(1000);
+
+    await session.selectModel('other', 'other-model');
+    const model = dividersOf(session, 'Model changed');
+    expect(model).toHaveLength(1);
+    expect(model[0]!.text).toBe('Model changed from "fixture" to "other-model"');
+
+    await session.selectModel('other', 'other-model');
+    expect(dividersOf(session, 'Model changed')).toHaveLength(1);
   });
 });

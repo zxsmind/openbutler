@@ -533,6 +533,49 @@ export class AgentSessionController implements AgentSessionClient {
     this.addEntry(tone === 'info' ? { kind: 'notice', text } : { kind: 'notice', text, tone });
   }
 
+  /** A transcript boundary the backend owns: settings changes and day breaks. */
+  private addDivider(text: string): void {
+    this.addEntry({ kind: 'divider', text });
+  }
+
+  private reasoningLabel(variantId: string): string {
+    return this.runtime.reasoningVariants.find((variant) => variant.id === variantId)?.label ?? variantId;
+  }
+
+  /**
+   * Record the effort the next request will actually use. An idle change lands
+   * at message admission; a mid-run change lands at its first consumption.
+   * The label is written once per change, so repeated requests stay quiet.
+   */
+  private announceEffortChange(): void {
+    const current = this.runtime.reasoningDefault;
+    if (current === this.announcedEffort) return;
+    if (this.announcedEffort !== null)
+      this.addDivider(`Reasoning effort changed from "${this.reasoningLabel(this.announcedEffort)}" to "${this.reasoningLabel(current)}"`);
+    this.announcedEffort = current;
+  }
+
+  /**
+   * Day boundary above the next message. The label is absolute (weekday plus
+   * local time) because a stored divider is read on later days, where a stored
+   * "Today" would be a lie.
+   */
+  private ensureTimeDivider(): void {
+    const now = new Date();
+    let last: number | undefined;
+    for (let index = this.session.entries.length - 1; index >= 0; index--) {
+      const at = this.session.entries[index]!.at;
+      if (at !== undefined) {
+        last = at;
+        break;
+      }
+    }
+    if (last !== undefined && new Date(last).toDateString() === now.toDateString()) return;
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const pad = (value: number) => String(value).padStart(2, '0');
+    this.addDivider(`${days[now.getDay()]} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
+  }
+
   listSessions(): SessionSummary[] {
     return listSavedSessions(this.sessionWorkspaceScope);
   }
@@ -573,6 +616,8 @@ export class AgentSessionController implements AgentSessionClient {
     this.pendingApprovalId = null;
     this.streamedAssistantEntry = null;
     this.streamedReasoningEntry = null;
+    // Each session announces its own effort from a clean baseline.
+    this.announcedEffort = null;
     this.runningToolEntry = null;
     this.currentReviewAuthorization = null;
     this.currentReviewMessages = [];
@@ -629,8 +674,12 @@ export class AgentSessionController implements AgentSessionClient {
 
   async selectModel(providerId: string, modelId: string): Promise<void> {
     if (this.busy) return;
+    const previousModel = this.session.modelId;
     const sameModel = modelId === this.session.modelId;
     await this.runtime.selectModel(providerId, modelId);
+    // The new model is live the moment the runtime accepts it, so that is when
+    // the transcript records the switch.
+    if (!sameModel) this.addDivider(`Model changed from "${previousModel}" to "${modelId}"`);
     // A provider change for the same model must not replace measured usage with a smaller byte estimate.
     if (!sameModel) {
       this.lastContextUsage = undefined;
@@ -833,6 +882,8 @@ export class AgentSessionController implements AgentSessionClient {
   /** The admitted turn's own message preferences; cleared when the run settles. */
   private activeTurnPreferences: AgentTurnPreferences | null = null;
   private reasoningDefaultAtTurnStart = 'default';
+  /** Last effort announced in the transcript; null until the first admission pins it. */
+  private announcedEffort: string | null = null;
   private showReasoningAtTurnStart = true;
 
   /**
@@ -849,6 +900,8 @@ export class AgentSessionController implements AgentSessionClient {
         showReasoning: this.runtime.showReasoningDefault,
       };
     const changed = this.runtime.reasoningDefault !== this.reasoningDefaultAtTurnStart;
+    // The first request that actually uses a mid-run change records it once.
+    if (changed) this.announceEffortChange();
     const visibilityChanged = this.runtime.showReasoningDefault !== this.showReasoningAtTurnStart;
     return {
       reasoningVariantId: changed ? this.runtime.reasoningDefault : turn.reasoningVariantId,
@@ -1297,6 +1350,11 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   private addUserEntry(message: QueuedMessage, steering = false): void {
+    // The transcript keeps why the next request looks different: the day this
+    // message opens and the effort it will actually run with. Both land above
+    // the message, while no turn id is assigned yet.
+    this.ensureTimeDivider();
+    this.announceEffortChange();
     if (!steering || !this.activeTurnId) this.activeTurnId = randomUUID();
     this.addEntry({
       kind: 'user',
