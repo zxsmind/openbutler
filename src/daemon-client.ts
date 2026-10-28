@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
 import { getDataPath } from './paths.js';
+import { canonicalScopeRoot } from './workspace-origin.js';
 import { DaemonFrameDecoder } from './daemon-frames.js';
 import { createConnection, type Socket } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -52,7 +52,7 @@ type AttachOptions = {
 };
 
 export async function connectDaemonSession(workspacePath: string, options: AttachOptions = {}): Promise<AgentSessionClient> {
-  const workspaceRoot = realpathSync(workspacePath);
+  const workspaceRoot = canonicalScopeRoot(workspacePath);
   const socket = await connectSocket();
   const client = new DaemonSessionClient(socket, workspaceRoot, options);
   try {

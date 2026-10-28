@@ -15,6 +15,12 @@ import {
   type QueuedMessage,
 } from './agent-session.js';
 import { createAgentRuntime } from './agent-runtime.js';
+import {
+  canonicalScopeRoot as canonicalWorkspaceRoot,
+  resolveBackgroundScope,
+  resolveRestoreScope,
+  scopeMapKey as normalizeWorkspaceKey,
+} from './workspace-origin.js';
 import { createMcpConnectionManager } from './tools/mcp.js';
 import { CATALOG_FILENAMES } from './provider/catalog.js';
 import { resolveProjectSelection } from './projects/store.js';
@@ -689,8 +695,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         );
       });
       if (fresh.length === 0) return;
-      const root =
-        custodianWorkspace?.runtime.workspaceRoot ?? canonicalWorkspaceRoot(loadSettings().defaultWorkspaceRoot ?? process.cwd());
+      const root = resolveBackgroundScope({ previousRoot: custodianWorkspace?.runtime.workspaceRoot, cwd: process.cwd() }).root;
       const workspace = await getCustodianWorkspace(root);
       if (closing || membershipKey(loadSettings().team) !== teamKey) return;
       const controller = workspace.controller;
@@ -980,7 +985,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
 
   async function getWorkspace(path: string): Promise<WorkspaceHost> {
     const root = canonicalWorkspaceRoot(path);
-    const key = process.platform === 'win32' ? root.toLocaleLowerCase('en-US') : root;
+    const key = normalizeWorkspaceKey(root);
     const eviction = workspaceEvictions.get(key);
     if (eviction) await eviction;
     const existing = workspaces.get(key);
@@ -1862,9 +1867,11 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         ledger.setEventState(event.id, 'ignored', 'The parent session no longer exists.');
         return;
       }
-      const root = canonicalWorkspaceRoot(
-        saved.workspaceRoot ?? event.workspaceRoot ?? loadSettings().defaultWorkspaceRoot ?? process.cwd(),
-      );
+      const root = resolveRestoreScope({
+        storedRoot: saved.workspaceRoot,
+        eventRoot: event.workspaceRoot,
+        cwd: process.cwd(),
+      }).root;
       // Restore the current custodian or workspace; never switch another owner's active session.
       if (!saved.workspaceRoot) await getCustodianWorkspace(root);
       else {
@@ -3469,10 +3476,6 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
   }
 
-  function normalizeWorkspaceKey(path: string): string {
-    return process.platform === 'win32' ? path.toLocaleLowerCase('en-US') : path;
-  }
-
   return host;
 }
 
@@ -3804,12 +3807,6 @@ function requireString(value: unknown, name: string, maxBytes: number): string {
   if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > maxBytes)
     throw new Error(`${name} must be a non-empty string under ${maxBytes} bytes.`);
   return value;
-}
-
-function canonicalWorkspaceRoot(path: string): string {
-  const resolved = realpathSync(path);
-  if (!statSync(resolved).isDirectory()) throw new Error(`Workspace root is not a directory: ${resolved}`);
-  return resolved;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

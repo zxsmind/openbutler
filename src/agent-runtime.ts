@@ -1,6 +1,6 @@
 import type { InboxRequest } from './inbox.js';
 import type { ParentMessageInput } from './worker-records.js';
-import { realpathSync, statSync } from 'node:fs';
+import { canonicalScopeRoot as canonicalWorkspaceRoot } from './workspace-origin.js';
 import type { LanguageModel } from 'ai';
 import { getCatalogIndex, getCatalogRevision, isCatalogLoaded } from './provider/catalog.js';
 import {
@@ -458,10 +458,4 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     }
     throw error;
   }
-}
-
-function canonicalWorkspaceRoot(path: string): string {
-  const resolved = realpathSync(path);
-  if (!statSync(resolved).isDirectory()) throw new Error(`Workspace root is not a directory: ${resolved}`);
-  return resolved;
 }

@@ -9,7 +9,7 @@ import { toolEntryDetails } from './tool-display.js';
 import { parseArgs, questionFrom, type Parsed } from './cli/args.js';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import {
   getDaemonStatus,
   hostVintage,
@@ -47,6 +47,7 @@ import {
 } from './provider/registry.js';
 import { getConfigPath, getSettingsPath, loadSettings, parseTelegramSettings, saveSettings } from './settings.js';
 import { getDataPath } from './paths.js';
+import { canonicalScopeRoot, resolveInteractiveScope, resolveServerScope } from './workspace-origin.js';
 import type { TelegramStatus } from './telegram.js';
 import {
   TELEGRAM_SETUP_TEST_MESSAGE,
@@ -329,29 +330,14 @@ function runWorkspaceCommand(parsed: Parsed): void {
     ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(none; bare Ranite uses the launch directory)');
     return;
   }
-  const root = resolveWorkspace(path);
+  const root = canonicalScopeRoot(path);
   settings.defaultWorkspaceRoot = root;
   saveSettings(settings);
   ui.success(`Bare Ranite launches will use ${root}.`);
 }
 
-function resolveWorkspace(path: string): string {
-  const requested = path.trim();
-  if (!requested) throw new Error('Workspace path cannot be empty.');
-  const expanded = requested === '~' ? homedir() : requested.replace(/^~(?=[/\\])/, homedir());
-  const absolutePath = isAbsolute(expanded) ? expanded : resolve(process.cwd(), expanded);
-  const workspaceRoot = realpathSync(absolutePath);
-  if (!statSync(workspaceRoot).isDirectory()) throw new Error(`Workspace path is not a directory: ${workspaceRoot}`);
-  return workspaceRoot;
-}
-
 async function resolveSessionWorkspace(path: string | undefined): Promise<string> {
-  if (path !== undefined) return resolveWorkspace(path);
-  const configured = loadSettings().defaultWorkspaceRoot;
-  if (configured) return resolveWorkspace(configured);
-  /* The directory the client was launched in is the scope the owner meant, so
-     it needs no question: work there runs without permission prompts. */
-  return resolveWorkspace(process.cwd());
+  return resolveInteractiveScope({ explicitPath: path, cwd: process.cwd() }).root;
 }
 
 function showMcpServers(settings: ReturnType<typeof loadSettings>): void {
@@ -557,7 +543,7 @@ async function runListModels(parsed: Parsed): Promise<void> {
 async function runSkills(parsed: Parsed): Promise<void> {
   const { discoverSkills, getSkillRoots } = await import('./skills.js');
   const workspaceRoot = parsed.flags.get('workspace')
-    ? resolveWorkspace(parsed.flags.get('workspace')!)
+    ? canonicalScopeRoot(parsed.flags.get('workspace')!)
     : (loadSettings().defaultWorkspaceRoot ?? getDataPath('custodian'));
   const skills = discoverSkills(workspaceRoot);
 
@@ -1100,7 +1086,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
       typeof scheduleRecord.workspaceRoot === 'string'
         ? scheduleRecord.workspaceRoot
         : (existingRoot ?? (await resolveSessionWorkspace(parsed.flags.get('workspace'))));
-    commandWorkspaceRoot = resolveWorkspace(chosenRoot);
+    commandWorkspaceRoot = canonicalScopeRoot(chosenRoot);
     input.schedule = { ...scheduleRecord, workspaceRoot: commandWorkspaceRoot };
   }
   await requireBackgroundHost();
@@ -1601,7 +1587,12 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
       const { readPort } = await import('./cli/web.js');
       const port = readPort(parsed);
       const host = parsed.flags.get('hostname') ?? DEFAULT_WEB_HOST;
-      const web = await startWebProcess(process.argv[1], port, host, resolve(parsed.flags.get('dir') ?? process.cwd()));
+      const web = await startWebProcess(
+        process.argv[1],
+        port,
+        host,
+        resolveServerScope({ explicitDir: parsed.flags.get('dir'), cwd: process.cwd() }).root,
+      );
       ui.success(`Web server running (pid ${web.pid}) at http://${host}:${web.port}`);
     }
     return;
