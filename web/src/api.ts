@@ -67,10 +67,7 @@ export const sendMessage = (text: string, sessionId: string, images: DraftImage[
 export const fetchProjects = () => request<ProjectCatalog>('/api/projects');
 export const createProject = (name: string, folders: string[]) => request<Project>('/api/projects', { name, folders });
 export const validateProjectFolder = (path: string) => request<{ path: string }>('/api/project-folders', { path });
-export const listFolders = (path?: string) =>
-  request<{ path: string | null; parent: string | null; folders: { name: string; path: string }[] }>(
-    '/api/folders' + (path ? `?path=${encodeURIComponent(path)}` : ''),
-  );
+export const pickProjectFolder = () => request<{ path: string | null }>('/api/project-folder-picker', {});
 export const changeSessionProject = (sessionId: string, projectId: string | null) =>
   request<SessionPayload>('/api/session-project', { sessionId, projectId });
 export const stopRun = (sessionId: string) => request('/api/stop', { holdQueue: true, sessionId });

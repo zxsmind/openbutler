@@ -11,7 +11,7 @@ import {
 import type { AgentSessionClient, AgentSessionSnapshot } from '../../src/agent-session.js';
 import type { SessionEntry } from '../../src/session-store.js';
 import { connectDaemonSession } from '../../src/daemon-client.js';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -211,28 +211,6 @@ describe('browser session controls', () => {
       expect((await fetch(url, { headers: { 'if-none-match': etag! } })).status).toBe(304);
     }
     expect((await fetch(new URL('/brand/unknown.svg', server.url))).status).toBe(404);
-  });
-
-  it('lists folders for the project picker without a native window', async () => {
-    const target = await mkdtemp(join(tmpdir(), 'ranite-web-folders-'));
-    try {
-      await mkdir(join(target, 'nested'));
-      const listed = await fetch(new URL(`/api/folders?path=${encodeURIComponent(target)}`, server.url), {
-        headers: { cookie },
-      });
-      expect(listed.status).toBe(200);
-      const body = (await listed.json()) as { path: string; parent: string | null; folders: { name: string }[] };
-      expect(body.path).toBe(resolve(target));
-      expect(body.folders.map((folder) => folder.name)).toEqual(['nested']);
-      expect(body.parent).toBeTruthy();
-      const roots = await fetch(new URL('/api/folders', server.url), { headers: { cookie } });
-      expect(roots.status).toBe(200);
-      expect(((await roots.json()) as { path: string | null }).path).toBeNull();
-      const relative = await fetch(new URL('/api/folders?path=relative', server.url), { headers: { cookie } });
-      expect(relative.status).toBe(400);
-    } finally {
-      await rm(target, { recursive: true, force: true });
-    }
   });
 
   it('serves the canonical brand SVG publicly and supports HTTP cache revalidation', async () => {
