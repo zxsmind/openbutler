@@ -18,6 +18,7 @@ import {
 } from '../settings.js';
 import { verifyModalCredentials } from '../modal.js';
 import { CATALOG_FILENAMES, getProvider, listProviderSummaries } from '../provider/catalog.js';
+import { modelPresentation, resolveModelName, resolveProviderName, type ModelCatalogRow } from '../provider/model-presentation.js';
 import { watchSettingsFiles } from '../settings-watch.js';
 import { addProviderKeys } from '../provider/keys.js';
 import { verifyAttachmentPath } from '../attachments.js';
@@ -39,17 +40,6 @@ import { WebSessions, SessionRequestError } from './sessions.js';
 import { BoundedSseWriter } from './sse-output.js';
 
 /** Outside the Windows ephemeral range so the port stays free between runs. */
-/**
- * Every model a configured provider offers, with the flag that decides whether it
- * is offered in the composer. The catalog is the source, but a model the operator
- * added by hand survives even when the catalog does not know it: dropping it from
- * the list would silently disable a working configuration.
- */
-export interface ModelCatalogRow {
-  providerId: string;
-  models: Array<{ modelId: string; name: string; active: boolean }>;
-}
-
 export function modelCatalogRows(): ModelCatalogRow[] {
   const settings = loadSettings();
   return Object.entries(settings.providers)
@@ -60,7 +50,12 @@ export function modelCatalogRows(): ModelCatalogRow[] {
       const ids = [...new Set([...known, ...active])].sort();
       return {
         providerId,
-        models: ids.map((modelId) => ({ modelId, name: modelId.split('/').pop() ?? modelId, active: active.has(modelId) })),
+        providerName: resolveProviderName(providerId),
+        models: ids.map((modelId) => ({
+          modelId,
+          name: resolveModelName(providerId, modelId, settings),
+          active: active.has(modelId),
+        })),
       };
     })
     .sort((left, right) => left.providerId.localeCompare(right.providerId));
@@ -293,6 +288,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       runtime: {
         supportsSessionAttachments: source.runtime.supportsSessionAttachments === true,
         modelName: source.runtime.modelName,
+        providerName: source.runtime.providerName,
         providerId: source.runtime.providerId,
         modelId: source.runtime.modelId,
         contextWindowTokens: source.runtime.contextWindowTokens,
@@ -610,7 +606,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         },
         models: Object.entries(settings.providers)
           .filter(([, provider]) => provider.enabled)
-          .flatMap(([providerId, provider]) => (provider.models ?? []).map((modelId) => ({ providerId, modelId }))),
+          .flatMap(([providerId, provider]) =>
+            (provider.models ?? []).map((modelId) => ({
+              providerId,
+              modelId,
+              name: resolveModelName(providerId, modelId, settings),
+            })),
+          ),
       });
     }
 
@@ -733,17 +735,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
 
     if (url.pathname === '/api/models' && req.method === 'GET') {
-      const configured = Object.entries(loadSettings().providers).flatMap(([providerId, provider]) =>
-        provider.enabled
-          ? (provider.models ?? []).map((modelId) => ({ providerId, modelId, name: modelId.split('/').pop() ?? modelId }))
-          : [],
+      const settings = loadSettings();
+      const configured = Object.entries(settings.providers).flatMap(([providerId, provider]) =>
+        provider.enabled ? (provider.models ?? []).map((modelId) => modelPresentation(providerId, modelId, settings)) : [],
       );
-      // runtime.modelName may identify the provider; model rows must identify the model.
-      const current = {
-        providerId: client.runtime.providerId,
-        modelId: client.runtime.modelId,
-        name: client.runtime.modelId.split('/').pop() ?? client.runtime.modelId,
-      };
+      // Ids drive selection; the presentation resolver decides every displayed name.
+      const current = modelPresentation(client.runtime.providerId, client.runtime.modelId, settings);
       return sendJson(res, 200, [
         current,
         ...configured.filter((model) => model.providerId !== current.providerId || model.modelId !== current.modelId),

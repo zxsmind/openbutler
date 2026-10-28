@@ -467,7 +467,10 @@ describe('browser session controls', () => {
   it('lists configured models without credentials and accepts only configured choices', async () => {
     const models = await (await fetch(`${server.url}/api/models`, { headers: { cookie } })).json();
     expect(models).toHaveLength(2);
-    expect(models).toEqual([expect.objectContaining({ providerId: 'local', modelId: 'model-a', name: 'model-a' }), expect.any(Object)]);
+    expect(models).toEqual([
+      expect.objectContaining({ providerId: 'local', providerName: 'local', modelId: 'model-a', name: 'model-a' }),
+      expect.any(Object),
+    ]);
     expect(JSON.stringify(models)).not.toContain('private-key');
     expect(JSON.stringify(models)).not.toContain('hidden-model');
     expect((await post('/api/model', { providerId: 'local', modelId: 'not-configured', sessionId: 'session-a' })).status).toBe(400);
@@ -479,6 +482,7 @@ describe('browser session controls', () => {
     expect(catalog).toEqual([
       {
         providerId: 'local',
+        providerName: 'local',
         models: [
           { modelId: 'model-a', name: 'model-a', active: true },
           { modelId: 'model-b', name: 'model-b', active: true },
@@ -536,8 +540,8 @@ describe('browser session controls', () => {
     expect(Array.isArray(info.permissions)).toBe(true);
     expect(info.autoReview).toEqual({ providerId: null, modelId: null, timeoutSeconds: null });
     expect(info.models).toEqual([
-      { providerId: 'local', modelId: 'model-a' },
-      { providerId: 'local', modelId: 'model-b' },
+      { providerId: 'local', modelId: 'model-a', name: 'model-a' },
+      { providerId: 'local', modelId: 'model-b', name: 'model-b' },
     ]);
 
     settingsMocks.saveSettings.mockClear();
