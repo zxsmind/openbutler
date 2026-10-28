@@ -34,8 +34,8 @@ const HEADLINE_HOLD_MS = 1_200;
 const HEADLINE_ROTATE_MS = 7_000;
 
 /**
- * A compaction is a change to what the model can see, so it gets its own row:
- * running, finished, or interrupted, with the sizes it moved between.
+ * A compaction changed what the model can see; it reads as a boundary in the
+ * transcript, so it shares the divider line and keeps the sizes it moved.
  */
 function CompactionRow({ entry }: { entry: Entry }) {
   const status = entry.status ?? 'running';
@@ -46,15 +46,7 @@ function CompactionRow({ entry }: { entry: Entry }) {
       : entry.beforeTokens !== undefined
         ? `${formatTokens(entry.beforeTokens)} → …`
         : null;
-  return (
-    <div className={`compaction compaction--${status}`} title={sizes ?? undefined}>
-      <span className="compaction__icon">
-        <Icon name="minimize-2" size={14} />
-      </span>
-      <span className="compaction__label">{label}</span>
-      {sizes ? <span className="compaction__sizes">{sizes}</span> : null}
-    </div>
-  );
+  return <ChatDivider text={sizes ? `${label} · ${sizes}` : label} />;
 }
 
 function failed(entry: Entry): boolean {

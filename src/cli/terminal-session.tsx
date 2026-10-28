@@ -3138,8 +3138,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({
     );
   }
 
-  if (entry.kind === 'divider') {
-    const label = clipped(entry.text ?? '', Math.max(8, width - 4));
+  if (entry.kind === 'divider' || entry.kind === 'compaction') {
+    const label = clipped(entry.kind === 'compaction' ? compactionLabel(entry) : (entry.text ?? ''), Math.max(8, width - 4));
     const fill = Math.max(0, width - label.length - 3);
     const left = Math.floor(fill / 2);
     return (
@@ -3172,7 +3172,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({
     <Box width="100%" marginBottom={1}>
       <Text dimColor={dimmed} {...(mark.color ? { color: mark.color } : {})}>
         {`${mark.glyph} `}
-        {clipped(entry.kind === 'compaction' ? compactionLabel(entry) : entry.text, 1_200)}
+        {clipped(entry.text, 1_200)}
       </Text>
     </Box>
   );
