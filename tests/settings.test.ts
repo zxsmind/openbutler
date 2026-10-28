@@ -293,6 +293,52 @@ describe('the settings schema is closed', () => {
   });
 });
 
+describe('custom model names', () => {
+  it('round-trips an explicit modelSpecs name through a save', async () => {
+    writeSettings(
+      [
+        'providers:',
+        '  my-local:',
+        '    keys: [k]',
+        '    modelSpecs:',
+        '      qwen/qwen3-embedding-4b:',
+        '        name: My Fast Embedder',
+        '',
+      ].join('\n'),
+    );
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().providers['my-local']?.modelSpecs?.['qwen/qwen3-embedding-4b']?.name).toBe('My Fast Embedder');
+    settings.saveSettings(settings.loadSettings());
+    expect(settings.loadSettings().providers['my-local']?.modelSpecs?.['qwen/qwen3-embedding-4b']?.name).toBe('My Fast Embedder');
+  });
+
+  it('trims the name it stores', async () => {
+    writeSettings(
+      ['providers:', '  my-local:', '    keys: [k]', '    modelSpecs:', '      llama-3.3-70b:', '        name: "  Padded  "', ''].join(
+        '\n',
+      ),
+    );
+    const settings = await loadSettingsModule();
+    expect(settings.loadSettings().providers['my-local']?.modelSpecs?.['llama-3.3-70b']?.name).toBe('Padded');
+  });
+
+  it('rejects a blank name instead of rendering an empty label', async () => {
+    writeSettings(
+      ['providers:', '  my-local:', '    keys: [k]', '    modelSpecs:', '      llama-3.3-70b:', '        name: "   "', ''].join('\n'),
+    );
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/modelSpecs\.llama-3\.3-70b\.name must use 1-128 characters/);
+  });
+
+  it('still rejects an unknown modelSpec key', async () => {
+    writeSettings(
+      ['providers:', '  my-local:', '    keys: [k]', '    modelSpecs:', '      llama-3.3-70b:', '        alias: x', ''].join('\n'),
+    );
+    const settings = await loadSettingsModule();
+    expect(() => settings.loadSettings()).toThrow(/is not a model spec ranite knows/);
+  });
+});
+
 describe('writing settings', () => {
   it('orders providers by providerOrder on the way out', async () => {
     const settings = await loadSettingsModule();

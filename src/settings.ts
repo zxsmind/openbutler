@@ -60,6 +60,8 @@ export interface ProviderState {
 
 /** Settings-side description of one custom model: what the catalog would have said. */
 export interface ProviderModelSpec {
+  /** Readable display name; beats the catalog name when the operator sets it. */
+  name?: string;
   /** Context window in tokens; the runtime falls back to this when the catalog has no entry. */
   context?: number;
   /** Output tokens the model accepts. */
@@ -443,7 +445,7 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
   if (raw.modelSpecs !== undefined) {
     if (!isRecord(raw.modelSpecs)) throw new Error(`providers.${id}.modelSpecs must be a mapping`);
     const specs: Record<string, ProviderModelSpec> = {};
-    const specKeys = ['context', 'output', 'reasoning', 'payload'];
+    const specKeys = ['name', 'context', 'output', 'reasoning', 'payload'];
     for (const [modelId, rawSpec] of Object.entries(raw.modelSpecs)) {
       if (!modelId.trim() || modelId.length > 512)
         throw new Error(`providers.${id}.modelSpecs requires non-empty model IDs under 512 characters.`);
@@ -453,6 +455,11 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
           throw new Error(`providers.${id}.modelSpecs.${modelId}.${key} is not a model spec ranite knows (known: ${specKeys.join(', ')})`);
       }
       const spec: ProviderModelSpec = {};
+      if (rawSpec.name !== undefined) {
+        if (typeof rawSpec.name !== 'string' || !rawSpec.name.trim() || rawSpec.name.length > 128)
+          throw new Error(`providers.${id}.modelSpecs.${modelId}.name must use 1-128 characters.`);
+        spec.name = rawSpec.name.trim();
+      }
       for (const key of ['context', 'output'] as const) {
         const value = rawSpec[key];
         if (value === undefined) continue;
