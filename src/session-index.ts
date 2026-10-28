@@ -39,9 +39,9 @@ export const SESSION_SEARCH_FLOOR = 0.3;
 export const SESSION_SEARCH_BAND_RATIO = 0.65;
 export const SESSION_SEARCH_GATE: RelevanceGate = { floor: SESSION_SEARCH_FLOOR, bandRatio: SESSION_SEARCH_BAND_RATIO };
 
-export type SessionChunkKind = 'user' | 'assistant' | 'notice' | 'command' | 'output';
+export type SessionChunkKind = 'user' | 'assistant' | 'notice' | 'divider' | 'command' | 'output';
 
-const EMBEDDED_KINDS: readonly SessionChunkKind[] = ['user', 'notice'];
+const EMBEDDED_KINDS: readonly SessionChunkKind[] = ['user', 'notice', 'divider'];
 const EMBEDDED_KIND_SET = new Set<string>(EMBEDDED_KINDS);
 const EMBEDDING_BYTES = MEMORY_EMBEDDING_DIMENSIONS * Float32Array.BYTES_PER_ELEMENT;
 /** Upper bound on FTS candidates scored per query; bm25 ordering picks the best ones first. */

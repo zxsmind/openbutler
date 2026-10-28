@@ -116,6 +116,27 @@ it('keeps a compaction row through save and load', async () => {
   }
 });
 
+it('keeps a divider row through save and load', async () => {
+  // Dividers are backend-written transcript facts; a validator that drops them
+  // would silently erase settings changes and day boundaries on reload.
+  const root = mkdtempSync(join(tmpdir(), 'ranite-session-divider-'));
+  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.resetModules();
+  try {
+    const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
+    const entries = [
+      { kind: 'divider' as const, text: 'Wednesday 03:49' },
+      { kind: 'user' as const, text: 'after the boundary' },
+    ];
+    const saved = saveSession({ ...createSession('fixture', 'fixture', 262_144, root), entries });
+    const restored = loadSavedSession(saved.id)!;
+    expect(restored.entries[0]).toMatchObject({ kind: 'divider', text: 'Wednesday 03:49' });
+  } finally {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it('keeps the compaction marker through save and load', async () => {
   // The marker decides whether the reader sees the checkpoint prose, so dropping
   // it on reload would put the whole summary back into the conversation.
