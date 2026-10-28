@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { bindReaderGestures, createScrollFollower, type ScrollFollower } from './scroll-follow.js';
+import { shouldLoadOlderFitted } from './load-older.js';
 
 interface VirtualListProps<T> {
   items: T[];
@@ -124,6 +125,23 @@ export function VirtualList<T>({
     setViewport(element.clientHeight);
     return () => observer.disconnect();
   }, []);
+
+  const fittedRequest = useRef(false);
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    if (loadingOlder) {
+      fittedRequest.current = false;
+      return;
+    }
+    // A loaded slice that still fits the viewport can never fire the scroll
+    // handler below, so its top edge needs no gesture: keep loading until the
+    // reader has something to scroll through or history runs out.
+    if (!fittedRequest.current && shouldLoadOlderFitted(hasOlder, loadingOlder, element.scrollHeight, element.clientHeight)) {
+      fittedRequest.current = true;
+      onLoadOlder?.();
+    }
+  }, [revision, viewport, hasOlder, loadingOlder, onLoadOlder]);
 
   const offsets: number[] = new Array(items.length + 1);
   offsets[0] = 0;

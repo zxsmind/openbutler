@@ -17,7 +17,7 @@ import { Composer } from './components/composer.js';
 import { ConversationWelcome } from './components/conversation-welcome.js';
 import { PendingActions } from './components/pending-actions.js';
 import { SessionDetails } from './components/session-details.js';
-import { Button, IconButton } from './components/ui.js';
+import { IconButton } from './components/ui.js';
 import { readDrafts, saveDraft } from './composer-state.js';
 import { WorkspacePanels } from './components/workspace-panels.js';
 import { Feedback } from './components/feedback.js';
@@ -263,15 +263,7 @@ export function App() {
                     hasOlder={session.base > 0}
                     loadingOlder={session.loadingOlder}
                     onLoadOlder={() => void session.loadOlder()}
-                    header={
-                      <div className="transcript-head">
-                        {session.base > 0 ? (
-                          <Button disabled={session.loadingOlder} onClick={() => void session.loadOlder()}>
-                            {session.loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
-                          </Button>
-                        ) : null}
-                      </div>
-                    }
+                    header={session.loadingOlder ? <div className="transcript-head">Loading earlier messages…</div> : null}
                     render={(turn) => <TurnView turn={turn} live={turn.id === liveTurn} sessionId={id} runtime={payload?.runtime} />}
                     footer={typingIndicator}
                   />
