@@ -66,6 +66,7 @@ import {
   getSettingsPath,
 } from './settings.js';
 import { watchSettingsFiles as watchSettingsFilesModule, type SettingsWatcher } from './settings-watch.js';
+import { ShutdownBudget, withDeadline } from './shutdown.js';
 import {
   readWorkerOutbox,
   readWorkerRecord,
@@ -123,6 +124,14 @@ const WORKSPACE_EVICTION_GRACE_MS = WORKSPACE_SWEEP_INTERVAL_MS;
 const RESTART_SESSION_KEY_PREFIX = 'host.restart.workspace:';
 const CUSTODIAN_RESTART_SESSION_KEY = 'host.restart.custodian';
 const CUSTODIAN_CURRENT_SESSION_KEY = 'custodian.current-session';
+/** Total wall clock a host close may spend before the remaining steps are abandoned. */
+const TOTAL_SHUTDOWN_BUDGET_MS = 10_000;
+/** Slice of the total that only the durable ledger flush may spend at the end of a close. */
+const RESERVED_SHUTDOWN_BUDGET_MS = 2_500;
+/** A deferred load must answer within this long, or its caller gets an error instead of a stall. */
+const LOAD_DEADLINE_MS = 20_000;
+/** Serialized settings reloads must never wedge the chain that follows them. */
+const RELOAD_CHAIN_DEADLINE_MS = 20_000;
 /** Worker sessions may spawn children only one layer down: custodian -> subagent -> child. */
 const MAX_SUBAGENT_DEPTH = 2;
 /** Running-worker caps: per main session, per worker parent, and machine-wide. Over the cap a spawn returns busy. */
@@ -923,63 +932,91 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     },
   };
 
+  /**
+   * Closes the host under one budget: every step has a deadline, an overrun is abandoned
+   * and named in the log, and the durable ledger flush keeps a reserved slice of the
+   * budget. Shutdown never waits for a subsystem to decide to finish — whichever step is
+   * still running when its deadline passes is left to settle on its own, because the
+   * process exits either way. `logs/ranite.log` records every `[shutdown]` line, so a
+   * slow stop names the subsystem that caused it instead of ending in a force-kill.
+   */
   async function closeHost(): Promise<void> {
     closing = true;
+    const budget = new ShutdownBudget(TOTAL_SHUTDOWN_BUDGET_MS, options.log, RESERVED_SHUTDOWN_BUDGET_MS, (error) =>
+      redactSensitiveText(error instanceof Error ? error.message : String(error)),
+    );
     for (const workspace of workspaces.values()) {
       workspace.controller.stop({ preserveWakePolicy: true });
       for (const session of workspace.privateSessions.values()) session.controller.stop({ preserveWakePolicy: true });
     }
     custodianWorkspace?.controller.stop({ preserveWakePolicy: true });
-    const mcpClosed = mcpManager.close();
+    const mcpClosing = mcpManager.close();
     teamDelivery.close();
     if (workspaceSweepTimer !== null) {
       clearInterval(workspaceSweepTimer);
       workspaceSweepTimer = null;
     }
     if (teamServer) {
-      await teamServer.close().catch(() => undefined);
+      const server = teamServer;
       teamServer = null;
       teamServerEndpoint = null;
+      await budget.run('team server close', 1_500, () => server.close().catch(() => undefined));
     }
     stopTeamPoller();
     teamStore?.close();
     teamStore = null;
-    await Promise.allSettled([...workspaceEvictions.values()]);
-    await telegram?.close();
-    await reloadChain;
-    await scheduler.shutdown();
+    await budget.run('workspace evictions', 1_000, () => Promise.allSettled([...workspaceEvictions.values()]));
+    await budget.run('telegram close', 1_500, () => telegram?.close());
+    await budget.run('settings reload chain', 2_000, () => reloadChain);
+    await budget.run('scheduler shutdown', 1_000, () => scheduler.shutdown());
     if (eventRetryTimer !== null) clearTimeout(eventRetryTimer);
-    await telegram?.close();
+    await budget.run('telegram close (final)', 1_000, () => telegram?.close());
     for (const socket of sockets) socket.destroy();
     sockets.clear();
     stopWatchingSettingsFiles();
-    await Promise.allSettled([...workspaceLoads.values(), ...chatLoads.values(), ...(custodianLoading ? [custodianLoading] : [])]);
+    await budget.run('pending loads', 2_500, () =>
+      Promise.allSettled([...workspaceLoads.values(), ...chatLoads.values(), ...(custodianLoading ? [custodianLoading] : [])]),
+    );
     try {
       if (custodianWorkspace) {
-        custodianWorkspace.unsubscribe();
-        await custodianWorkspace.controller.close();
-        await custodianWorkspace.runtime.close();
-        custodianWorkspace = null;
+        const custodian = custodianWorkspace;
+        custodian.unsubscribe();
+        await budget.run('custodian session close', 2_500, async () => {
+          await custodian.controller.close();
+          await custodian.runtime.close();
+        });
+        if (custodianWorkspace === custodian) custodianWorkspace = null;
       }
-      await Promise.all(
-        [...workspaces.values()].map(async (workspace) => {
-          workspace.unsubscribe();
-          await workspace.controller.close();
-          for (const privateSession of workspace.privateSessions.values()) {
-            if (privateSession.cleanupTimer !== null) clearTimeout(privateSession.cleanupTimer);
-            privateSession.unsubscribe();
-            await privateSession.controller.close();
-          }
-        }),
+      await budget.run('workspace sessions close', 3_000, () =>
+        Promise.all(
+          [...workspaces.values()].map(async (workspace) => {
+            workspace.unsubscribe();
+            await workspace.controller.close();
+            for (const privateSession of workspace.privateSessions.values()) {
+              if (privateSession.cleanupTimer !== null) clearTimeout(privateSession.cleanupTimer);
+              privateSession.unsubscribe();
+              await privateSession.controller.close();
+            }
+          }),
+        ),
       );
-      await Promise.allSettled(activeEvents.values());
-      await Promise.all([...workspaces.values()].map((workspace) => workspace.runtime.close()));
+      await budget.run('background events', 1_000, () => Promise.allSettled(activeEvents.values()));
+      await budget.run('workspace runtimes close', 2_500, () =>
+        Promise.all([...workspaces.values()].map((workspace) => workspace.runtime.close())),
+      );
       workspaces.clear();
     } finally {
-      await mcpClosed;
-      ledger.recoverInterruptedEvents();
-      ledger.recoverInterruptedActions();
-      ledger.close();
+      await budget.run('mcp connections close', 2_000, () => mcpClosing);
+      await budget.run(
+        'ledger flush',
+        2_500,
+        () => {
+          ledger.recoverInterruptedEvents();
+          ledger.recoverInterruptedActions();
+          ledger.close();
+        },
+        { reserve: true },
+      );
     }
   }
 
@@ -987,11 +1024,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const root = canonicalWorkspaceRoot(path);
     const key = normalizeWorkspaceKey(root);
     const eviction = workspaceEvictions.get(key);
-    if (eviction) await eviction;
+    // Deferred loads answer within a deadline: a stalled load must surface as an error,
+    // never as a caller that hangs for ever (the wedge behind long "creating…" waits).
+    if (eviction) await withDeadline(() => eviction, LOAD_DEADLINE_MS, 'Workspace eviction');
     const existing = workspaces.get(key);
     if (existing) return existing;
     const pending = workspaceLoads.get(key);
-    if (pending) return pending;
+    if (pending) return withDeadline(() => pending, LOAD_DEADLINE_MS, 'Workspace load');
     if (closing) throw new Error('Ranite host is shutting down.');
 
     const loading = createWorkspace(root, key);
@@ -1115,7 +1154,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       chatLoads.set(key, pending);
     }
     try {
-      const workspace = await pending;
+      const workspace = await withDeadline(() => pending, LOAD_DEADLINE_MS, 'Chat load');
       return { workspace, controller: workspace.controller, privateSessionId: null };
     } finally {
       if (chatLoads.get(key) === pending) chatLoads.delete(key);
@@ -1124,7 +1163,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
 
   async function getCustodianWorkspace(scopeRoot: string): Promise<WorkspaceHost> {
     if (custodianWorkspace) return custodianWorkspace;
-    if (custodianLoading) return custodianLoading;
+    const custodianPending = custodianLoading;
+    if (custodianPending) return withDeadline(() => custodianPending, LOAD_DEADLINE_MS, 'Custodian load');
     if (closing) throw new Error('Ranite host is shutting down.');
 
     const loading = (async () => {
@@ -1231,7 +1271,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const eviction = evictWorkspace(key);
       workspaceEvictions.set(key, eviction);
       try {
-        await eviction;
+        await withDeadline(() => eviction, LOAD_DEADLINE_MS, 'Workspace eviction');
       } finally {
         if (workspaceEvictions.get(key) === eviction) workspaceEvictions.delete(key);
       }
@@ -1581,8 +1621,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       }
       pumpEvents();
     });
-    reloadChain = reload.catch(() => {});
-    await reload;
+    // A reload that overruns is abandoned so later changes cannot queue behind a stuck
+    // one: each reload re-reads the settings file, so an overlap costs less than a chain
+    // that never moves again.
+    const boundedReload = withDeadline(() => reload, RELOAD_CHAIN_DEADLINE_MS, 'Settings reload');
+    reloadChain = boundedReload.catch((error: unknown) => {
+      options.log(`Settings reload chain: ${redactSensitiveText(error instanceof Error ? error.message : String(error))}`);
+    });
+    await boundedReload;
   }
 
   async function receiveEvent(event: ObservedEventInput): Promise<void> {

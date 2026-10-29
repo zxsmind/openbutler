@@ -6,6 +6,7 @@ import type { ActivityLedger, ObservedEventInput } from '../activity-ledger.js';
 import { resolveFilePath } from '../file-write-core.js';
 import type { ScheduleState } from '../settings.js';
 import { loadSettings } from '../settings.js';
+import { withDeadline } from '../shutdown.js';
 import { classifyTrustedPath, trustedRootsFor, type WorkspaceScope } from '../workspace-scope.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
 
@@ -132,7 +133,8 @@ export class ScheduleRunner {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    await this.reloadChain;
+    // A schedule reload that never settles must not keep the host from closing.
+    await withDeadline(() => this.reloadChain, 10_000, 'Schedule reload');
     this.close();
   }
 

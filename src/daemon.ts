@@ -21,6 +21,7 @@ import { createDaemonHost } from './daemon-host.js';
 import { createLogger, fileSink } from './logging.js';
 import { DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, type DaemonStatus } from './daemon-protocol.js';
 import { getDataDir, getDataPath } from './paths.js';
+import { withDeadline } from './shutdown.js';
 
 const DAEMON_START_TIMEOUT_MS = 20_000;
 const DAEMON_START_LOCK_WAIT_MS = 30_000;
@@ -28,6 +29,8 @@ const DAEMON_START_LOCK_WAIT_MS = 30_000;
 const DAEMON_START_LOCK_STALE_MS = 45_000;
 const DAEMON_START_LOCK_HEARTBEAT_MS = 10_000;
 const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
+/** The IPC listener closes within this long before the process stops caring about it. */
+const IPC_CLOSE_TIMEOUT_MS = 2_000;
 const PREVIOUS_DAEMON_PROTOCOL_VERSION = 1;
 const execFileAsync = promisify(execFile);
 
@@ -218,7 +221,7 @@ export async function stopDaemon(restarting = false): Promise<boolean> {
     throw new Error(`Ranite host process ${active.pid} did not stop. Its process identity cannot be verified, so it was not terminated.`);
   }
   console.error(
-    `Ranite host process ${active.pid} did not finish shutdown within 30 seconds; terminating the verified host. Only the last saved session state can be recovered.`,
+    `Ranite host process ${active.pid} did not finish shutdown within 30 seconds; terminating the verified host. Only the last saved session state can be recovered. Per-step shutdown timings are in logs/ranite.log, on lines starting with "[shutdown]".`,
   );
   try {
     process.kill(active.pid, 'SIGKILL');
@@ -467,8 +470,16 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
   } finally {
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
-    await host.close();
-    await closeServer(server);
+    try {
+      await host.close();
+    } catch (error) {
+      logger.info('host.log', { message: `[shutdown] host close failed — ${error instanceof Error ? error.message : String(error)}` });
+    }
+    await withDeadline(() => closeServer(server), IPC_CLOSE_TIMEOUT_MS, 'IPC server close').catch((error: unknown) => {
+      logger.info('host.log', {
+        message: `[shutdown] IPC server close abandoned — ${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
     if (process.platform !== 'win32') {
       try {
         unlinkSync(endpoint);
@@ -478,6 +489,10 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
     }
     removeDaemonPidFile();
     console.error(`Ranite host stopped (${shutdownReason ?? 'startup failed'}).`);
+    // A host that was asked to stop leaves on its own schedule: the loop may still hold
+    // handles (child pipes, sockets, watchers) that no longer matter, and waiting for them
+    // to drain by themselves is exactly what used to end in the CLI's force-kill.
+    if (shutdownReason) process.exit(0);
   }
 }
 
