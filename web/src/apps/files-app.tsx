@@ -1,17 +1,23 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+  type ReactNode,
+} from 'react';
 import { fetchWorkspaceFiles, fetchWorkspaceFileTree } from '../api.js';
 import { Icon, IconButton } from '../components/ui.js';
 import { Feedback } from '../components/feedback.js';
 import type { WorkspaceFiles, WorkspaceFileTree } from '../../../src/web/files-protocol.js';
 import { buildFileTree, type FileTreeNode } from './file-tree.js';
+import { acknowledgeFileLink, lineEndOffset, lineStartOffset, subscribeFileLink, type FileLinkRequest } from '../file-links.js';
 import './files-app.css';
-
-function FileBadge({ name }: { name: string }) {
-  const extension = name.split('.').at(-1)?.toLowerCase() ?? '';
-  const badges: Record<string, string> = { ts: 'TS', tsx: 'TS', js: 'JS', mjs: 'JS', jsx: 'JS', md: 'M↓', json: '{}', css: '#' };
-  const badge = badges[extension];
-  return badge ? <span className={`files-type files-type-${extension}`}>{badge}</span> : <Icon name="file" size={13} />;
-}
+import { FileBadge } from './file-badge.js';
 
 function TreeGroup({
   label,
@@ -108,11 +114,17 @@ function TreeNode({
   );
 }
 
-export function FilesApp({ sessionId }: { sessionId: string }) {
+export function FilesApp({ sessionId, open }: { sessionId: string; open?: boolean }) {
   const [index, setIndex] = useState<WorkspaceFileTree | null>(null);
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<FileTreeNode | null>(null);
+  const [focusRequest, setFocusRequest] = useState<FileLinkRequest | null>(null);
+  const [lineFocused, setLineFocused] = useState(false);
+  const preview = useRef<HTMLPreElement>(null);
+  const appliedFocus = useRef(0);
   const [page, setPage] = useState<Extract<WorkspaceFiles, { kind: 'file' }> | null>(null);
+  const [external, setExternal] = useState(false);
+  const externalRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -209,6 +221,8 @@ export function FilesApp({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!selected) {
       setPage(null);
+      setExternal(false);
+      externalRef.current = false;
       setError(null);
       setLoading(false);
       return;
@@ -225,8 +239,12 @@ export function FilesApp({ sessionId }: { sessionId: string }) {
     fetchWorkspaceFiles(sessionId, selected.path)
       .then((result) => {
         if (cancelled) return;
-        if (result.kind === 'file') setPage(result);
-        else setError('This path is a folder. Select a file from the workspace tree.');
+        if (result.kind === 'file') {
+          setPage(result);
+          const isExternal = result.external === true;
+          externalRef.current = isExternal;
+          setExternal(isExternal);
+        } else setError('This path is a folder. Select a file from the workspace tree.');
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : 'Could not open this file.');
@@ -238,6 +256,93 @@ export function FilesApp({ sessionId }: { sessionId: string }) {
       cancelled = true;
     };
   }, [sessionId, selected, revision]);
+  // A citation opens its file directly; the path is workspace-relative and the
+  // content loader below reads it without the tree having to contain it yet.
+  useEffect(
+    () =>
+      subscribeFileLink((request) => {
+        const entry = index?.entries.find((candidate) => candidate.path === request.path && !candidate.directory);
+        setSelected((previous) =>
+          // Reselecting the open file must not reload it: the preview would
+          // unmount between the request and its focus, dropping the highlight.
+          previous && previous.path === request.path
+            ? previous
+            : {
+                name: request.path.split('/').at(-1) ?? request.path,
+                path: request.path,
+                children: null,
+                change: entry?.change ?? null,
+                changed: entry?.change != null,
+              },
+        );
+        setTreeVisible(true);
+        setFocusRequest(request.line === undefined ? null : request);
+        acknowledgeFileLink(request.nonce);
+      }),
+    [index],
+  );
+  // A citation lands on its line: select it so the line lights up, scroll it
+  // into the middle of the preview, and let the highlight go after a moment.
+  useEffect(() => {
+    if (!focusRequest || focusRequest.line === undefined || !page || page.path !== focusRequest.path) return;
+    if (appliedFocus.current === focusRequest.nonce) return;
+    const element = preview.current;
+    const text = element?.querySelector('code')?.firstChild;
+    const content = page.content ?? '';
+    if (!element || !text || text.nodeType !== Node.TEXT_NODE) return;
+    const start = lineStartOffset(content, focusRequest.line);
+    const end = lineEndOffset(content, focusRequest.line);
+    if (start === -1 || end === -1 || end > (text.textContent?.length ?? 0)) return;
+    appliedFocus.current = focusRequest.nonce;
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(text, end);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    setLineFocused(true);
+    const bounds = range.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    if (box.height > 0) {
+      element.scrollTo({
+        top: Math.max(0, element.scrollTop + (bounds.top - box.top) - element.clientHeight / 3),
+        behavior: 'smooth',
+      });
+    }
+    const timer = window.setTimeout(() => {
+      const current = window.getSelection();
+      if (current?.rangeCount) {
+        const existing = current.getRangeAt(0);
+        const sameSelection =
+          existing.compareBoundaryPoints(Range.START_TO_START, range) === 0 &&
+          existing.compareBoundaryPoints(Range.END_TO_END, range) === 0;
+        // Only a citation's own highlight expires; the user's later selection stays.
+        if (sameSelection) current.removeAllRanges();
+      }
+      setLineFocused(false);
+    }, 2400);
+    return () => {
+      window.clearTimeout(timer);
+      setLineFocused(false);
+    };
+  }, [focusRequest, page]);
+  // A citation grants one preview: it belongs to the chat that carried it and
+  // to the time the panel shows it. Switching chat or closing the panel drops
+  // it, so it can only come back by clicking the citation again.
+  const dropExternalPreview = useCallback(() => {
+    externalRef.current = false;
+    setExternal(false);
+    setPage(null);
+    setSelected(null);
+    setFocusRequest(null);
+  }, []);
+  useEffect(() => {
+    if (externalRef.current) dropExternalPreview();
+  }, [sessionId, dropExternalPreview]);
+  useEffect(() => {
+    if (open !== false || !external) return;
+    dropExternalPreview();
+  }, [open, external, dropExternalPreview]);
   const changes = useMemo(() => index?.entries.filter((entry) => entry.change !== null) ?? [], [index]);
   const changedTree = useMemo(() => buildFileTree(changes, query), [changes, query]);
   const workspaceTree = useMemo(() => buildFileTree(index?.entries ?? [], query), [index, query]);
@@ -269,8 +374,10 @@ export function FilesApp({ sessionId }: { sessionId: string }) {
           {index?.rootLabel ?? <Icon name="folder" size={15} />}
         </button>
         <span className="files-current-path" title={selected?.path}>
+          {selected ? <FileBadge name={selected.name} /> : null}
           {selected?.path}
         </span>
+        {external ? <span className="files-external-chip">external · read-only</span> : null}
         <IconButton
           icon="file-search"
           label="Find files"
@@ -327,7 +434,13 @@ export function FilesApp({ sessionId }: { sessionId: string }) {
               {error}
             </Feedback>
           ) : page?.content !== null && page ? (
-            <pre className="files-preview" key={page.path} tabIndex={0} aria-label={`Preview of ${page.name}`}>
+            <pre
+              ref={preview}
+              className={`files-preview${lineFocused ? ' is-line-focused' : ''}`}
+              key={page.path}
+              tabIndex={0}
+              aria-label={`Preview of ${page.name}`}
+            >
               <code>{page.content || '(Empty file)'}</code>
             </pre>
           ) : (

@@ -1,0 +1,15 @@
+.file-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+/* In prose the glyph sits inside the sentence, aligned with the link text. */
+a .file-icon {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+.files-current-path .file-icon {
+  vertical-align: -2px;
+  margin-right: 6px;
+}

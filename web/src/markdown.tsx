@@ -1,13 +1,16 @@
 import { createContext, memo, useContext, useId, useMemo, type ComponentProps } from 'react';
 import type { Root } from 'hast';
 import { visit } from 'unist-util-visit';
-import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math-extended';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeKatex from 'rehype-katex';
 import { CodeBlock } from './markdown-code.js';
+import { openFileRequest } from './file-links.js';
+import { FileBadge } from './apps/file-badge.js';
+import { parseHref } from '../../src/web/link-protocol.js';
 import MarkdownDiagram from './markdown-diagram.js';
 import { StreamRanges } from './components/stream-text.js';
 import { rehypeStreamReveal, StreamSpan } from './stream-markdown.js';
@@ -17,9 +20,22 @@ import './markdown.css';
 
 const MarkdownSource = createContext('');
 const remarkPlugins = [remarkGfm, remarkMath];
+/**
+ * Any single-letter scheme here is a Windows drive letter: the sanitizer
+ * compares protocols case-sensitively, browsers define no scriptable
+ * single-letter scheme (javascript: and data: are longer), and the link
+ * contract re-validates the path before anything opens. Everything else stays
+ * on the stock allowlist.
+ */
+const DRIVE_PROTOCOLS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
 const schema = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), 'u', 'mark', 'sub', 'sup', 'kbd'],
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), ...DRIVE_PROTOCOLS],
+  },
   attributes: {
     ...defaultSchema.attributes,
     code: [['className', /^language-./, 'math-inline', 'math-display']],
@@ -53,6 +69,15 @@ function localAnchors({ prefix }: { prefix: string }) {
 }
 
 const basePlugins: NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']> = [rehypeRaw, [rehypeSanitize, schema]];
+
+/**
+ * react-markdown and the sanitizer both read a Windows drive letter as a URL
+ * protocol and drop the href, which would turn a citation beyond the workspace
+ * into an empty anchor. Prefixing with a slash makes it a path — both layers
+ * keep it — and the link contract strips that slash back before it
+ * re-validates the absolute target, so nothing is ever trusted here.
+ */
+const citationUrlTransform = (url: string) => defaultUrlTransform(/^[a-z]:\//i.test(url) ? `/${url}` : url);
 
 function MarkdownPre({ node, children, ...props }: ComponentProps<'pre'> & ExtraProps) {
   const markdown = useContext(MarkdownSource);
@@ -107,15 +132,41 @@ const components: Components = {
       <table {...props} />
     </div>
   ),
-  a: ({ node: _node, href, ...props }) => (
-    <a
-      {...props}
-      href={href}
-      target={href?.startsWith('#') ? undefined : '_blank'}
-      data-scroll-preserve={href?.startsWith('#') || undefined}
-      rel="noreferrer"
-    />
-  ),
+  a: ({ node: _node, href, children, ...props }) => {
+    const target = href ? parseHref(href) : null;
+    if (target?.kind === 'file') {
+      const { path, line } = target;
+      return (
+        <a
+          {...props}
+          href={href}
+          data-file-path={path}
+          data-file-line={line}
+          onClick={(event) => {
+            // A workspace citation opens in the Files panel instead of a tab
+            // that cannot resolve the path.
+            event.preventDefault();
+            openFileRequest({ path, line });
+          }}
+        >
+          <FileBadge name={path.split('/').at(-1) ?? path} />
+          {children}
+          {line === undefined ? null : <span className="file-link-line">:{line}</span>}
+        </a>
+      );
+    }
+    return (
+      <a
+        {...props}
+        href={href}
+        target={href?.startsWith('#') ? undefined : '_blank'}
+        data-scroll-preserve={href?.startsWith('#') || undefined}
+        rel="noreferrer"
+      >
+        {children}
+      </a>
+    );
+  },
   img: ({ node: _node, ...props }) => <img {...props} loading="lazy" decoding="async" referrerPolicy="no-referrer" />,
 };
 
@@ -136,7 +187,12 @@ export const Markdown = memo(function Markdown({ text, reveal = noRanges }: { te
     <MarkdownSource.Provider value={text}>
       <StreamRanges.Provider value={reveal}>
         <div className="markdown">
-          <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components}>
+          <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            components={components}
+            urlTransform={citationUrlTransform}
+          >
             {text}
           </ReactMarkdown>
         </div>

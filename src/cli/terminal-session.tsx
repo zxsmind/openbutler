@@ -10,6 +10,7 @@ import { readClipboardImageBase64 } from '../clipboard-image.js';
 import { writeClipboardText } from '../clipboard-text.js';
 import { FrameSelectionTracker, decorate } from './frame-selection.js';
 import { mergeMarkdownTokenSegments } from './markdown-merge.js';
+import { displayFilePath, parseHref } from '../web/link-protocol.js';
 import type { ApprovalDecision } from '../agent-session.js';
 import type { AgentSessionClient } from '../agent-session.js';
 import { getCatalogIndex, getProvider, listProviderSummaries } from '../provider/catalog.js';
@@ -3522,7 +3523,8 @@ function MarkdownBlockquote({
   );
 }
 
-function renderInlineMarkdown(tokens: Token[], dimmed: boolean, keyPrefix: string): ReactNode[] {
+/** Exported for tests: this is the terminal's inline renderer, links included. */
+export function renderInlineMarkdown(tokens: Token[], dimmed: boolean, keyPrefix: string): ReactNode[] {
   return tokens.map((token, index) => {
     const key = `${keyPrefix}-inline-${index}`;
     switch (token.type) {
@@ -3550,12 +3552,27 @@ function renderInlineMarkdown(tokens: Token[], dimmed: boolean, keyPrefix: strin
             {token.text}
           </Text>
         );
-      case 'link':
+      case 'link': {
+        const inner = renderInlineMarkdown(childMarkdownTokens(token), dimmed, key);
+        // A workspace citation keeps its path visible: the terminal cannot open
+        // the file, so the path is the information the reader still needs.
+        const target = parseHref(token.href);
+        if (target?.kind === 'file') {
+          return (
+            <Text key={key}>
+              <Text underline dimColor={dimmed}>
+                {inner}
+              </Text>
+              <Text dimColor> {displayFilePath(target)}</Text>
+            </Text>
+          );
+        }
         return (
           <Text key={key} underline dimColor={dimmed}>
-            {renderInlineMarkdown(childMarkdownTokens(token), dimmed, key)}
+            {inner}
           </Text>
         );
+      }
       case 'image':
         return (
           <Text key={key} dimColor={dimmed}>
@@ -3669,7 +3686,10 @@ function markdownPlainText(tokens: Token[]): string {
         case 'em':
         case 'del':
           return markdownPlainText(childMarkdownTokens(token));
-        case 'link':
+        case 'link': {
+          const target = parseHref(token.href);
+          return target?.kind === 'file' ? `${token.text} ${displayFilePath(target)}` : token.text;
+        }
         case 'image':
           return token.text;
         case 'br':

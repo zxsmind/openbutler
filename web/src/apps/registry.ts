@@ -7,7 +7,7 @@ export interface PanelApp {
   tabTitle?: string;
   icon: IconName;
   showNavigation?: boolean;
-  component: ComponentType<{ sessionId: string }>;
+  component: ComponentType<{ sessionId: string; open?: boolean }>;
 }
 
 /** Application catalog for the workspace panel. */

@@ -270,41 +270,6 @@
 .files-tree-row.is-renamed {
   color: #5e83bf;
 }
-.files-type {
-  display: grid;
-  place-items: center;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  font-size: 8px;
-  font-weight: 600;
-  line-height: 1;
-  color: #9c9fa7;
-}
-.files-type-js,
-.files-type-mjs,
-.files-type-jsx {
-  background: #fff3c2;
-  color: #c29716;
-}
-.files-type-ts,
-.files-type-tsx {
-  background: #e6f0ff;
-  color: #498ad0;
-}
-.files-type-md {
-  color: #00a946;
-  font-size: 10px;
-}
-.files-type-css {
-  color: #9276c2;
-  font-size: 12px;
-}
-.files-type-json {
-  color: #bf9c3d;
-  font-size: 10px;
-}
 .files-preview {
   flex: 1;
   min-width: 0;
@@ -316,4 +281,22 @@
   font-size: 12px;
   line-height: 1.65;
   tab-size: 2;
+}
+
+/* A cited line lights up blue only while its focus highlight is up. */
+.files-preview.is-line-focused ::selection {
+  background: rgb(59 130 246 / 45%);
+}
+
+/* A citation from beyond the workspace: visibly temporary and read-only. */
+.files-external-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid #d8a33f;
+  border-radius: 999px;
+  color: #8a6a1f;
+  font-size: 10px;
+  letter-spacing: 0.02em;
 }

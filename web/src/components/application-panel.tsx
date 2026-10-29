@@ -1,9 +1,9 @@
 import { Suspense, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { panelApps } from '../apps/registry.js';
 import {
-  movePanelHistory,
-  navigatePanelTab,
   newPanelTab,
+  navigatePanelTab,
+  movePanelHistory,
   removePanelTab,
   resolvePanelAddress,
   type PanelTab,
@@ -14,6 +14,7 @@ import { Dropdown } from './selection/dropdown.js';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'framer-motion';
 import { tabBoundsTransition } from './selection/motion-family.js';
 import { Feedback } from './feedback.js';
+import { subscribeFileLink } from '../file-links.js';
 
 export const panelTransitionMs = 260;
 
@@ -137,6 +138,38 @@ export function ApplicationPanel({
     setNotice(null);
     setTabs((previous) => previous.map((tab) => (tab.id === id ? navigatePanelTab(tab, appId, sessionId) : tab)));
   };
+  // A citation resolves in the Files app: show it, whatever the panel is on.
+  const resolveCitation = useRef<() => void>(() => {});
+  resolveCitation.current = () => {
+    if (!sessionId) return;
+    onSelectTool();
+    navigate(active, 'files');
+  };
+  useEffect(() => subscribeFileLink(() => resolveCitation.current()), [sessionId]);
+  // A panel app keeps running across chat switches; without this its session
+  // scope would stay frozen at the chat it was first opened in, and a citation
+  // would resolve against the wrong workspace root.
+  const tabsForSession = useRef(setTabs);
+  tabsForSession.current = setTabs;
+  useEffect(() => {
+    tabsForSession.current((tabs) => {
+      let changed = false;
+      const next = tabs.map((tab) => {
+        let tabChanged = false;
+        const applications = Object.fromEntries(
+          Object.entries(tab.applications).map(([id, instance]) => {
+            if (instance.sessionId === sessionId) return [id, instance];
+            tabChanged = true;
+            return [id, { ...instance, sessionId }];
+          }),
+        );
+        if (!tabChanged) return tab;
+        changed = true;
+        return { ...tab, applications };
+      });
+      return changed ? next : tabs;
+    });
+  }, [sessionId]);
   const history = (delta: number) => setTabs((previous) => previous.map((tab) => (tab.id === active ? movePanelHistory(tab, delta) : tab)));
   const reload = () => {
     setNotice(null);
@@ -305,7 +338,7 @@ export function ApplicationPanel({
               return (
                 <div key={appId} className="panel-app-view" hidden={page !== appId}>
                   <Suspense fallback={null}>
-                    <Application key={instance.revision} sessionId={instance.sessionId} />
+                    <Application key={instance.revision} sessionId={instance.sessionId} open={open} />
                   </Suspense>
                 </div>
               );
