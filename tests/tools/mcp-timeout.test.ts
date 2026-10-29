@@ -377,3 +377,41 @@ it('lets a selected connection budget replace the startup-only 15-second handsha
   await manager.close();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it('stops retrying a server that never connects and hands it to the operator', async () => {
+  const config = await configuredServer();
+  const { connectMcpServers } = await import('../../src/tools/mcp.js');
+  const errors = vi.fn();
+  client.connect.mockRejectedValue(new Error('Sign-in required'));
+  const manager = await connectMcpServers({ fixture: config }, { onError: errors, onConnected: vi.fn() });
+  try {
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(manager.list()[0]).toMatchObject({ state: 'retrying', retryAt: expect.any(Number) });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(client.connect).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(client.connect).toHaveBeenCalledTimes(3);
+    // The third failure ends the loop: the server becomes an operator problem.
+    expect(manager.list()[0]).toMatchObject({ state: 'attention', retryAt: null, connected: false });
+    expect(manager.list()[0]?.lastError).toContain('automatic retry stopped');
+    expect(errors).toHaveBeenCalledWith('fixture', expect.stringContaining('automatic retry stopped'));
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(client.connect).toHaveBeenCalledTimes(3);
+    // Reloading the same configuration must not restart the churn.
+    expect(await manager.reload({ fixture: config })).toBe(false);
+    expect(client.connect).toHaveBeenCalledTimes(3);
+    // A changed configuration is a new server: its attempts start over.
+    const changed = { ...config, url: 'https://fixture.invalid/other' };
+    await manager.reload({ fixture: changed });
+    expect(client.connect).toHaveBeenCalledTimes(4);
+    expect(manager.list()[0]).toMatchObject({ state: 'retrying', retryAt: expect.any(Number) });
+    // A manual connect resets the attempts as well and can finish the sign-in.
+    client.connect.mockResolvedValue(undefined);
+    await manager.connectServer('fixture');
+    expect(client.connect).toHaveBeenCalledTimes(5);
+    expect(manager.list()[0]).toMatchObject({ state: 'connected', retryAt: null });
+  } finally {
+    await manager.close();
+  }
+  expect(vi.getTimerCount()).toBe(0);
+});

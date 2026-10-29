@@ -11,6 +11,7 @@ import type { JSONValue } from 'ai';
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 import { imageTypeFromBytes, summarizeFileToolResult, summarizeImageToolResult } from '../image.js';
 import { getMcpWorkingDirectory } from '../paths.js';
+import { killProcessTree } from '../process-tree.js';
 import { loadSettings, parseMcpServerState, saveSettings, type McpServerState } from '../settings.js';
 import { getRaniteVersion } from '../version.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
@@ -19,6 +20,8 @@ import { redactSensitiveText } from '../sensitive-data.js';
 
 const MCP_HANDSHAKE_TIMEOUT_MS = 15_000;
 const MCP_CLOSE_TIMEOUT_MS = 5_000;
+/** Connection attempts before a server that never connects becomes an operator problem. */
+const MCP_CONNECT_ATTEMPTS_LIMIT = 3;
 
 export interface McpServerRequest {
   id: string;
@@ -31,7 +34,18 @@ export interface McpServerRequest {
   headers?: Record<string, string>;
 }
 
-type ConnectedMcpServer = { id: string; client: Client; tools: ToolDefinition[]; alive: boolean; expectedClose: boolean; stderr: string };
+type ConnectedMcpServer = {
+  id: string;
+  client: Client;
+  tools: ToolDefinition[];
+  alive: boolean;
+  expectedClose: boolean;
+  stderr: string;
+  /** Reads the stdio child pid lazily: it only exists once the transport has spawned. */
+  transportPid?: () => number | null;
+  /** The command this server was spawned with, used to verify a tree kill before it runs. */
+  spawn?: { command: string; args: readonly string[] };
+};
 
 export type McpOperation = { signal?: AbortSignal; timeoutSeconds?: number };
 
@@ -43,7 +57,7 @@ export interface McpConnectionManager {
     transport: string;
     connected: boolean;
     toolCount: number;
-    state: 'connecting' | 'connected' | 'retrying' | 'disconnected';
+    state: 'connecting' | 'connected' | 'retrying' | 'attention' | 'disconnected';
     retryAt: number | null;
     lastError: string | null;
   }>;
@@ -94,6 +108,8 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
   const connecting = new Set<string>();
   const errors = new Map<string, string>();
   const retries = new Map<string, { signature: string; attempt: number; at: number }>();
+  /** Servers whose attempts ran out: kept out of the retry loop until a connect or a config change. */
+  const attention = new Map<string, { signature: string; message: string }>();
   const shutdown = new AbortController();
   let revision = 0;
   let closed = false;
@@ -134,6 +150,22 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
   function retry(id: string, signature: string): void {
     const previous = retries.get(id);
     const attempt = previous?.signature === signature ? previous.attempt + 1 : 1;
+    if (attempt >= MCP_CONNECT_ATTEMPTS_LIMIT) {
+      // A server that never connects — an unfinished sign-in, a dead endpoint — must not
+      // churn for ever: it becomes a visible operator problem with its last error attached.
+      retries.delete(id);
+      const detail = errors.get(id);
+      const message = redactSensitiveText(
+        `MCP server ${id}: ${MCP_CONNECT_ATTEMPTS_LIMIT} connection attempts failed; automatic retry stopped. ` +
+          'Connect it again (mcp_manage connect) and complete any sign-in its output asks for, or remove the server.' +
+          (detail ? ` Last error: ${detail}` : ''),
+      );
+      attention.set(id, { signature, message });
+      errors.set(id, message);
+      scheduleRetry();
+      options.onError(id, message);
+      return;
+    }
     retries.set(id, { signature, attempt, at: Date.now() + Math.min(60_000, 5000 * 2 ** Math.min(attempt - 1, 4)) });
     scheduleRetry();
   }
@@ -187,6 +219,7 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
     configurations.set(id, connectionSignature(config));
     suspended.delete(id);
     retries.delete(id);
+    attention.delete(id);
     errors.delete(id);
     revision++;
     scheduleRetry();
@@ -227,7 +260,15 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
           transport: config.transport,
           connected: active !== undefined,
           toolCount: active?.tools.length ?? 0,
-          state: connecting.has(id) ? 'connecting' : active ? 'connected' : retries.has(id) ? 'retrying' : 'disconnected',
+          state: connecting.has(id)
+            ? 'connecting'
+            : active
+              ? 'connected'
+              : retries.has(id)
+                ? 'retrying'
+                : attention.has(id)
+                  ? 'attention'
+                  : 'disconnected',
           retryAt: retries.get(id)?.at ?? null,
           lastError: errors.get(id) ?? null,
         };
@@ -268,6 +309,9 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
         if (active?.alive && configurations.get(id) === connectionSignature(config))
           return { connected: true, changed: false, tools: active.tools.map((tool) => tool.name) };
         suspended.delete(id);
+        // A manual connect is a fresh start: it resets the attempt counter and the terminal state.
+        retries.delete(id);
+        attention.delete(id);
         const connection = await open(id, config, operation);
         if (!connection) throw new Error(`MCP server ${id} was not connected.`);
         await publish(id, config, connection);
@@ -280,6 +324,7 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
         const config = loadSettings().mcpServers[id];
         if (config) configurations.set(id, connectionSignature(config));
         retries.delete(id);
+        attention.delete(id);
         scheduleRetry();
         const connection = connected.get(id);
         if (!connection) return false;
@@ -298,6 +343,7 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
         configurations.delete(id);
         suspended.delete(id);
         retries.delete(id);
+        attention.delete(id);
         errors.delete(id);
         scheduleRetry();
         const connection = connected.get(id);
@@ -316,9 +362,13 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
             const signature = connectionSignature(config);
             const pending = retries.get(id);
             if (pending && pending.signature !== signature) retries.delete(id);
+            const stopped = attention.get(id);
+            if (stopped && stopped.signature !== signature) attention.delete(id);
             if (configurations.get(id) === signature && (connected.has(id) || suspended.has(id))) return;
             if (connected.has(id) && options.canReconfigure?.() === false) return;
             if (pending?.signature === signature && pending.at > Date.now()) return;
+            // Terminal until the configuration changes or an operator connects it on purpose.
+            if (attention.get(id)?.signature === signature) return;
             const next = await open(id, config);
             if (!next) return;
             // A turn may have started while the replacement handshake was pending.
@@ -333,7 +383,7 @@ export function createMcpConnectionManager(options: McpConnectionOptions): McpCo
         );
         const failed = results.find((result) => result.status === 'rejected');
         if (failed?.status === 'rejected') throw failed.reason;
-        for (const id of new Set([...configurations.keys(), ...retries.keys(), ...suspended])) {
+        for (const id of new Set([...configurations.keys(), ...retries.keys(), ...attention.keys(), ...suspended])) {
           if (Object.hasOwn(servers, id)) continue;
           if (connected.has(id) && options.canReconfigure?.() === false) continue;
           const previous = connected.get(id);
@@ -495,6 +545,10 @@ async function openMcpServer(
   try {
     const transport = createTransport(config);
     if (transport instanceof StdioClientTransport) {
+      // Recorded before the handshake so a failed connect can still verify and remove its tree.
+      const stdio = transport;
+      server.transportPid = () => stdio.pid;
+      if (config.transport === 'stdio') server.spawn = { command: config.command, args: config.args };
       let stderr = '';
       transport.stderr?.on('data', (chunk: Buffer) => {
         stderr = (stderr + chunk.toString('utf8')).slice(-8192);
@@ -586,7 +640,17 @@ async function openMcpServer(
   } catch (error) {
     server.expectedClose = true;
     server.alive = false;
-    await withTimeout(() => client.close(), MCP_CLOSE_TIMEOUT_MS, 'shutdown').catch(() => undefined);
+    // A handshake that timed out (an unfinished sign-in, a dead endpoint) must not leave its
+    // wrapper's children behind: the verified tree is removed first, and only an unverified
+    // pid falls back to the SDK close, which signals the wrapper alone.
+    const pid = server.transportPid?.() ?? null;
+    const spawn = server.spawn;
+    const killed = spawn && pid ? await killProcessTree(pid, spawn.command, spawn.args) : 'unavailable';
+    if (killed === 'killed') {
+      void client.close().catch(() => undefined);
+    } else {
+      await withTimeout(() => client.close(), MCP_CLOSE_TIMEOUT_MS, 'shutdown').catch(() => undefined);
+    }
     const message = sanitize(
       `${error instanceof Error ? error.message : String(error)}${server.stderr ? ` Server output: ${server.stderr}` : ''}`,
     );
@@ -598,6 +662,18 @@ async function openMcpServer(
 async function closeMcpServer(server: ConnectedMcpServer, options: Parameters<typeof connectMcpServers>[1]): Promise<void> {
   server.expectedClose = true;
   server.alive = false;
+  const spawn = server.spawn;
+  const pid = spawn ? (server.transportPid?.() ?? null) : null;
+  if (spawn && pid) {
+    // The wrapper goes down together with its tree while the pid still verifies as ours: the
+    // SDK's own close signals the wrapper only, and its grandchildren (npx, the remote proxy)
+    // would then survive as orphans. A tree that is already gone needs no graceful wait.
+    const outcome = await killProcessTree(pid, spawn.command, spawn.args);
+    if (outcome === 'killed') {
+      void server.client.close().catch(() => undefined);
+      return;
+    }
+  }
   try {
     // Cleanup must start even if the caller cancels after removing the connection.
     await withTimeout(() => server.client.close(), MCP_CLOSE_TIMEOUT_MS, 'shutdown');
