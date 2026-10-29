@@ -76,20 +76,31 @@ export async function readWorkspaceFileTree(workspaceRoot: string): Promise<Work
   return result;
 }
 
-/** Read-only host files, constrained to the workspace even through symlinks. */
+/**
+ * Read-only host files. Inside the workspace the tree reaches folders and files
+ * as before; outside it exactly one thing is readable — a single file an agent
+ * cited, served on its own and flagged external. Folders beyond the scope stay
+ * unlistable, so a citation can display work outside the workspace without
+ * handing the panel a way to browse there.
+ */
 export async function readWorkspaceFiles(workspaceRoot: string, path: string): Promise<WorkspaceFiles> {
   try {
-    if (path.length > 4096 || path.includes('\0') || isAbsolute(path))
-      throw new WorkspaceFilesError(400, 'Choose a path inside this workspace.');
+    if (path.length > 4096 || path.includes('\0')) throw new WorkspaceFilesError(400, 'Choose a path inside this workspace.');
     const root = await realpath(workspaceRoot);
-    const target = await realpath(resolve(root, path));
+    const absolute = isAbsolute(path);
+    const target = await realpath(absolute ? path : resolve(root, path));
     const local = relative(root, target);
-    if (local === '..' || local.startsWith(`..${sep}`) || isAbsolute(local))
-      throw new WorkspaceFilesError(403, 'This path is outside the workspace.');
-    const canonicalPath = local.split(sep).join('/');
+    const inside = local !== '..' && !local.startsWith(`..${sep}`) && !isAbsolute(local);
+    if (!inside && !absolute) throw new WorkspaceFilesError(403, 'This path is outside the workspace.');
+    const external = !inside;
+    // Answer in the shape that was asked for: a relative request gets the
+    // workspace-relative path, an absolute one stays absolute, so the panel can
+    // always match the preview back to the citation it came from.
+    const canonicalPath = !inside || absolute ? target.split(sep).join('/') : local.split(sep).join('/');
     const name = basename(target);
     const info = await stat(target);
     if (info.isDirectory()) {
+      if (external) throw new WorkspaceFilesError(403, 'Folders outside the workspace cannot be listed. Cite the file itself.');
       const children = await readdir(target, { withFileTypes: true });
       const entries = children
         .filter((entry) => entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())
@@ -106,13 +117,27 @@ export async function readWorkspaceFiles(workspaceRoot: string, path: string): P
     }
     if (!info.isFile()) throw new WorkspaceFilesError(400, 'Only folders and regular files can be opened.');
     if (info.size > MAX_PREVIEW_BYTES)
-      return { kind: 'file', path: canonicalPath, name, content: null, notice: 'This file is too large to preview (maximum 256 KB).' };
+      return {
+        kind: 'file',
+        path: canonicalPath,
+        name,
+        content: null,
+        notice: 'This file is too large to preview (maximum 256 KB).',
+        ...(external ? { external: true } : {}),
+      };
     const handle = await open(target, 'r');
     try {
       const bytes = Buffer.alloc(MAX_PREVIEW_BYTES + 1);
       const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
       if (bytesRead > MAX_PREVIEW_BYTES)
-        return { kind: 'file', path: canonicalPath, name, content: null, notice: 'This file is too large to preview (maximum 256 KB).' };
+        return {
+          kind: 'file',
+          path: canonicalPath,
+          name,
+          content: null,
+          notice: 'This file is too large to preview (maximum 256 KB).',
+          ...(external ? { external: true } : {}),
+        };
       const data = bytes.subarray(0, bytesRead);
       let content: string | null = null;
       try {
@@ -126,6 +151,7 @@ export async function readWorkspaceFiles(workspaceRoot: string, path: string): P
         name,
         content,
         notice: content === null ? 'A text preview is not available for this file.' : null,
+        ...(external ? { external: true } : {}),
       };
     } finally {
       await handle.close();

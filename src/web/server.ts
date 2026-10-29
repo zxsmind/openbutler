@@ -519,10 +519,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       if (sessionId !== client.getSnapshot().session.id)
         return sendJson(res, 409, { error: 'The active chat changed. Reopen Files in the current chat.' });
       try {
+        // The scope belongs to the chat the request names — the same rule the
+        // terminal server applies below — not to whichever chat the shared
+        // client happens to track this second: two open chats can hold
+        // different roots, and the panel must answer against its own.
+        const scope = sessionId ? await sessions.get(sessionId) : client;
+        const root = scope.runtime.workspaceRoot;
         const result =
           url.pathname === '/api/files/tree'
-            ? await readWorkspaceFileTree(client.runtime.workspaceRoot)
-            : await readWorkspaceFiles(client.runtime.workspaceRoot, url.searchParams.get('path') ?? '');
+            ? await readWorkspaceFileTree(root)
+            : await readWorkspaceFiles(root, url.searchParams.get('path') ?? '');
         if (sessionId !== client.getSnapshot().session.id)
           return sendJson(res, 409, { error: 'The active chat changed. Reopen Files in the current chat.' });
         return sendJson(res, 200, result);

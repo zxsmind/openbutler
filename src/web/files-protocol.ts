@@ -1,6 +1,13 @@
 export type WorkspaceFiles =
   | { kind: 'directory'; path: string; name: string; entries: Array<{ name: string; kind: 'directory' | 'file' | 'link' }> }
-  | { kind: 'file'; path: string; name: string; content: string | null; notice: string | null };
+  | {
+      kind: 'file';
+      path: string;
+      name: string;
+      content: string | null;
+      notice: string | null;
+      /** Present when the file lies beyond the workspace: one cited, read-only preview. */ external?: boolean;
+    };
 
 export type FileChange = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
 export interface WorkspaceFileTree {
