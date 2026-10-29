@@ -47,15 +47,27 @@ custom service managers must supply the intended environment themselves.
 The bot offers `/start`, `/approvals`, `/stop`, `/clear`, `/sessions`.
 `/approvals` reissues pending approval controls; `/stop` stops current work and
 preserves queued input; `/stop <schedule-id>` targets a schedule run. `/clear`
-starts a new conversation; `/sessions` lists recent choices. The UI can provide
-live draft/stop and approval controls. Exact availability depends on current
-channel/runtime state, not just the configured tokenEnv name.
+starts a new conversation and rebinds the line to it; `/sessions` lists recent
+choices. The UI can provide live draft/stop and approval controls. Exact
+availability depends on current channel/runtime state, not just the configured
+tokenEnv name.
 
-## Current inbound and outbound model
+## Inbound routing: the fixed Telegram line
+
+The paired chat is one fixed line. The first inbound message freezes its target
+session under `telegram:binding:<userId>`; every later message resolves in a
+fixed order — a reply quote goes to the session that sent the quoted message,
+otherwise the binding, with the custodian conversation as the first-use fallback
+that becomes the binding. The resolved target stamps onto the stored event, and
+delivery goes to that session's live controller or restores it when it is not
+open. Session switches, host restarts and reconnects never re-route the channel;
+`/clear` is the explicit move and rebinds the line.
 
 Incoming Telegram owner messages are authenticated and persisted as owner-inbox
 events. Host notification text points to the inbox; the agent reads actual
 messages with `inbox`, not by treating a short pointer as the full user request.
+
+## Outbound delivery
 
 The current `send_message_to_owner` tool sends intentional outbound messages to
 the paired **Telegram** chat; it does not send to the terminal. Inputs are
@@ -63,6 +75,12 @@ the paired **Telegram** chat; it does not send to the terminal. Inputs are
 owner inbox message ids. There is no current `channel: auto|terminal|telegram`
 input in that tool. Ordinary assistant text and tool activity are not automatically
 forwarded as Telegram replies.
+
+Any session may send. The bound line sends bare; a message from another session
+is prefixed with its `[session title]` so the owner can tell which chat answered.
+Each successful send records its Telegram message id against the sending session,
+so a Telegram reply quoting one of those messages routes back to that session
+instead of the line.
 
 ```json
 {"text":"The requested inspection is complete.","replyTo":["<owner-message-id>"]}
@@ -105,6 +123,9 @@ for source replies and notification ids for acknowledgement are not interchangea
 
 Reading removes a notification from the pending inbox without deleting its
 history. Read notifications do not repeat, including after a new chat or restart.
+Telegram rows are scoped to the line's target session: other sessions see no
+Telegram items and cannot consume an unread one, while already-read history
+stays readable from any owner session.
 Only unread notifications are reminded, at five-minute intervals. Reply through
 the source tool with its message identity when needed. Check
 `errors` as well as `remaining`: an unavailable adapter is not an empty inbox.
@@ -122,6 +143,7 @@ use inbox to impersonate owner/team access outside its assigned tool set.
 | Repeated notification | Whether its content was read; only unread items receive five-minute reminders |
 | Missing image/file | Local staged path, media validation and channel limit |
 | Works interactively, not at login | Startup-service environment and active host identity |
+| Answer arrived from another session | The `[title]` origin label names the sending session; quote that message on Telegram to continue in it |
 
 Owner stop prevents automatic waking until explicitly released. Notifications
 are durable pointers; they are not proof a remote action succeeded or a fresh

@@ -47,8 +47,10 @@ this terminal to it. The host keeps running after the terminal closes, which is
 what lets schedules, Telegram turns, and long runs continue unattended. The TUI
 only renders; every turn executes in the host.
 
-There is one machine-wide custodian conversation. The terminal, Telegram, and
-the browser client all reach that same session, and each turn carries the
+There is one machine-wide custodian conversation. The terminal and the browser
+client reach its current session; the paired Telegram chat stays bound to the
+one session it started from until `/clear` rebinds it, so Telegram routing never
+shifts when the terminal switches chats. Each turn carries the
 workspace it was sent from, so the scope of a turn never depends on which client
 typed it. Bare `ranite` uses the directory you launched it in as the workspace,
 so work there runs without permission prompts and nothing is asked at startup.
@@ -247,8 +249,8 @@ terminal opens the worker's transcript.
 
 ## Telegram channel
 
-One guided command connects a private Telegram chat to the same machine-wide
-custodian conversation as the terminal:
+One guided command connects a private Telegram chat to the machine-wide
+custodian conversation as one fixed line:
 
 ```sh
 ranite telegram setup
@@ -261,10 +263,13 @@ while you send the one-time pairing command to the bot, and delivers a test
 message to prove the channel works end to end. That setting selects the scope of
 Telegram turns; it does not define Ranite's identity. In the chat, `/approvals`
 re-sends pending approvals, `/stop` stops the current run while preserving queued
-messages, `/stop <schedule-id>` stops a scheduled run, `/clear` starts a new chat,
-and `/sessions` lists the last 10 chats. A live draft shows current output and a
+messages, `/stop <schedule-id>` stops a scheduled run, `/clear` starts a new chat
+and rebinds the line, and `/sessions` lists the last 10 chats. A live draft shows current output and a
 Stop control. Completed assistant messages return to their original Telegram chat
 in order; tool results and private reasoning stay separate from those replies.
+A message sent from a session other than the bound line carries a
+`[session title]` prefix, and quoting one of those messages with a Telegram
+reply continues the conversation in the session that sent it.
 Long messages are split without discarding text or cutting an HTML entity, and
 confirmed chunks are not replayed after a later chunk fails.
 

@@ -1,6 +1,6 @@
 import { MAX_TOOL_INPUT_CHARS, type ToolDefinition } from './registry.js';
 
-type SendOwnerMessage = (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+type SendOwnerMessage = (input: Record<string, unknown>, workspaceRoot: string, senderSessionId?: string) => Promise<unknown>;
 
 export function createSendMessageToOwnerTool(workspaceRoot: string, send: SendOwnerMessage): ToolDefinition {
   return {
@@ -29,13 +29,13 @@ export function createSendMessageToOwnerTool(workspaceRoot: string, send: SendOw
     },
     effect: { change: 'none', data: 'sensitive', network: 'used', reversible: 'none', outbound: 'model-and-tool-server' },
     autoApprove: () => true,
-    execute: async (input) => {
+    execute: async (input, _signal, context) => {
       const payload = ['text', 'imagePath', 'filePath'].some((field) => {
         const value = input[field];
         return typeof value === 'string' && value.trim() !== '';
       });
       if (!payload) return { error: 'Provide at least one of text, imagePath or filePath.' };
-      return send(input, workspaceRoot);
+      return send(input, workspaceRoot, context?.sessionId);
     },
   };
 }

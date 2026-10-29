@@ -65,7 +65,7 @@ export interface CreateAgentRuntimeOptions {
   onMcpConnected?: (serverId: string, toolCount: number) => void;
   backgroundManage?: (input: Record<string, unknown>, workspaceRoot: string, senderSessionId: string | undefined) => Promise<unknown>;
   inbox?: (request: InboxRequest, sessionId: string | undefined) => Promise<unknown>;
-  ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string) => Promise<unknown>;
+  ownerMessageSend?: (input: Record<string, unknown>, workspaceRoot: string, senderSessionId?: string) => Promise<unknown>;
   teamDelivery?: (input: Record<string, unknown>) => Promise<unknown>;
   teamSend?: (input: { recipient: string; text: string; replyTo?: string }) => Promise<unknown>;
   teamGroup?: (limit: number, acknowledge?: number) => Promise<unknown>;

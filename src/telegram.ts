@@ -20,6 +20,7 @@ type TelegramCallbacks = {
     updateId: number,
     text: string,
     attachment?: { image?: { filename: string; mediaType: string; bytes: Buffer }; attachmentError?: string },
+    replyToMessageId?: number,
   ) => Promise<void>;
   approval: (requestId: string, decision: ApprovalDecision) => boolean;
   paired: (chatId: string, userId: string) => void;
@@ -135,33 +136,44 @@ export class TelegramAdapter {
     return { code, expiresAt: new Date(expiresAt).toISOString(), username: this.status.username };
   }
 
-  async sendOwner(text: string, keyboard?: Record<string, unknown>): Promise<boolean> {
+  async sendOwner(text: string, keyboard?: Record<string, unknown>, onSent?: (messageId: number) => void): Promise<boolean> {
     if (!this.readyToSend()) return false;
     const chunks = splitTelegramText(text);
     for (const [index, chunk] of chunks.entries()) {
-      await this.call('sendMessage', {
+      const result = await this.call('sendMessage', {
         chat_id: this.settings!.chatId,
         text: chunk,
         link_preview_options: { is_disabled: true },
         ...(keyboard && index === chunks.length - 1 ? { reply_markup: keyboard } : {}),
       });
+      emitSentMessageId(result, onSent);
     }
     return true;
   }
 
-  async sendOwnerImage(bytes: Buffer, filename: string, mediaType: string, caption = ''): Promise<boolean> {
+  async sendOwnerImage(
+    bytes: Buffer,
+    filename: string,
+    mediaType: string,
+    caption = '',
+    onSent?: (messageId: number) => void,
+  ): Promise<boolean> {
     if (!this.readyToSend()) return false;
     if (bytes.length > 10 * 1024 * 1024) throw new Error('Telegram photos must be 10 MB or smaller.');
     const detectedType = imageTypeFromBytes(bytes);
     if (!detectedType || detectedType !== mediaType) throw new Error('The attachment is not a supported image.');
-    await this.callUpload('sendPhoto', 'photo', bytes, filename, mediaType, { caption: caption.slice(0, 1024) });
+    const result = await this.callUpload('sendPhoto', 'photo', bytes, filename, mediaType, { caption: caption.slice(0, 1024) });
+    emitSentMessageId(result, onSent);
     return true;
   }
 
-  async sendOwnerDocument(bytes: Buffer, filename: string, caption = ''): Promise<boolean> {
+  async sendOwnerDocument(bytes: Buffer, filename: string, caption = '', onSent?: (messageId: number) => void): Promise<boolean> {
     if (!this.readyToSend()) return false;
     if (bytes.length > 50 * 1024 * 1024) throw new Error('Telegram documents must be 50 MB or smaller.');
-    await this.callUpload('sendDocument', 'document', bytes, filename, 'application/octet-stream', { caption: caption.slice(0, 1024) });
+    const result = await this.callUpload('sendDocument', 'document', bytes, filename, 'application/octet-stream', {
+      caption: caption.slice(0, 1024),
+    });
+    emitSentMessageId(result, onSent);
     return true;
   }
 
@@ -436,15 +448,26 @@ export class TelegramAdapter {
               ? imageDocument.file_id
               : null;
         const body = text || (typeof message.caption === 'string' ? message.caption : '');
+        const replyToMessageId =
+          isRecord(message.reply_to_message) && Number.isSafeInteger(message.reply_to_message.message_id)
+            ? Number(message.reply_to_message.message_id)
+            : undefined;
+        // Reply metadata rides only when present, so a plain message keeps the
+        // plain callback shape and existing exact-arity assertions stay honest.
+        const emit = (attachment?: { image?: { filename: string; mediaType: string; bytes: Buffer }; attachmentError?: string }) => {
+          if (attachment === undefined && replyToMessageId === undefined) return this.callbacks.message(updateId, body);
+          if (replyToMessageId === undefined) return this.callbacks.message(updateId, body, attachment);
+          return this.callbacks.message(updateId, body, attachment, replyToMessageId);
+        };
         if (imageFileId || body.trim()) {
-          if (!imageFileId) await this.callbacks.message(updateId, body);
+          if (!imageFileId) await emit();
           else {
             try {
               const image = await this.downloadOwnerImage(imageFileId);
               if (imageDocument && typeof imageDocument.file_name === 'string') image.filename = imageDocument.file_name;
-              await this.callbacks.message(updateId, body, { image });
+              await emit({ image });
             } catch (error) {
-              await this.callbacks.message(updateId, body, { attachmentError: errorText(error) });
+              await emit({ attachmentError: errorText(error) });
             }
           }
         }
@@ -678,6 +701,11 @@ function telegramDraftPreview(text: string): string {
 
 function codeHash(code: string): Buffer {
   return createHash('sha256').update(code.toLowerCase()).digest();
+}
+/** Hands the Telegram message id to an origin recorder; a non-message result is ignored. */
+function emitSentMessageId(result: unknown, onSent?: (messageId: number) => void): void {
+  if (!onSent) return;
+  if (isRecord(result) && Number.isSafeInteger(result.message_id)) onSent(Number(result.message_id));
 }
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
