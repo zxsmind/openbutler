@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { DraftImage } from './types.js';
 import { PENDING_CHAT_ID, useSession } from './use-session.js';
 import { useProjects } from './projects/use-projects.js';
@@ -21,6 +21,25 @@ import { IconButton } from './components/ui.js';
 import { readDrafts, saveDraft } from './composer-state.js';
 import { WorkspacePanels } from './components/workspace-panels.js';
 import { Feedback } from './components/feedback.js';
+import { useEdgeResize } from './edge-resize.js';
+import {
+  SIDEBAR_CHAT_MIN_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  resolveSidebarResize,
+} from './panel-resize.js';
+
+const sidebarStorageKey = 'ranite:sidebar-width:v1';
+
+function readSidebarWidth(): number {
+  try {
+    const value = JSON.parse(localStorage.getItem(sidebarStorageKey) || '{}');
+    return Number.isFinite(value.width) && value.width > 0 ? value.width : SIDEBAR_DEFAULT_WIDTH;
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH;
+  }
+}
 
 export function App() {
   const session = useSession();
@@ -42,6 +61,8 @@ export function App() {
   const closeCreateProject = useCallback(() => setCreateProjectOpen(false), []);
   const [sidebarVisible, setSidebarVisible] = useState(() => window.matchMedia('(min-width: 761px)').matches);
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 760px)').matches);
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   // Settings are a page addressed by the hash (#/settings/usage): no router, and
@@ -123,6 +144,31 @@ export function App() {
     return () => media.removeEventListener('change', update);
   }, []);
   useEffect(() => {
+    const onViewport = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onViewport);
+    return () => window.removeEventListener('resize', onViewport);
+  }, []);
+  // The conversation keeps SIDEBAR_CHAT_MIN_WIDTH beside the sidebar, so the cap
+  // follows the viewport instead of a fixed number alone.
+  const sidebarMaximum = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, viewportWidth - SIDEBAR_CHAT_MIN_WIDTH));
+  const activeSidebarWidth = Math.min(sidebarMaximum, Math.max(SIDEBAR_MIN_WIDTH, sidebarWidth));
+  const sidebarEdge = useEdgeResize({
+    direction: 1,
+    width: activeSidebarWidth,
+    getMaximum: () => sidebarMaximum,
+    resolve: (initial, distance, available) => ({ size: resolveSidebarResize(initial, distance, available) }),
+    onResize: (size) => setSidebarWidth(size),
+  });
+  // The width survives reloads; a drag only writes once the pointer lets go.
+  useEffect(() => {
+    if (sidebarEdge.dragging) return;
+    try {
+      localStorage.setItem(sidebarStorageKey, JSON.stringify({ width: sidebarWidth }));
+    } catch {
+      /* Private browsing can disable storage. */
+    }
+  }, [sidebarWidth, sidebarEdge.dragging]);
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (document.querySelector('dialog[open]')) return;
@@ -192,7 +238,12 @@ export function App() {
     }
   };
   return (
-    <div className={`app${sidebarVisible ? ' sidebar-visible' : ''}${narrow ? ' narrow' : ''}`}>
+    <div
+      className={`app${sidebarVisible ? ' sidebar-visible' : ''}${narrow ? ' narrow' : ''}${
+        sidebarEdge.dragging ? ' is-resizing sidebar-resizing' : ''
+      }`}
+      style={{ '--ui-sidebar-width': `${activeSidebarWidth}px` } as CSSProperties}
+    >
       {narrow && sidebarVisible ? (
         <button className="sidebar-backdrop" aria-label="Close conversations" onClick={() => setSidebarVisible(false)} />
       ) : null}
@@ -223,6 +274,39 @@ export function App() {
         onClose={() => setSidebarVisible(false)}
         onSettings={() => openSettings(DEFAULT_SETTINGS_SECTION)}
       />
+      {sidebarVisible && !narrow && !settingsSection ? (
+        <div
+          role="separator"
+          tabIndex={0}
+          className="sidebar-resizer"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-controls="sidebar-nav"
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={Math.round(sidebarMaximum)}
+          aria-valuenow={Math.round(activeSidebarWidth)}
+          aria-valuetext={`${Math.round(activeSidebarWidth)} pixels`}
+          title="Drag to resize sidebar"
+          onPointerDown={sidebarEdge.start}
+          onPointerMove={sidebarEdge.move}
+          onPointerUp={sidebarEdge.finish}
+          onPointerCancel={sidebarEdge.finish}
+          onLostPointerCapture={sidebarEdge.finish}
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const distance =
+              event.key === 'Home'
+                ? SIDEBAR_DEFAULT_WIDTH - activeSidebarWidth
+                : event.key === 'End'
+                  ? sidebarMaximum - activeSidebarWidth
+                  : event.key === 'ArrowRight'
+                    ? 32
+                    : -32;
+            setSidebarWidth(resolveSidebarResize(activeSidebarWidth, distance, sidebarMaximum));
+          }}
+        />
+      ) : null}
       <div className="workspace-surface" inert={!!settingsSection}>
         <WorkspacePanels
           sessionId={session.pendingNewChatId && placeholderRef.current ? placeholderRef.current.previousId : id}

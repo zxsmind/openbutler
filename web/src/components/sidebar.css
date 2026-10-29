@@ -141,3 +141,36 @@
   height: 15px;
   flex: 0 0 15px;
 }
+
+/* The resize handle sits on the sidebar's right seam; .app carries
+   --sidebar-width, so the handle follows the dragged width exactly. */
+.sidebar-resizer {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  bottom: 4px;
+  left: calc(var(--sidebar-width) - 5px);
+  width: 11px;
+  touch-action: none;
+  user-select: none;
+  cursor: col-resize;
+}
+
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 5px;
+  background: transparent;
+  transition: background-color 150ms ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.is-resizing .sidebar-resizer::after {
+  background: #a8c1e8;
+}
+
+.sidebar-resizing,
+.sidebar-resizing * {
+  cursor: col-resize !important;
+}

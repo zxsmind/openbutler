@@ -49,7 +49,7 @@ export function Sidebar(props: SidebarProps) {
     </button>
   );
   return (
-    <aside className="sidebar sidebar-shell" aria-label="Conversations" inert={props.inert}>
+    <aside id="sidebar-nav" className="sidebar sidebar-shell" aria-label="Conversations" inert={props.inert}>
       <SidebarHeader onSearch={props.onSearch} searchLabel="Search chats" onClose={props.onClose} />
       <Button className="new-chat" icon="square-pen" onClick={props.onNew} disabled={props.disabled} title={props.disabledReason}>
         New chat

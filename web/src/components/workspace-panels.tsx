@@ -1,6 +1,8 @@
-import { useCallback, useRef, useState, useEffect, useLayoutEffect, type CSSProperties, type ReactNode, type PointerEvent } from 'react';
+import { useCallback, useRef, useState, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
 import { ApplicationPanel, panelTransitionMs } from './application-panel.js';
 import { PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH, resolvePanelResize } from '../panel-resize.js';
+import { useEdgeResize } from '../edge-resize.js';
+import { subscribeFileLink } from '../file-links.js';
 import './workspace-panels.css';
 
 const storageKey = 'ranite:workspace-panels:v1';
@@ -32,13 +34,11 @@ export function WorkspacePanels({
   const main = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(readWidth);
   const [maximum, setMaximum] = useState(0);
-  const [dragging, setDragging] = useState(false);
   const [panelMotion, setPanelMotion] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selectedSurface, setSelectedSurface] = useState<'chat' | 'tool'>('tool');
   const restoreWidth = useRef(PANEL_DEFAULT_WIDTH);
   const motionTimer = useRef<number | null>(null);
-  const drag = useRef<{ pointer: number; start: number; width: number; moved: boolean } | null>(null);
 
   useLayoutEffect(() => {
     if (!root.current) return;
@@ -51,14 +51,6 @@ export function WorkspacePanels({
   useEffect(() => {
     if (maximum > 0 && width >= maximum) setExpanded(true);
   }, [maximum, width]);
-  useEffect(() => {
-    if (dragging) return;
-    try {
-      localStorage.setItem(storageKey, JSON.stringify({ right: width }));
-    } catch {
-      /* Private browsing can disable storage. */
-    }
-  }, [width, dragging]);
   useEffect(
     () => () => {
       if (motionTimer.current !== null) window.clearTimeout(motionTimer.current);
@@ -87,6 +79,26 @@ export function WorkspacePanels({
     },
     [maximum, setMotion],
   );
+  const edge = useEdgeResize({
+    direction: -1,
+    width: visibleWidth,
+    getMaximum: () => maximum,
+    resolve: (initial, distance, available) => {
+      const resolved = resolvePanelResize(initial, distance, available);
+      return { size: resolved.size, end: resolved.snap };
+    },
+    onStart: () => setMotion(false),
+    onResize: (size, end) => update(size, end),
+  });
+  // Not while the pointer owns the width: the drag's last value is the one worth keeping.
+  useEffect(() => {
+    if (edge.dragging) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ right: width }));
+    } catch {
+      /* Private browsing can disable storage. */
+    }
+  }, [width, edge.dragging]);
   const closePanel = () => {
     setSelectedSurface('tool');
     update(0, true);
@@ -99,6 +111,12 @@ export function WorkspacePanels({
     if (visibleWidth > 0) closePanel();
     else openPanel();
   };
+  useEffect(() => {
+    // A citation needs the panel it resolves in; opening it is this
+    // component's state, so the request has to reach here as well.
+    if (visibleWidth > 0) return;
+    return subscribeFileLink(() => openPanel());
+  }, [openPanel, visibleWidth]);
   useEffect(() => {
     const element = main.current;
     if (!element || maximum === 0 || (visibleWidth > 0 && !(expanded && selectedSurface === 'chat'))) return;
@@ -169,37 +187,10 @@ export function WorkspacePanels({
       setExpanded(true);
     }
   };
-  const start = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || visibleWidth === 0) return;
-    setMotion(false);
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { pointer: event.pointerId, start: event.clientX, width: visibleWidth, moved: false };
-    setDragging(true);
-  };
-  const move = (event: PointerEvent<HTMLDivElement>) => {
-    const current = drag.current;
-    if (!current || current.pointer !== event.pointerId) return;
-    const distance = current.start - event.clientX;
-    if (Math.abs(distance) > 3) current.moved = true;
-    if (!current.moved) return;
-    const resolved = resolvePanelResize(current.width, distance, maximum);
-    if (resolved.snap) {
-      drag.current = null;
-      setDragging(false);
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    update(resolved.size, resolved.snap);
-  };
-  const finish = () => {
-    drag.current = null;
-    setDragging(false);
-  };
-
   return (
     <div
       ref={root}
-      className={`workspace-panels${dragging ? ' is-resizing is-resizing-right' : ''}${panelMotion ? ' is-panel-transitioning' : ''}${expanded ? ` panel-expanded-right${selectedSurface === 'chat' ? ' panel-chat-selected' : ''}` : ''}`}
+      className={`workspace-panels${edge.dragging ? ' is-resizing is-resizing-right' : ''}${panelMotion ? ' is-panel-transitioning' : ''}${expanded ? ` panel-expanded-right${selectedSurface === 'chat' ? ' panel-chat-selected' : ''}` : ''}`}
       style={
         {
           '--panel-right': `${visibleWidth}px`,
@@ -224,11 +215,11 @@ export function WorkspacePanels({
         aria-valuenow={Math.round(visibleWidth)}
         aria-valuetext={`${Math.round(visibleWidth)} pixels`}
         title="Drag to resize or close right panel"
-        onPointerDown={start}
-        onPointerMove={move}
-        onPointerUp={finish}
-        onPointerCancel={finish}
-        onLostPointerCapture={finish}
+        onPointerDown={edge.start}
+        onPointerMove={edge.move}
+        onPointerUp={edge.finish}
+        onPointerCancel={edge.finish}
+        onLostPointerCapture={edge.finish}
         onKeyDown={(event) => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)) return;
           event.preventDefault();
