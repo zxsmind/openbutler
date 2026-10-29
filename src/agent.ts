@@ -30,7 +30,9 @@ type AgentProviderOptions = Record<string, Record<string, JSONValue>>;
  *
  * It is the first thing in every request, so the provider's prefix cache depends
  * on it being byte-identical from one turn to the next. It therefore carries no
- * clock and no live session list; the session builds it once and reuses it.
+ * live clock and no live session list; the session builds it once and reuses it.
+ * The `## Time` section names where the clock lives (every tool result's stamp)
+ * without ever embedding a value, so the guarantee above still holds.
  */
 export function buildAgentSystem(workspaceRoot = process.cwd(), systemInstruction?: string): string {
   const paths = getMemoryPaths(workspaceRoot);

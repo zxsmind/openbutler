@@ -43,6 +43,17 @@ describe('the system prompt is a stable, cacheable prefix', () => {
     expect(first).not.toContain('## Recent sessions');
   });
 
+  it('tells the agent where the clock lives without embedding one', async () => {
+    const { buildAgentSystem } = await import('../src/agent.js');
+    const system = buildAgentSystem(workspace);
+    expect(system).toContain('## Time');
+    expect(system).toContain('ran at YYYY-MM-DD HH:MM:SS');
+    // The section describes the stamp's shape; no concrete wall time may appear
+    // anywhere in the prompt, or the frozen prefix becomes a stale clock.
+    expect(system).not.toMatch(/\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\b/);
+    expect(buildAgentSystem(workspace)).toBe(system);
+  });
+
   it('changes only when the reference context on disk changes', async () => {
     const { buildAgentSystem } = await import('../src/agent.js');
     const before = buildAgentSystem(workspace);
