@@ -157,6 +157,12 @@ async function createFixtureHost(): Promise<DaemonHost> {
         ...(fixtureSettingsReload ? { reloadSettings: fixtureSettingsReload } : {}),
         close: async () => {},
       };
+      // Fidelity with the production runtime (agent-runtime.ts): a session whose
+      // message arrives with a channel scope rebinds to it instead of failing.
+      // A fixture without this diverges from prod exactly where scope rules meet.
+      runtime.selectWorkspaceRoot = async (path: string) => {
+        if (path !== runtime.workspaceRoot) runtime.workspaceRoot = path;
+      };
       return runtime;
     },
   });

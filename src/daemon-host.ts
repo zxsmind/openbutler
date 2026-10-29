@@ -37,7 +37,14 @@ import {
   type SessionEntriesPatch,
   type SessionSnapshotData,
 } from './daemon-protocol.js';
-import { listSavedSessions, loadSavedSession, type SessionEntry, type SavedSession } from './session-store.js';
+import { listSavedSessions, loadSavedSession, saveSession, type SessionEntry, type SavedSession } from './session-store.js';
+import {
+  ownerInboxVisibleTo,
+  resolveTelegramTargetSession as decideTelegramTargetSession,
+  telegramBindingKey,
+  telegramMessageOriginKey,
+  telegramOutboundLabel,
+} from './telegram-routing.js';
 import { ActivityLedger, type ObservedEventInput, type ObservedEventRow } from './activity-ledger.js';
 import { redactSensitive, redactSensitiveText } from './sensitive-data.js';
 import {
@@ -222,6 +229,7 @@ export interface DaemonHost {
     updateId: number,
     text: string,
     attachment?: { image?: { filename: string; mediaType: string; bytes: Buffer }; attachmentError?: string },
+    replyToMessageId?: number,
   ): Promise<void>;
   close(): Promise<void>;
 }
@@ -402,7 +410,9 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return {
           items: ledger
             .ownerInboxNotifications()
-            .filter((event) => belongsToOwner(event) && ownerInboxIsUnread(event))
+            .filter(
+              (event) => belongsToOwner(event) && ownerInboxIsUnread(event) && ownerInboxVisibleTo(ownerInboxTargetFor(event), sessionId),
+            )
             .map((event) => ({
               reference: event.id,
               receivedAt: event.receivedAt,
@@ -417,7 +427,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       },
       acknowledge: async (references, sessionId) => {
         requireCustodian(sessionId);
-        await readOwnerInbox(0, [...references], []);
+        await readOwnerInbox(0, [...references], [], sessionId);
         return { status: 'acknowledged' };
       },
     });
@@ -1217,6 +1227,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       }
 
       ledger.setState(CUSTODIAN_CURRENT_SESSION_KEY, controller.getSnapshot().session.id);
+      stampCustodianContextLimit(controller.getSnapshot().session.id);
       const workspace: WorkspaceHost = {
         root: custodianRoot,
         runtime,
@@ -1233,7 +1244,10 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         const previous = workspace.lastSnapshot;
         workspace.lastSnapshot = next;
         if (previous.busy && !next.busy) reloadSettledRuntime(workspace);
-        if (previous.session.id !== next.session.id) ledger.setState(CUSTODIAN_CURRENT_SESSION_KEY, next.session.id);
+        if (previous.session.id !== next.session.id) {
+          ledger.setState(CUSTODIAN_CURRENT_SESSION_KEY, next.session.id);
+          stampCustodianContextLimit(next.session.id);
+        }
         for (const client of workspace.clients) {
           const scopeRoot = attachments.get(client)?.scopeRoot ?? runtime.workspaceRoot;
           writeEvent(client, makeSessionEvent(previous, next, runtime, scopeRoot));
@@ -1587,7 +1601,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         if (closing) return;
         telegram = new TelegramAdapter(settings.telegram, ledger, {
           log: options.log,
-          message: (updateId, text, attachment) => receiveTelegramMessage(updateId, text, attachment),
+          message: (updateId, text, attachment, replyToMessageId) => receiveTelegramMessage(updateId, text, attachment, replyToMessageId),
           approval: (requestId, decision) => {
             const controller = approvalControllers.get(requestId);
             if (!controller || controller.getSnapshot().pendingApprovalId !== requestId) return false;
@@ -1642,6 +1656,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     updateId: number,
     text: string,
     attachment?: { image?: { filename: string; mediaType: string; bytes: Buffer }; attachmentError?: string },
+    replyToMessageId?: number,
   ): Promise<void> {
     const settings = loadSettings().telegram;
     if (!settings?.chatId || !settings.userId) return;
@@ -1665,8 +1680,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       await telegram?.sendOwner(active ? 'Stopping the requested run; queued messages are kept.' : 'No matching run is active.');
       return;
     }
-    // Telegram is a channel into the machine custodian, not a separate session. Its messages
-    // land in the custodian's current chat; these commands let the owner steer that chat.
+    // Telegram is a fixed line into one session: the binding created at arrival.
+    // These commands steer that line; /clear starts a new chat and rebinds it.
     if (text.trim() === '/clear') {
       const workspace = await getCustodianWorkspace(custodianWorkspace?.runtime.workspaceRoot ?? settings.workspaceRoot);
       if (workspace.controller.isBusy) {
@@ -1674,6 +1689,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return;
       }
       workspace.controller.createNewSession();
+      ledger.setState(telegramBindingKey(settings.userId), workspace.controller.getSnapshot().session.id);
+      stampCustodianContextLimit(workspace.controller.getSnapshot().session.id);
       await telegram?.sendOwner('Started a new chat. Send your request whenever you are ready.');
       return;
     }
@@ -1688,17 +1705,20 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       return;
     }
     let file: FileAttachment | undefined;
-    let recipientSessionId: string | undefined;
     // A message with neither words nor an attachment carries nothing to act on.
     // Recording it produced an inbox item that could never be answered, so every
     // later start woke the agent with an empty "you have a notification" turn.
     if (!text.trim() && !attachment?.image && !attachment?.attachmentError) return;
+    // Resolve the line once at arrival: reply-correlation, then the fixed binding,
+    // then the custodian conversation — which becomes the binding. Delivery never
+    // re-decides, so a session switch elsewhere cannot re-route the channel.
+    const targetSessionId = await resolveInboundTelegramTarget(settings.userId, replyToMessageId, settings.chatId);
     if (attachment?.image) {
-      const workspace = await getCustodianWorkspace(custodianWorkspace?.runtime.workspaceRoot ?? settings.workspaceRoot);
-      recipientSessionId = workspace.controller.getSnapshot().session.id;
-      workspace.controller.flushSave({ allowEmpty: true });
-      if (workspace.controller.getSnapshot().sessionSaveError) throw new Error('The attachment session could not be saved.');
-      file = storeAttachment(recipientSessionId, attachment.image.bytes, attachment.image.filename, attachment.image.mediaType);
+      if (!targetSessionId) throw new Error('The attachment session could not be resolved.');
+      const targetController = findSessionController(targetSessionId);
+      targetController?.flushSave({ allowEmpty: true });
+      if (targetController?.getSnapshot().sessionSaveError) throw new Error('The attachment session could not be saved.');
+      file = storeAttachment(targetSessionId, attachment.image.bytes, attachment.image.filename, attachment.image.mediaType);
     }
     const inboxEvent = ledger.insertEvent({
       source: 'owner-inbox',
@@ -1709,12 +1729,148 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         text,
         userId: settings.userId,
         chatId: settings.chatId,
-        ...(file ? { attachments: [file], sessionId: recipientSessionId } : {}),
+        ...(targetSessionId ? { targetSessionId } : {}),
+        ...(file ? { attachments: [file], sessionId: targetSessionId } : {}),
         ...(attachment?.attachmentError ? { attachmentError: attachment.attachmentError } : {}),
       },
     });
     const stored = ledger.getEvent(inboxEvent.id);
     if (stored && !ledger.getState(`owner-inbox:reply:${stored.id}`)) enqueueOwnerInboxWake(stored);
+  }
+
+  /** A bound session counts as existing only when it is live or its store file is still on disk. */
+  function telegramSessionExists(sessionId: string): boolean {
+    if (!sessionId) return false;
+    if (findSessionController(sessionId)) return true;
+    try {
+      return loadSavedSession(sessionId) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The owner's custodian chat stays inside a fixed active-context budget;
+   * compaction triggers against it instead of the model window. Stamped on
+   * every chat that becomes the custodian line — first binding, /clear rebind,
+   * or a custodian session switch — and persisted with the session, so the cap
+   * follows the line across restarts. A session already above the cap keeps the
+   * full window (effectiveContextWindowTokens) until a fresh chat starts under it.
+   */
+  const CUSTODIAN_CONTEXT_LIMIT_TOKENS = 200_000;
+
+  function stampCustodianContextLimit(sessionId: string | null | undefined): void {
+    if (!sessionId) return;
+    const live = findSessionController(sessionId);
+    if (live) {
+      live.setContextLimitTokens(CUSTODIAN_CONTEXT_LIMIT_TOKENS);
+      return;
+    }
+    try {
+      const stored = loadSavedSession(sessionId);
+      if (stored && stored.contextLimitTokens === undefined) saveSession({ ...stored, contextLimitTokens: CUSTODIAN_CONTEXT_LIMIT_TOKENS });
+    } catch {
+      // An unreadable session file must never break the channel; the stamp
+      // retries the next time this session is resolved.
+    }
+  }
+
+  /**
+   * The session a Telegram message belongs to, decided once at arrival:
+   * reply-correlation, then the fixed binding, then the custodian's current
+   * conversation — which becomes the binding. Later pointer moves (session
+   * load, clear, reconnect restore) never re-route the channel.
+   */
+  async function resolveInboundTelegramTarget(userId: string, replyToMessageId?: number, chatId?: string): Promise<string | null> {
+    const settings = loadSettings().telegram;
+    const binding = ledger.getState(telegramBindingKey(userId)) ?? null;
+    const custodianSessionId =
+      custodianWorkspace?.controller.getSnapshot().session.id ?? ledger.getState(CUSTODIAN_CURRENT_SESSION_KEY) ?? null;
+    const decided = decideTelegramTargetSession({
+      replyOriginSessionId:
+        replyToMessageId !== undefined && chatId ? ledger.getState(telegramMessageOriginKey(chatId, replyToMessageId)) : null,
+      bindingSessionId: binding,
+      custodianSessionId,
+      exists: telegramSessionExists,
+    });
+    if (decided) {
+      if (decided !== binding) ledger.setState(telegramBindingKey(userId), decided);
+      stampCustodianContextLimit(decided);
+      return decided;
+    }
+    // No session is resolvable yet (fresh host): load the custodian and freeze its conversation.
+    const workspace = await getCustodianWorkspace(custodianWorkspace?.runtime.workspaceRoot ?? settings?.workspaceRoot ?? process.cwd());
+    const sessionId = workspace.controller.getSnapshot().session.id;
+    ledger.setState(telegramBindingKey(userId), sessionId);
+    stampCustodianContextLimit(sessionId);
+    return sessionId;
+  }
+
+  /** Resolves the target stamped on a wake, with the binding as the legacy fallback. */
+  function resolveTelegramDeliveryTarget(event: ObservedEventRow): string | null {
+    const stamped = typeof event.payload.targetSessionId === 'string' ? event.payload.targetSessionId : '';
+    if (stamped && telegramSessionExists(stamped)) return stamped;
+    const userId = typeof event.payload.userId === 'string' ? event.payload.userId : '';
+    const binding = userId ? ledger.getState(telegramBindingKey(userId)) : null;
+    const custodianSessionId =
+      custodianWorkspace?.controller.getSnapshot().session.id ?? ledger.getState(CUSTODIAN_CURRENT_SESSION_KEY) ?? null;
+    return decideTelegramTargetSession({ bindingSessionId: binding, custodianSessionId, exists: telegramSessionExists });
+  }
+
+  /** The session an owner-inbox row is readable by; null keeps the row open like the pre-binding inbox. */
+  function ownerInboxTargetFor(event: ObservedEventRow): string | null {
+    const stamped = typeof event.payload.targetSessionId === 'string' ? event.payload.targetSessionId : '';
+    if (stamped) return telegramSessionExists(stamped) ? stamped : null;
+    const userId = typeof event.payload.userId === 'string' ? event.payload.userId : '';
+    const binding = userId ? ledger.getState(telegramBindingKey(userId)) : null;
+    return binding && telegramSessionExists(binding) ? binding : null;
+  }
+
+  /**
+   * Live controller for a Telegram target: the custodian's own conversation
+   * stays on the custodian controller, any other session runs where it already
+   * runs or is restored as its own chat, and an unresolvable target falls back
+   * to the custodian so the message is never dropped.
+   */
+  async function resolveTelegramDeliveryController(targetSessionId: string | null, scopeRoot: string): Promise<AgentSessionController> {
+    const custodian = await getCustodianWorkspace(scopeRoot);
+    const custodianController = custodian.controller;
+    const custodianSessionId = custodianController.getSnapshot().session.id;
+    const target = targetSessionId ?? custodianSessionId;
+    if (!telegramSessionExists(target) || target === custodianSessionId) return custodianController;
+    const live = findSessionController(target);
+    if (live) return live;
+    const unscoped = loadSavedSession(target, null);
+    if (unscoped) {
+      try {
+        const restored = await openChat(scopeRoot, target);
+        return restored.controller;
+      } catch (error) {
+        options.log(`Telegram target session could not be restored: ${String(error)}`);
+        return custodianController;
+      }
+    }
+    const scoped = loadSavedSession(target);
+    if (scoped?.workspaceRoot) {
+      try {
+        const workspace = await getWorkspace(canonicalWorkspaceRoot(scoped.workspaceRoot));
+        const restored = createPrivateSession(workspace, undefined, false, { restoreSessionId: target });
+        return restored.controller;
+      } catch (error) {
+        options.log(`Telegram target session could not be restored: ${String(error)}`);
+        return custodianController;
+      }
+    }
+    options.log(`Telegram target session ${target} no longer exists; falling back to the custodian conversation.`);
+    return custodianController;
+  }
+
+  /** Session title used as the outbound origin label. */
+  function telegramSessionTitle(sessionId: string): string | null {
+    const live = findSessionController(sessionId)?.getSnapshot().session.title;
+    const title = live ?? loadSavedSession(sessionId)?.title ?? null;
+    const cleaned = title?.replace(/\s+/g, ' ').trim();
+    return cleaned && cleaned !== 'New session' ? cleaned : null;
   }
 
   function ownerInboxIsUnread(event: ObservedEventRow): boolean {
@@ -1752,6 +1908,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         inboxEventId: inbox.id,
         chatId: inbox.payload.chatId,
         userId: inbox.payload.userId,
+        ...(typeof inbox.payload.targetSessionId === 'string' ? { targetSessionId: inbox.payload.targetSessionId } : {}),
       },
     });
     if (!inserted.inserted) return;
@@ -1867,7 +2024,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   function resolveRunController(key: string): AgentSessionController | undefined {
     const persistent = persistentSessions.get(key)?.session.controller;
     if (persistent) return persistent;
-    if (key.startsWith('telegram:')) return custodianWorkspace?.controller;
+    if (key.startsWith('telegram:')) {
+      // /stop follows the bound line: its run lives on whichever controller holds the binding.
+      const userId = key.slice('telegram:'.length);
+      const binding = ledger.getState(telegramBindingKey(userId));
+      const live = binding ? findSessionController(binding) : null;
+      return live ?? custodianWorkspace?.controller;
+    }
     return undefined;
   }
 
@@ -2036,13 +2199,24 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       return;
     }
     const configuredRoot = canonicalWorkspaceRoot(settings.telegram!.workspaceRoot);
-    const workspace = remote
-      ? await getCustodianWorkspace(custodianWorkspace?.runtime.workspaceRoot ?? configuredRoot)
-      : await getWorkspace(configuredRoot);
-    const root = remote ? workspace.runtime.workspaceRoot : configuredRoot;
-    // Telegram and every TUI client share the same machine custodian controller. The workspace
-    // is carried on each queued message, so the controller selects scope only when that turn runs.
-    const controller = remote ? workspace.controller : (await getPersistentSession(workspace, key, true)).session.controller;
+    let controller: AgentSessionController;
+    let runtime: AgentEnvironment;
+    let root: string;
+    if (remote) {
+      // The target session was decided when the message arrived; here it is only
+      // mapped to a live controller (custodian, an open chat, or a restore).
+      controller = await resolveTelegramDeliveryController(
+        resolveTelegramDeliveryTarget(event),
+        custodianWorkspace?.runtime.workspaceRoot ?? configuredRoot,
+      );
+      runtime = controller.runtime;
+      root = runtime.workspaceRoot;
+    } else {
+      const workspace = await getWorkspace(configuredRoot);
+      controller = (await getPersistentSession(workspace, key, true)).session.controller;
+      runtime = workspace.runtime;
+      root = configuredRoot;
+    }
     if (closing) throw new Error('Host is shutting down.');
     if ((stopGenerations.get(key) ?? 0) !== stopGeneration) throw new Error('Run cancelled before execution.');
     const recoveryInboxIds = Array.isArray(event.payload.inboxEventIds)
@@ -2085,8 +2259,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           : {}),
       },
       {
-        reasoningVariantId: workspace.runtime.reasoningDefault,
-        showReasoning: workspace.runtime.showReasoningDefault,
+        reasoningVariantId: runtime.reasoningDefault,
+        showReasoning: runtime.showReasoningDefault,
       },
     );
     await controller.flushSave();
@@ -2672,6 +2846,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     workspaceRoot: string,
     route?: OwnerReplyRoute,
     media?: { path: string; filename: string; kind: 'image' | 'file'; mediaType?: string },
+    originSessionId?: string,
   ): Promise<{ id: string; delivered: boolean }> {
     const settings = loadSettings().telegram;
     const replyTo =
@@ -2691,6 +2866,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         targetChannel: replyTo.channel,
         targetChatId: replyTo.channel === 'telegram' ? replyTo.chatId : null,
         ...(media ? { media } : {}),
+        ...(originSessionId ? { originSessionId } : {}),
       },
     });
     const event = ledger.claimEvent(inserted.id)!;
@@ -2736,6 +2912,14 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       }
       const unread = ownerInboxIsUnread(event);
       if (event.status === 'processing') continue;
+      // The lock guards consumption, not history: a session other than the
+      // target cannot take an unread row, but already-read rows stay readable
+      // so a re-read across new chats and restarts keeps working. Discovery of
+      // unread ids already requires the target-scoped list.
+      if (unread && readerSessionId && !ownerInboxVisibleTo(ownerInboxTargetFor(event), readerSessionId)) {
+        if (selected) throw new Error('That message was routed to another session.');
+        continue;
+      }
       if (unread) {
         if (event.status !== 'pending') ledger.setEventState(event.id, 'pending');
         if (!ledger.claimEvent(event.id)) continue;
@@ -2870,6 +3054,12 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
     const current = loadSettings().telegram;
     if (typeof target === 'string' && current?.enabled && current.chatId === target) {
+      // Successful sends become the reply-correlation map: quoting one of these
+      // messages on Telegram routes the reply back to the session that sent it.
+      const originSessionId = typeof event.payload.originSessionId === 'string' ? event.payload.originSessionId : '';
+      const recordOrigin = originSessionId
+        ? (messageId: number) => ledger.setState(telegramMessageOriginKey(target, messageId), originSessionId)
+        : undefined;
       let retryMs = 30_000;
       try {
         const receiptKey = `notification:telegram-next:${event.id}`;
@@ -2885,15 +3075,15 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           const bytes = await readFile(path);
           const sent =
             media.kind === 'image'
-              ? await telegram?.sendOwnerImage(bytes, media.filename, String(media.mediaType ?? ''), messages[0] ?? '')
-              : await telegram?.sendOwnerDocument(bytes, media.filename, messages[0] ?? '');
+              ? await telegram?.sendOwnerImage(bytes, media.filename, String(media.mediaType ?? ''), messages[0] ?? '', recordOrigin)
+              : await telegram?.sendOwnerDocument(bytes, media.filename, messages[0] ?? '', recordOrigin);
           if (!sent) throw new Error('Telegram is not connected to the paired owner chat.');
           ledger.setState(`notification:telegram-media:${event.id}`, 'sent');
           ledger.setState(receiptKey, String(Math.min(1, messages.length)));
           next = Number(ledger.getState(receiptKey) ?? '0');
         }
         while (next < messages.length) {
-          if (!(await telegram?.sendOwner(messages[next]!))) break;
+          if (!(await telegram?.sendOwner(messages[next]!, undefined, recordOrigin))) break;
           ledger.setState(receiptKey, String(++next));
         }
         if (next === messages.length) {
@@ -2914,12 +3104,19 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     return false;
   }
 
-  async function executeOwnerMessage(input: Record<string, unknown>, workspaceRoot: string): Promise<unknown> {
+  async function executeOwnerMessage(input: Record<string, unknown>, workspaceRoot: string, senderSessionId?: string): Promise<unknown> {
     const settings = loadSettings().telegram;
     if (!settings?.enabled || !settings.chatId || telegram?.getStatus().paired !== true)
       throw new Error(
         'The owner Telegram chat is not connected. Write findings as the run closing report message instead; it is stored durably.',
       );
+    // The bound Telegram line stays unlabeled; any other session's outbound is
+    // tagged with its chat title so the owner can tell where a message came from.
+    const label = telegramOutboundLabel({
+      senderSessionId: senderSessionId ?? null,
+      boundSessionId: settings.userId ? (ledger.getState(telegramBindingKey(settings.userId)) ?? null) : null,
+      senderTitle: senderSessionId ? telegramSessionTitle(senderSessionId) : null,
+    });
     const text = input.text === undefined ? '' : requireString(input.text, 'text', 28_000);
     const imagePath = input.imagePath === undefined ? '' : requireString(input.imagePath, 'imagePath', MAX_WORKSPACE_PATH_BYTES);
     const filePath = input.filePath === undefined ? '' : requireString(input.filePath, 'filePath', MAX_WORKSPACE_PATH_BYTES);
@@ -2939,7 +3136,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const maximum = imagePath ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
       if (details.size > maximum)
         throw new Error(`Telegram ${imagePath ? 'photos' : 'documents'} must be ${maximum / (1024 * 1024)} MB or smaller.`);
-      if (text.length > 1024) throw new Error('Telegram media captions must be 1024 characters or fewer.');
+      if (text.length + (label ? label.length + 2 : 0) > 1024) throw new Error('Telegram media captions must be 1024 characters or fewer.');
       const bytes = await readFile(path);
       const mediaType = imagePath ? imageTypeFromBytes(bytes) : null;
       if (imagePath && !mediaType) throw new Error('imagePath must be a PNG, JPEG, GIF, or WebP image.');
@@ -2952,11 +3149,12 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
     try {
       const result = await queueOwnerMessages(
-        '',
+        label,
         text ? [text] : [],
         workspaceRoot,
         { channel: 'telegram', chatId: settings.chatId },
         media,
+        senderSessionId,
       );
       const validReplies = replyTo.filter((id) => {
         const event = ledger.getEvent(id);
