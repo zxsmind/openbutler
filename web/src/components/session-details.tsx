@@ -20,7 +20,12 @@ export function SessionDetails({ payload, onClose }: { payload: SessionPayload |
         <dt>Provider</dt>
         <dd>{runtime?.providerName || runtime?.providerId || '—'}</dd>
         <dt>Workspace</dt>
-        <dd>{runtime?.workspaceRoot || '—'}</dd>
+        <dd>
+          {runtime?.workspaceRoot || '—'}
+          <span className="workspace-scope">
+            {payload?.session?.project?.name ? `project: ${payload.session.project.name}` : 'no project'}
+          </span>
+        </dd>
         <dt>Permissions</dt>
         <dd>{runtime?.approvalMode || '—'}</dd>
         <dt>Entries</dt>

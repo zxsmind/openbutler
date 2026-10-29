@@ -10,8 +10,8 @@ const MAX_FOLDERS = 16;
 const key = (path: string) => (process.platform === 'win32' ? path.toLowerCase() : path);
 
 export class ProjectInputError extends Error {}
-export function sessionProject(id: string | null): SessionProject {
-  const scope = resolveProjectSelection(id);
+export function sessionProject(id: string | null, fallbackRoot?: string): SessionProject {
+  const scope = resolveProjectSelection(id, fallbackRoot);
   return {
     id,
     name: scope.projectContext?.name ?? null,
@@ -127,8 +127,16 @@ export function createProject(input: unknown): Project {
 }
 
 /** Resolve once at queue admission. A queued turn keeps the owner's chosen scope. */
-export function resolveProjectSelection(id: unknown): { workspaceRoot: string; projectContext?: ProjectContext } {
+/**
+ * The scope a chat runs in. A selected project wins with its first folder;
+ * without one the caller's own scope wins, because "no project" must mean the
+ * directory the client attached with (the launch scope), never a folder the
+ * owner never chose. The scratch folder stays as the last resort for a caller
+ * that owns no scope at all, so nothing can resolve to an empty path.
+ */
+export function resolveProjectSelection(id: unknown, fallbackRoot?: string): { workspaceRoot: string; projectContext?: ProjectContext } {
   if (id === null) {
+    if (typeof fallbackRoot === 'string' && fallbackRoot.length > 0) return { workspaceRoot: projectFolder(fallbackRoot) };
     const folder = getDataPath('workspace');
     mkdirSync(folder, { recursive: true });
     return { workspaceRoot: projectFolder(folder) };

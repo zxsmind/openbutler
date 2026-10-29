@@ -1092,6 +1092,12 @@ select:focus-visible,
   box-shadow: 0 12px 40px #233b5d18;
   animation: enter 200ms var(--ease);
 }
+.workspace-scope {
+  display: block;
+  margin-top: 2px;
+  color: #727a8c;
+  font-size: 11px;
+}
 .details-heading {
   display: flex;
   align-items: center;

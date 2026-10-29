@@ -555,7 +555,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       if (current.busy || current.queuedMessageCount > 0) return sendJson(res, 409, { error: 'Wait for the running task to finish.' });
       if (!client.runtime.supportsProjects || !client.selectProject)
         return sendJson(res, 409, { error: 'Restart the Ranite server to apply the project scope.' });
-      resolveProjectSelection(body.projectId);
+      resolveProjectSelection(body.projectId, options.workspaceRoot);
       await client.selectProject(body.projectId as string | null, body.sessionId as string);
       const entries = client.getServerEntries() as Entry[];
       const from = tailWindowStart(entries);

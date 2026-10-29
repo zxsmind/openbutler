@@ -1083,7 +1083,8 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     const restartSaved = restartSessionId ? loadSavedSession(restartSessionId, root) : null;
     const selected = chat?.saved ?? restartSaved;
     const runtime = await createSessionRuntime(
-      chat?.saved?.project?.workspaceRoot ?? (chat && !chat.saved ? resolveProjectSelection(chat.projectId ?? null).workspaceRoot : root),
+      chat?.saved?.project?.workspaceRoot ??
+        (chat && !chat.saved ? resolveProjectSelection(chat.projectId ?? null, root).workspaceRoot : root),
       selected ? { providerId: selected.providerId, modelId: selected.modelId } : undefined,
     );
     if (closing) {

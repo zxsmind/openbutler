@@ -632,13 +632,13 @@ export class AgentSessionController implements AgentSessionClient {
     if (this.busy) throw new ProjectInputError('Wait for the running task to finish before choosing a project.');
     // No file write: a chat whose first message has not landed is not a store
     // entry. The binding stays in memory and is persisted with that message.
-    this.session = saveSession({ ...this.session, project: sessionProject(projectId) });
+    this.session = saveSession({ ...this.session, project: sessionProject(projectId, this.sessionWorkspaceScope ?? undefined) });
     this.publish(false);
   }
 
   createNewSession(projectId?: string | null): void {
     if (this.busy) return;
-    const project = projectId === undefined ? undefined : sessionProject(projectId);
+    const project = projectId === undefined ? undefined : sessionProject(projectId, this.sessionWorkspaceScope ?? undefined);
     this.cancelTitleGeneration();
     this.flushSave();
     this.session = createSession(
