@@ -124,6 +124,12 @@ export interface SavedSession {
   /** Byte estimate of the last provider-measured input, used only for subsequent growth. */
   contextEstimateTokens?: number;
   contextWindowTokens?: number;
+  /**
+   * Active-context budget stamped on custodian-line chats: compaction triggers
+   * against this instead of the model window, so the chat stays inside the
+   * owner's chosen cap. Absent on every other session.
+   */
+  contextLimitTokens?: number;
   contextGrowthTokens?: number;
   /** Opaque provider/key-pool ids mapped to the last selected key position. */
   keyPositions?: Record<string, number>;
@@ -161,6 +167,24 @@ export interface SessionSummary {
   providerId: string;
   modelId: string;
   workspaceRoot?: string;
+}
+
+/**
+ * The context window compaction budgets against for one session. A custodian-line
+ * chat carries an owner-chosen cap; any other session keeps the model window.
+ * Once measured context has passed the cap the full window returns: compaction
+ * cannot summarise down through a limit its own request would already exceed,
+ * so an oversized chat keeps normal behaviour instead of failing at every step
+ * boundary.
+ */
+export function effectiveContextWindowTokens(
+  window: number | null,
+  cap: number | undefined,
+  measuredContextTokens: number | undefined,
+): number | null {
+  if (window === null || cap === undefined) return window;
+  if (measuredContextTokens !== undefined && measuredContextTokens >= cap) return window;
+  return Math.min(window, cap);
 }
 
 export function createSession(providerId: string, modelId: string, contextWindowTokens?: number, workspaceRoot?: string): SavedSession {
@@ -498,6 +522,7 @@ export function saveSession(session: SavedSession, options: { allowEmpty?: boole
     ...(session.contextTokens === undefined ? {} : { contextTokens: session.contextTokens }),
     ...(session.contextEstimateTokens === undefined ? {} : { contextEstimateTokens: session.contextEstimateTokens }),
     ...(session.contextWindowTokens === undefined ? {} : { contextWindowTokens: session.contextWindowTokens }),
+    ...(session.contextLimitTokens === undefined ? {} : { contextLimitTokens: session.contextLimitTokens }),
     ...(session.contextGrowthTokens === undefined ? {} : { contextGrowthTokens: session.contextGrowthTokens }),
     hasUserMessage,
     ...(session.automaticWakeHeld === undefined ? {} : { automaticWakeHeld: session.automaticWakeHeld }),
@@ -579,6 +604,8 @@ function isSavedSession(value: unknown): value is SavedSession {
       (typeof value.contextWindowTokens === 'number' &&
         Number.isSafeInteger(value.contextWindowTokens) &&
         value.contextWindowTokens > 0)) &&
+    (value.contextLimitTokens === undefined ||
+      (typeof value.contextLimitTokens === 'number' && Number.isSafeInteger(value.contextLimitTokens) && value.contextLimitTokens > 0)) &&
     (value.contextGrowthTokens === undefined ||
       (typeof value.contextGrowthTokens === 'number' &&
         Number.isSafeInteger(value.contextGrowthTokens) &&

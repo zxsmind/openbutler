@@ -8,6 +8,7 @@ import type { StepUsageReport } from './agent.js';
 import type { UsageRecordInput } from './usage/recorder.js';
 import {
   createSession,
+  effectiveContextWindowTokens,
   listSavedSessions,
   loadSavedSession,
   saveSession,
@@ -663,6 +664,32 @@ export class AgentSessionController implements AgentSessionClient {
     this.currentReviewAuthorization = null;
     this.currentReviewMessages = [];
     this.publish();
+  }
+
+  /**
+   * Stamps the custodian line's active-context budget onto the session. The
+   * host applies it whenever a chat becomes the custodian line (first binding,
+   * /clear rebind, custodian switch); it persists with the session, so the cap
+   * survives restarts and model switches.
+   */
+  setContextLimitTokens(limit: number): void {
+    if (this.session.contextLimitTokens === limit) return;
+    this.session = saveSession({ ...this.session, contextLimitTokens: limit });
+    this.publish();
+  }
+
+  /**
+   * Compaction budget: the model window, or the stamped custodian cap while
+   * measured context is still under it. Past the cap the full window returns
+   * (effectiveContextWindowTokens), so an oversized chat keeps normal
+   * compaction instead of failing at every step boundary.
+   */
+  private effectiveContextWindowTokensForCompaction(): number | null {
+    return effectiveContextWindowTokens(
+      this.runtime.contextWindowTokens,
+      this.session.contextLimitTokens,
+      this.lastContextUsage ?? this.lastContextEstimate,
+    );
   }
 
   async restoreSessionModel(): Promise<void> {
@@ -1717,7 +1744,7 @@ export class AgentSessionController implements AgentSessionClient {
                     ...context,
                     archivePath: sessionFilePath(this.session.id),
                     model: this.sessionModel(),
-                    contextWindowTokens: this.runtime.contextWindowTokens,
+                    contextWindowTokens: this.effectiveContextWindowTokensForCompaction(),
                     outputLimitTokens: this.runtime.outputLimitTokens,
                     ...(this.lastContextUsage !== undefined ? { previousContextTokens: this.lastContextUsage } : {}),
                     ...(this.lastContextEstimate !== undefined ? { previousContextEstimateTokens: this.lastContextEstimate } : {}),
@@ -2094,7 +2121,7 @@ export class AgentSessionController implements AgentSessionClient {
         archivePath: sessionFilePath(this.session.id),
         tools: tools.tools,
         model: this.sessionModel(),
-        contextWindowTokens: this.runtime.contextWindowTokens,
+        contextWindowTokens: this.effectiveContextWindowTokensForCompaction(),
         outputLimitTokens: this.runtime.outputLimitTokens,
         ...(this.lastContextUsage !== undefined ? { previousContextTokens: this.lastContextUsage } : {}),
         ...(this.lastContextEstimate !== undefined ? { previousContextEstimateTokens: this.lastContextEstimate } : {}),
