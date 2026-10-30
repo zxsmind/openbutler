@@ -233,9 +233,10 @@ export class AgentSessionController implements AgentSessionClient {
   private conversationArchive: ModelMessage[] = [];
   /**
    * The system prompt, built once and reused byte-for-byte for the life of a
-   * session so the provider's prefix cache always hits. It is rebuilt only when
-   * the workspace, model, or session changes, or after a compaction (which
-   * rewrites the conversation anyway).
+   * session so the provider's prefix cache always hits. It is rebuilt only
+   * through `refreshSystemPrompt`: at a scope change (session, workspace,
+   * provider or model) and after a compaction's summary has landed. A rebuild
+   * never precedes a request that could still reuse the cached prefix.
    */
   private frozenSystem: { key: string; text: string } | null = null;
   private readonly listeners = new Set<() => void>();
@@ -605,7 +606,7 @@ export class AgentSessionController implements AgentSessionClient {
     };
     this.conversation = [...session.conversation];
     this.conversationArchive = [...(session.conversationArchive ?? [])];
-    this.frozenSystem = null;
+    this.refreshSystemPrompt();
     this.lastContextUsage = session.contextTokens;
     this.lastContextEstimate = session.contextEstimateTokens;
     this.contextUsageBaseline = session.contextTokens;
@@ -650,7 +651,7 @@ export class AgentSessionController implements AgentSessionClient {
     if (project) this.session = saveSession({ ...this.session, project });
     this.conversation = [];
     this.conversationArchive = [];
-    this.frozenSystem = null;
+    this.refreshSystemPrompt();
     this.lastContextUsage = undefined;
     this.lastContextEstimate = undefined;
     this.contextUsageBaseline = undefined;
@@ -939,7 +940,10 @@ export class AgentSessionController implements AgentSessionClient {
   /**
    * The session's frozen system prompt, built on first use and reused verbatim
    * afterwards. The cache key covers the three things a rebuild is mandatory
-   * for; a compaction clears the cache so the next turn picks up fresh context.
+   * for: workspace, provider/model and session. The remaining refresh point -
+   * after a compaction's summary - belongs to `refreshSystemPrompt`, never to
+   * this function: rebuilding in front of a request that could reuse the cached
+   * prefix is what makes the largest request of a session miss.
    */
   private frozenSystemPrompt(build: (workspaceRoot: string, systemInstruction?: string) => string): string {
     const key = `${this.runtime.workspaceRoot}\u0000${this.runtime.providerId}\u0000${this.runtime.modelId}\u0000${this.session.id}`;
@@ -947,6 +951,21 @@ export class AgentSessionController implements AgentSessionClient {
       this.frozenSystem = { key, text: build(this.runtime.workspaceRoot, this.options.systemInstruction) };
     }
     return this.frozenSystem.text;
+  }
+
+  /**
+   * Drops the frozen prompt so the next run rebuilds the reference block from
+   * disk (memory index, skills, user context, team identity).
+   *
+   * Ordering is the contract, not an optimization: this runs only after a
+   * compaction's summary has landed, where the conversation rewrite has already
+   * killed the message prefix, so the re-read costs one system read instead of a
+   * miss on every later turn. Inside the running turn the request keeps the
+   * string it started with, so the refresh lands at the next run and never in
+   * front of the compaction request itself.
+   */
+  private refreshSystemPrompt(): void {
+    this.frozenSystem = null;
   }
 
   private flushStreamedDeltas(): void {
@@ -1742,6 +1761,7 @@ export class AgentSessionController implements AgentSessionClient {
                 try {
                   const compacted = await compactConversation({
                     ...context,
+                    onStepUsage: (report) => this.onStepUsage(report, 'compaction'),
                     archivePath: sessionFilePath(this.session.id),
                     model: this.sessionModel(),
                     contextWindowTokens: this.effectiveContextWindowTokensForCompaction(),
@@ -2100,14 +2120,19 @@ export class AgentSessionController implements AgentSessionClient {
     reportSessionActivity(this.session.id, true);
     this.publish();
     try {
-      const [{ getAgentContext }, { compactConversation }] = await Promise.all([import('./agent.js'), import('./compaction.js')]);
+      const [{ getAgentContext, buildAgentSystem }, { compactConversation }] = await Promise.all([
+        import('./agent.js'),
+        import('./compaction.js'),
+      ]);
       const context = getAgentContext(
         this.conversation,
         this.runtime.supportsImageToolResult,
         this.runtime.workspaceRoot,
         this.options.systemInstruction,
         this.runtime.supportsVision,
-        undefined,
+        // The session's frozen prompt: the compaction request shares its prefix
+        // with the turn that triggered it, so only the appended prompt is new.
+        this.frozenSystemPrompt(buildAgentSystem),
         this.session.id,
       );
       const schemaSanitizer = this.toolSchemaSanitizer();
@@ -2127,6 +2152,7 @@ export class AgentSessionController implements AgentSessionClient {
         ...(this.lastContextEstimate !== undefined ? { previousContextEstimateTokens: this.lastContextEstimate } : {}),
         ...(this.contextGrowthThisTurn !== undefined ? { recentContextGrowthTokens: this.contextGrowthThisTurn } : {}),
         providerOptions: this.runtime.getReasoningProviderOptions(preferences.reasoningVariantId, preferences.showReasoning),
+        onStepUsage: (report) => this.onStepUsage(report, 'compaction'),
         onStart: () => {
           this.flushStreamedEntries();
           // The row exists from the first moment so the reader sees "compacting"
@@ -2188,9 +2214,10 @@ export class AgentSessionController implements AgentSessionClient {
     this.flushStreamedEntries();
     if (this.conversationArchive.length === 0) this.conversationArchive = [...this.conversation];
     this.conversation = result.messages;
-    // A compaction rewrites the conversation, so the cached prefix is already
-    // gone; the next turn rebuilds the system prompt from fresh context.
-    this.frozenSystem = null;
+    // The rewrite has already killed the message prefix, so this is the cheapest
+    // point to re-read the reference block; refreshSystemPrompt explains why the
+    // refresh must not move any earlier.
+    this.refreshSystemPrompt();
     this.lastContextUsage = undefined;
     this.lastContextEstimate = undefined;
     this.contextUsageBaseline = undefined;
@@ -2218,14 +2245,14 @@ export class AgentSessionController implements AgentSessionClient {
    * One accounting row per model request. Nothing here can fail a run: the sink is
    * best effort and the ledger write is fire and forget.
    */
-  private onStepUsage(report: StepUsageReport): void {
+  private onStepUsage(report: StepUsageReport, runKind: UsageRecordInput['runKind'] = 'chat'): void {
     const sink = this.runtime.recordUsage;
     if (!sink) return;
     sink(
       {
         sessionId: this.session.id,
         ...(this.activeEventId ? { eventId: this.activeEventId } : {}),
-        runKind: 'chat',
+        runKind,
         ...(this.runtime.workspaceRoot ? { workspaceRoot: this.runtime.workspaceRoot } : {}),
         providerId: this.runtime.providerId,
         modelId: this.runtime.modelId,

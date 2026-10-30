@@ -1,5 +1,6 @@
 import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
+import type { StepUsageReport } from './agent.js';
 import { fileToolResultToModelMessage, imageToolResultToModelMessage, summarizeFileToolResult, summarizeImageToolResult } from './image.js';
 import type { ReasoningVariant } from './provider/registry.js';
 import {
@@ -91,6 +92,12 @@ export async function compactConversation(
     previousContextTokens?: number;
     previousContextEstimateTokens?: number;
     onStart?: () => void;
+    /**
+     * One accounting row for the summarization request, the largest request of
+     * a session. Emitted once usage is available; a stream that dies before the
+     * provider reports usage leaves no row, because there is nothing to bill.
+     */
+    onStepUsage?: (report: StepUsageReport) => void;
     onTextDelta?: (text: string) => void;
     onReasoningDelta?: (text: string) => void;
     abortSignal?: AbortSignal;
@@ -154,6 +161,7 @@ export async function compactConversation(
   }
 
   options.abortSignal?.throwIfAborted();
+  const requestStartedAt = Date.now();
   options.onStart?.();
   let streamError: unknown;
   let hasStreamError = false;
@@ -191,6 +199,29 @@ export async function compactConversation(
       : new Error(typeof streamError === 'string' ? streamError : (JSON.stringify(streamError) ?? String(streamError)));
   const finishReason = await result.finishReason;
   const usage = await result.usage;
+  // Same row shape a chat step writes, so `ranite usage` can show what this
+  // request cost and how much of it the prefix cache served.
+  const inputDetails = usage.inputTokenDetails;
+  const outputDetails = usage.outputTokenDetails;
+  const response = await result.response;
+  options.onStepUsage?.({
+    startedAt: requestStartedAt,
+    endedAt: Date.now(),
+    attempt: 1,
+    status: finishReason === 'error' || finishReason === 'content-filter' || finishReason === 'length' ? 'error' : 'ok',
+    usage: {
+      ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+      ...(inputDetails?.noCacheTokens === undefined ? {} : { noCacheTokens: inputDetails.noCacheTokens }),
+      ...(inputDetails?.cacheReadTokens === undefined ? {} : { cacheReadTokens: inputDetails.cacheReadTokens }),
+      ...(inputDetails?.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: inputDetails.cacheWriteTokens }),
+      ...(usage.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+      ...(outputDetails?.textTokens === undefined ? {} : { textTokens: outputDetails.textTokens }),
+      ...(outputDetails?.reasoningTokens === undefined ? {} : { reasoningTokens: outputDetails.reasoningTokens }),
+      ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+    },
+    raw: usage,
+    ...('id' in response && typeof response.id === 'string' ? { responseId: response.id } : {}),
+  });
   if (finishReason === 'length') {
     const budget = maxOutputTokens === undefined ? 'provider default' : `${maxOutputTokens} tokens requested`;
     const used = usage.outputTokens === undefined ? 'usage unavailable' : `${usage.outputTokens} tokens used`;

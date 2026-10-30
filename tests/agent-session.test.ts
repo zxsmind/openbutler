@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -1617,6 +1617,51 @@ describe('session compaction persistence and continuation', () => {
     // preference now governs its running turn, and an explicit runtime settings
     // change made mid-turn still overrides it immediately.
     expect(runtime.getReasoningProviderOptions).toHaveBeenCalledWith('xhigh', true);
+  });
+
+  it('reuses the frozen system prompt for the compaction request and refreshes it only after the summary', async () => {
+    const { AgentSessionController } = await import('../src/agent-session.js');
+    const { buildAgentSystem } = await import('../src/agent.js');
+    const { COMPACTION_PROMPT } = await import('../src/compaction.js');
+    const model = new MockLanguageModelV3({
+      doStream: [fixtureText('First answer.'), fixtureText('Checkpoint written.'), fixtureText('Second answer.')],
+    });
+    const runtime = runtimeFor(model);
+    const rows: Array<{ runKind: string; tokens: { inputTokens?: number } }> = [];
+    runtime.recordUsage = (input) => {
+      rows.push(input);
+    };
+    session = new AgentSessionController(runtime);
+
+    // First turn freezes the prompt; the provider caches system + messages.
+    await session.sendMessage({ text: 'first', images: [] }, preferences);
+    const firstRequest = model.doStreamCalls[0]!;
+    expect(firstRequest.prompt[0]!.role).toBe('system');
+    const frozenSystem = firstRequest.prompt[0]!.content;
+    expect(typeof frozenSystem).toBe('string');
+
+    // Reference data drifts after the freeze: a rebuild would produce other bytes.
+    mkdirSync(join(dataDir, 'MEMORY'), { recursive: true });
+    writeFileSync(join(dataDir, 'MEMORY', 'MEMORY.md'), '- a durable fact learned this turn\n', 'utf8');
+    expect(buildAgentSystem(runtime.workspaceRoot)).not.toBe(frozenSystem);
+
+    // The compaction request must share that prefix: only its appended prompt is new.
+    await session.compact(preferences);
+    expect(model.doStreamCalls).toHaveLength(2);
+    const compactionRequest = model.doStreamCalls[1]!;
+    expect(JSON.stringify(compactionRequest.prompt)).toContain(COMPACTION_PROMPT.slice(0, 40));
+    expect(compactionRequest.prompt[0]!.content).toBe(frozenSystem);
+
+    // Compaction is a first-class request in the ledger, not a chat step.
+    expect(rows.map((row) => row.runKind)).toEqual(['chat', 'compaction']);
+    expect(rows[1]!.tokens.inputTokens).toBeGreaterThan(0);
+
+    // The refresh lands after the summary, so the next turn reads fresh
+    // reference data and pays for it once, at the prefix boundary.
+    await session.sendMessage({ text: 'second', images: [] }, preferences);
+    const refreshed = model.doStreamCalls[2]!.prompt[0]!.content;
+    expect(refreshed).toBe(buildAgentSystem(runtime.workspaceRoot));
+    expect(refreshed).not.toBe(frozenSystem);
   });
 
   it('retains measured context when selecting the same model on another provider, then compacts before continuing', async () => {
