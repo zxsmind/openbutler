@@ -1,6 +1,6 @@
 # Evaluation and helper data contracts
 
-These Ranite-local JSON shapes are not a claim of compatibility with Anthropic's
+These OpenButler-local JSON shapes are not a claim of compatibility with Anthropic's
 Python viewer. Examples are fixtures, not actual measurements. All ids are stable
 within a suite; artifacts and output workspaces are explicit paths.
 

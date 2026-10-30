@@ -17,12 +17,12 @@ let target: JoinTarget;
 let murphyTicket: string;
 
 beforeEach(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-mem-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-team-mem-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   store = new TeamStore(join(dataDir, 'team.db'));
   const now = Date.now();
-  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-  store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-2222', now);
+  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+  store.createJoinRequest('jr_m', 'Murphy-OpenButler', 'kartal-2222', now);
   murphyTicket = makeTicket();
   store.decideJoin('jr_m', true, murphyTicket, hashTicket(murphyTicket), now);
   store.confirmTicket('jr_m');
@@ -36,7 +36,7 @@ afterEach(async () => {
   server = null;
   store.close();
   rmSync(dataDir, { recursive: true, force: true });
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 describe('shared team memory over the hub', () => {
@@ -48,7 +48,7 @@ describe('shared team memory over the hub', () => {
     const all = await fetchTeamMemory(target, murphyTicket, 0);
     expect(all.latestSeq).toBe(second.seq);
     expect(all.entries.map((entry) => entry.body)).toEqual(['We deploy on weekdays only.', 'The staging URL is internal.']);
-    expect(all.entries.every((entry) => entry.author === 'Murphy-Ranite')).toBe(true);
+    expect(all.entries.every((entry) => entry.author === 'Murphy-OpenButler')).toBe(true);
 
     const afterFirst = await fetchTeamMemory(target, murphyTicket, first.seq);
     expect(afterFirst.entries.map((entry) => entry.body)).toEqual(['The staging URL is internal.']);
@@ -60,12 +60,12 @@ describe('shared team memory over the hub', () => {
   });
 
   it('behaves the same locally (hub) and remotely (member)', async () => {
-    const hub = localChannel(store, 'Atreus-Ranite');
-    const member = remoteChannel(target, murphyTicket, 'Murphy-Ranite');
+    const hub = localChannel(store, 'Atreus-OpenButler');
+    const member = remoteChannel(target, murphyTicket, 'Murphy-OpenButler');
     await hub.remember('decisions', 'The hub wrote this.');
     await member.remember('decisions', 'The member wrote this.');
     const view = await member.memory(0);
-    expect(view.entries.map((entry) => entry.author)).toEqual(['Atreus-Ranite', 'Murphy-Ranite']);
+    expect(view.entries.map((entry) => entry.author)).toEqual(['Atreus-OpenButler', 'Murphy-OpenButler']);
   });
 });
 
@@ -74,14 +74,14 @@ describe('team memory mirror', () => {
     const content = renderTeamMemoryFile(
       'decisions',
       [
-        { seq: 1, topic: 'decisions', author: 'Atreus-Ranite', body: 'Deploy on weekdays.', createdAt: Date.UTC(2026, 9, 14) },
-        { seq: 2, topic: 'shared', author: 'Murphy-Ranite', body: 'ignored here', createdAt: Date.UTC(2026, 9, 15) },
+        { seq: 1, topic: 'decisions', author: 'Atreus-OpenButler', body: 'Deploy on weekdays.', createdAt: Date.UTC(2026, 9, 14) },
+        { seq: 2, topic: 'shared', author: 'Murphy-OpenButler', body: 'ignored here', createdAt: Date.UTC(2026, 9, 15) },
       ],
       '2026-10-16',
     );
     expect(content).toContain('title: Team decisions');
     expect(content).toContain('type: reference');
-    expect(content).toContain('- [2026-10-14 · Atreus-Ranite] Deploy on weekdays.');
+    expect(content).toContain('- [2026-10-14 · Atreus-OpenButler] Deploy on weekdays.');
     // The other topic's entry is not in this file.
     expect(content).not.toContain('ignored here');
   });
@@ -90,8 +90,8 @@ describe('team memory mirror', () => {
     materializeTeamMemory(
       'myteam',
       [
-        { seq: 1, topic: 'decisions', author: 'Atreus-Ranite', body: 'Decision A.', createdAt: Date.UTC(2026, 9, 14) },
-        { seq: 2, topic: 'shared', author: 'Murphy-Ranite', body: 'Fact B.', createdAt: Date.UTC(2026, 9, 15) },
+        { seq: 1, topic: 'decisions', author: 'Atreus-OpenButler', body: 'Decision A.', createdAt: Date.UTC(2026, 9, 14) },
+        { seq: 2, topic: 'shared', author: 'Murphy-OpenButler', body: 'Fact B.', createdAt: Date.UTC(2026, 9, 15) },
       ],
       '2026-10-16',
       dataDir,
@@ -105,7 +105,7 @@ describe('team memory mirror', () => {
   });
 
   it('pages the whole log, so a mirror past one page is complete', async () => {
-    const entry = (seq: number) => ({ seq, topic: 'decisions' as const, author: 'Atreus-Ranite', body: `e${seq}`, createdAt: 0 });
+    const entry = (seq: number) => ({ seq, topic: 'decisions' as const, author: 'Atreus-OpenButler', body: `e${seq}`, createdAt: 0 });
     const pages = [
       { entries: [entry(1), entry(2)], latestSeq: 3 },
       { entries: [entry(3)], latestSeq: 3 },

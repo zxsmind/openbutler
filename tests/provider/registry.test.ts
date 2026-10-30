@@ -37,17 +37,17 @@ const CATALOG = {
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-provider-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-provider-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   mkdirSync(dataDir, { recursive: true });
   delete process.env.OPENAI_API_KEY;
-  delete process.env.RANITE_API_KEY;
+  delete process.env.OPENBUTLER_API_KEY;
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
   delete process.env.OPENAI_API_KEY;
-  delete process.env.RANITE_API_KEY;
+  delete process.env.OPENBUTLER_API_KEY;
 });
 
 /**
@@ -111,14 +111,14 @@ describe('resolving a provider', () => {
 
   it('explains what to do for a catalog-unknown id with no declared runtime', async () => {
     const { registry } = await load();
-    process.env.RANITE_API_KEY = 'k';
+    process.env.OPENBUTLER_API_KEY = 'k';
     const result = registry.resolveProvider('nowhere');
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.reason).toContain('RANITE_NPM');
+    expect(result.error.reason).toContain('OPENBUTLER_NPM');
   });
 
-  it('accepts a runtime package ranite does not bundle, to install on first use', async () => {
+  it('accepts a runtime package openbutler does not bundle, to install on first use', async () => {
     const { registry } = await load();
     /* An unknown package is no longer refused here: the model builder installs
        it from the catalog's package name the first time it is used (install.ts). */
@@ -153,8 +153,8 @@ describe('resolving a provider', () => {
     /* A settings key is an explicit choice and always travels, even to a package
        that reads its own environment. */
     expect(registry.passesKeyToPackage('@ai-sdk/google-vertex', { key: 'k', source: 'settings' })).toBe(true);
-    expect(registry.passesKeyToPackage('@ai-sdk/google-vertex', { key: 'k', source: 'env', envName: 'RANITE_API_KEY' })).toBe(true);
-    /* A catalog-named variable is not a choice Ranite made. When the package
+    expect(registry.passesKeyToPackage('@ai-sdk/google-vertex', { key: 'k', source: 'env', envName: 'OPENBUTLER_API_KEY' })).toBe(true);
+    /* A catalog-named variable is not a choice OpenButler made. When the package
        cannot be inspected — not installed yet — the long-standing behaviour of
        passing the key is kept, because silently withholding it would break the
        OpenAI-compatible gateways that need it. */
@@ -168,7 +168,7 @@ describe('resolving a provider', () => {
     expect(registry.providerIsConfigured('openai', undefined)).toBe(false);
     process.env.OPENAI_API_KEY = 'sk-from-env';
     try {
-      /* The key lives in the environment and nowhere Ranite wrote down, and the
+      /* The key lives in the environment and nowhere OpenButler wrote down, and the
          provider is still configured. */
       expect(registry.providerIsConfigured('openai', undefined)).toBe(true);
     } finally {
@@ -217,7 +217,7 @@ describe('resolving a provider', () => {
   });
 });
 
-describe('listing models ranite will offer', () => {
+describe('listing models openbutler will offer', () => {
   it('offers models with positive, negative, and missing tool metadata', async () => {
     const { registry } = await load();
     const models = registry.listCatalogModels(['openai']).map((entry) => entry.model);

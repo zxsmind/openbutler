@@ -1,4 +1,4 @@
-/** `ranite logs`: read the machine's structured log without opening a file. */
+/** `openbutler logs`: read the machine's structured log without opening a file. */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { formatLogLine, parseLogLine, type LogLevel, type LogRecord } from '../logging.js';
@@ -24,7 +24,7 @@ export async function runLogs(parsed: Parsed): Promise<void> {
   const level = (parsed.flags.get('level') ?? 'info') as LogLevel;
   if (!(level in LEVELS)) throw new Error('--level must be error, warn, info, or debug.');
   const event = parsed.flags.get('event');
-  const path = parsed.flags.get('file') ?? getDataPath(join('logs', 'ranite.log'));
+  const path = parsed.flags.get('file') ?? getDataPath(join('logs', 'openbutler.log'));
 
   let records = readLogRecords(path).filter((record) => LEVELS[record.level] <= LEVELS[level]);
   if (event) records = records.filter((record) => record.event.includes(event));

@@ -15,8 +15,8 @@ describe('tool timing', () => {
     // Same object, same payload, one extra field naming when the call ran.
     expect(stamped).toBe(original);
     expect(stamped).toMatchObject({ status: 'completed', stdout: 'ok' });
-    expect(stamped.raniteTiming).toBe(`ran at ${formatToolClock(started)}, took 0.4s`);
-    expect(toolTiming(stamped)).toBe(stamped.raniteTiming);
+    expect(stamped.openbutlerTiming).toBe(`ran at ${formatToolClock(started)}, took 0.4s`);
+    expect(toolTiming(stamped)).toBe(stamped.openbutlerTiming);
   });
 
   it('says nothing when a result carries no timing', () => {

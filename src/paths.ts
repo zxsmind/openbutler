@@ -3,21 +3,21 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Where ranite keeps state.
+ * Where openbutler keeps state.
  *
- * Everything ranite writes goes through here. Nothing is written inside the
+ * Everything openbutler writes goes through here. Nothing is written inside the
  * checkout: a CLI that scatters caches next to its own source is a CLI that
  * breaks on a read-only install and shows up in the user's git status.
  */
 export function getDataDir(): string {
-  if (process.env.RANITE_DATA_DIR) return process.env.RANITE_DATA_DIR;
+  if (process.env.OPENBUTLER_DATA_DIR) return process.env.OPENBUTLER_DATA_DIR;
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
-    return join(base, 'ranite');
+    return join(base, 'openbutler');
   }
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'ranite');
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'openbutler');
   const base = process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
-  return join(base, 'ranite');
+  return join(base, 'openbutler');
 }
 
 /** A path inside the data directory, or the data directory itself. */
@@ -35,7 +35,7 @@ export function getDataPath(name?: string): string {
 export function getScratchRoot(): string {
   const date = new Date();
   const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  return join(tmpdir(), 'ranite', day);
+  return join(tmpdir(), 'openbutler', day);
 }
 
 /**

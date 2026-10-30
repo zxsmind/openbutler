@@ -89,7 +89,7 @@ describe('approval outcomes at the registry', () => {
     const output = (await entry.execute({}, { toolCallId: 'call-1' })) as Record<string, unknown>;
     // The run's timing rides beside the tool's own answer; it never replaces it.
     expect(output).toMatchObject({ status: 'denied', error: 'The user declined this tool call. It was not run.' });
-    expect(typeof output.raniteTiming).toBe('string');
+    expect(typeof output.openbutlerTiming).toBe('string');
     expect(shouldStop()).toBe(true);
   });
 
@@ -129,9 +129,9 @@ describe('manual approval expiry in a session', () => {
   let controller: AgentSessionController | undefined;
 
   beforeEach(() => {
-    previousDataDir = process.env.RANITE_DATA_DIR;
-    root = mkdtempSync(join(tmpdir(), 'ranite-approval-timeout-'));
-    process.env.RANITE_DATA_DIR = root;
+    previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+    root = mkdtempSync(join(tmpdir(), 'openbutler-approval-timeout-'));
+    process.env.OPENBUTLER_DATA_DIR = root;
     vi.resetModules();
     ledger = new ActivityLedger(join(root, 'state.db'));
     execute = vi.fn<(input: Record<string, unknown>, signal?: AbortSignal, context?: ToolExecutionContext) => Promise<unknown>>(
@@ -155,9 +155,9 @@ describe('manual approval expiry in a session', () => {
     await controller?.close();
     controller = undefined;
     ledger.close();
-    if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-    else process.env.RANITE_DATA_DIR = previousDataDir;
-    if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-approval-timeout-')) {
+    if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+    else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
+    if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-approval-timeout-')) {
       throw new Error('Refusing to remove a directory outside this test fixture.');
     }
     rmSync(root, { recursive: true, force: true });

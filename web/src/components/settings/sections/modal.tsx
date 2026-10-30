@@ -1,7 +1,7 @@
 /**
  * Modal: the GPU the voice stack will run on.
  *
- * The owner pastes a token id and secret; Ranite verifies them against Modal
+ * The owner pastes a token id and secret; OpenButler verifies them against Modal
  * before storing anything, so a typo never becomes a saved credential. The
  * secret is write-only from this page — it is stored on the machine and never
  * returned to the browser.
@@ -133,7 +133,7 @@ export function ModalSettings() {
               }}
             />
           </SettingsRow>
-          <SettingsRow label="Save" description="Ranite calls Modal once to confirm the pair works.">
+          <SettingsRow label="Save" description="OpenButler calls Modal once to confirm the pair works.">
             <button
               type="button"
               className="settings-choice settings-choice--primary"

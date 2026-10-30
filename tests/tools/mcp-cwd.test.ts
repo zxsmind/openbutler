@@ -6,17 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-mcp-cwd-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-mcp-cwd-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 /**
  * A stdio MCP server is third-party code that writes relative to its working
- * directory. Inheriting Ranite's own directory leaked its scratch files into the
+ * directory. Inheriting OpenButler's own directory leaked its scratch files into the
  * checkout in development and into the user's project directory otherwise, so the
  * directory is pinned to the data directory instead.
  */

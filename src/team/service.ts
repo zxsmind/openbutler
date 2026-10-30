@@ -70,7 +70,7 @@ export function hashTicket(ticket: string): string {
 
 /** Stable hub identity shown to humans at pairing time. The hub id never leaves the hub. */
 export function fingerprintOf(hubId: string): string {
-  const hex = createHash('sha256').update(`ranite-team-hub:${hubId}`, 'utf8').digest('hex');
+  const hex = createHash('sha256').update(`openbutler-team-hub:${hubId}`, 'utf8').digest('hex');
   return [hex.slice(0, 4), hex.slice(4, 8), hex.slice(8, 12)].join(':').toUpperCase();
 }
 

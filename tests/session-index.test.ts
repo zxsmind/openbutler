@@ -77,8 +77,8 @@ let SessionIndexCtor: SessionIndexModule['SessionIndex'];
 beforeEach(async () => {
   fake.reset();
   fake.session.run.mockClear();
-  root = mkdtempSync(join(tmpdir(), 'ranite-session-index-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-session-index-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   store = await import('../src/session-store.js');
   SessionIndexCtor = (await import('../src/session-index.js')).SessionIndex;
@@ -86,7 +86,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-index-')) {
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-session-index-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(root, { recursive: true, force: true });

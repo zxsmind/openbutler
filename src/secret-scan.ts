@@ -19,12 +19,12 @@ import type { SecretLintRuleContext, SecretLintRuleCreator, SecretLintSourceCode
  *   generic assignment rule by design.
  *
  * Async-only checks are skipped: the preset's PKCS#12 verification returns a promise for `.p12`
- * input, and scanned content is always treated as text (`ranite-input.json`), so PEM-format keys,
+ * input, and scanned content is always treated as text (`openbutler-input.json`), so PEM-format keys,
  * including GCP service-account JSON, are covered while binary PKCS#12 blobs are not.
  */
 
 const REDACTED = '[redacted]';
-const SCAN_PATH = 'ranite-input.json';
+const SCAN_PATH = 'openbutler-input.json';
 
 /** Options applied per rule id; everything else keeps the preset defaults. */
 const RULE_OPTIONS: Record<string, Record<string, unknown>> = {
@@ -100,14 +100,14 @@ function findLocalMatches(text: string): SecretMatch[] {
     const label = match[1] ?? '';
     const start = (match.index ?? 0) + label.length;
     const end = (match.index ?? 0) + match[0].length;
-    if (end > start) matches.push({ start, end, ruleId: 'ranite', messageId: 'LocalBearer' });
+    if (end > start) matches.push({ start, end, ruleId: 'openbutler', messageId: 'LocalBearer' });
   }
   for (const match of text.matchAll(ASSIGNMENT_PATTERN)) {
     const label = match[1] ?? '';
     const token = match[2] ?? '';
     if (token.length === 0 || isCodeReference(token)) continue;
     const start = (match.index ?? 0) + label.length;
-    matches.push({ start, end: start + token.length, ruleId: 'ranite', messageId: 'LocalAssignment' });
+    matches.push({ start, end: start + token.length, ruleId: 'openbutler', messageId: 'LocalAssignment' });
   }
   return matches;
 }

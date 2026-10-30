@@ -21,7 +21,7 @@ const VALID = '123456:ABCdef-ghi_JKLmnoPQRstuVWXyz0123456789';
 
 describe('token environment resolution', () => {
   it('uses the explicitly inherited environment and validates the variable name', async () => {
-    const name = 'RANITE_FIXTURE_TOKEN_LOOKUP';
+    const name = 'OPENBUTLER_FIXTURE_TOKEN_LOOKUP';
     const previous = process.env[name];
     process.env[name] = `  ${VALID}  `;
     try {
@@ -61,9 +61,9 @@ describe('verifyBotToken', () => {
   it('returns the bot username for a valid token', async () => {
     const fetchApi = stubFetch((url) => {
       expect(url).toContain('/getMe');
-      return { ok: true, result: { is_bot: true, username: 'ranite_bot' } };
+      return { ok: true, result: { is_bot: true, username: 'openbutler_bot' } };
     });
-    await expect(verifyBotToken(VALID, fetchApi)).resolves.toEqual({ username: 'ranite_bot' });
+    await expect(verifyBotToken(VALID, fetchApi)).resolves.toEqual({ username: 'openbutler_bot' });
   });
 
   it('reports invalid for rejected tokens without leaking the token', async () => {
@@ -164,7 +164,7 @@ describe('formatSystemdEnvLine', () => {
 
 describe('telegram env file roundtrip', () => {
   it('writes systemd-format content and removes the file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ranite-tg-env-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openbutler-tg-env-'));
     try {
       const file = telegramEnvFilePath(dir);
       expect(file.endsWith('telegram.env')).toBe(true);

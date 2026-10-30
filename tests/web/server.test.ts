@@ -18,8 +18,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 vi.mock('../../src/daemon-client.js', () => ({ connectDaemonSession: vi.fn() }));
 const settingsMocks = vi.hoisted(() => ({ saveSettings: vi.fn() }));
 vi.mock('../../src/settings.js', () => ({
-  getSettingsPath: () => join(process.env.RANITE_DATA_DIR!, 'settings.yaml'),
-  getConfigPath: () => join(process.env.RANITE_DATA_DIR!, 'config.yaml'),
+  getSettingsPath: () => join(process.env.OPENBUTLER_DATA_DIR!, 'settings.yaml'),
+  getConfigPath: () => join(process.env.OPENBUTLER_DATA_DIR!, 'config.yaml'),
   loadSettings: () => ({
     providers: {
       local: { enabled: true, keys: ['private-key-never-exposed'], models: ['model-a', 'model-b'] },
@@ -135,15 +135,15 @@ const post = (path: string, body: unknown) =>
       origin: server.url,
       'content-type': 'application/json',
       ...((body as { currentSessionId?: string; sessionId?: string }).currentSessionId || (body as { sessionId?: string }).sessionId
-        ? { 'x-ranite-session': (body as { currentSessionId?: string }).currentSessionId ?? (body as { sessionId: string }).sessionId }
+        ? { 'x-openbutler-session': (body as { currentSessionId?: string }).currentSessionId ?? (body as { sessionId: string }).sessionId }
         : {}),
     },
     body: JSON.stringify(body),
   });
 
 beforeEach(async () => {
-  dataDirectory = await mkdtemp(join(tmpdir(), 'ranite-web-session-'));
-  vi.stubEnv('RANITE_DATA_DIR', dataDirectory);
+  dataDirectory = await mkdtemp(join(tmpdir(), 'openbutler-web-session-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', dataDirectory);
   vi.clearAllMocks();
   listeners.clear();
   actors.clear();
@@ -167,7 +167,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await server?.close();
   vi.unstubAllEnvs();
-  if (dirname(resolve(dataDirectory)) !== resolve(tmpdir()) || !basename(dataDirectory).startsWith('ranite-web-session-'))
+  if (dirname(resolve(dataDirectory)) !== resolve(tmpdir()) || !basename(dataDirectory).startsWith('openbutler-web-session-'))
     throw new Error('Unsafe fixture cleanup path.');
   await rm(dataDirectory, { recursive: true, force: true });
 });
@@ -409,7 +409,7 @@ describe('browser session controls', () => {
     expect(snapshot.busy).toBe(true);
     const conflict = await fetch(`${server.url}/api/message`, {
       method: 'POST',
-      headers: { cookie, origin: server.url, 'content-type': 'application/json', 'x-ranite-session': 'session-a' },
+      headers: { cookie, origin: server.url, 'content-type': 'application/json', 'x-openbutler-session': 'session-a' },
       body: JSON.stringify({ text: 'Mismatch', sessionId: 'session-b' }),
     });
     expect(conflict.status).toBe(409);
@@ -575,7 +575,7 @@ describe('browser session controls', () => {
     expect(anonymous.status).toBe(401);
   });
   it('addresses patches by host entries while the client shows notices of its own', async () => {
-    const notice: SessionEntry = { kind: 'notice', text: 'Reconnected to the Ranite host.' };
+    const notice: SessionEntry = { kind: 'notice', text: 'Reconnected to the OpenButler host.' };
     const question: SessionEntry = { kind: 'user', text: 'dostum' };
     const answer: SessionEntry = { kind: 'assistant', text: 'cevap' };
     // The daemon client merges its own notices into the snapshot it hands out;

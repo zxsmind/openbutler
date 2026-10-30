@@ -6,16 +6,16 @@ runtime state and stopping. Related: [workers](workers.md), [teams](teams.md),
 
 ## What "task" can mean
 
-| Desired operation | Ranite mechanism |
+| Desired operation | OpenButler mechanism |
 | --- | --- |
 | Do something now in this conversation | Normal owner request |
 | Do a second job after current work | Owner message queue |
 | Correct or ask about current work | Explicit Steer |
 | Delegate a bounded piece to a local agent | `subagent` |
 | Run at a time, repeatedly, or on an observed condition | `schedule` |
-| Agree on work with another Ranite machine | `team_work` |
+| Agree on work with another OpenButler machine | `team_work` |
 
-There is no current `ranite task` CLI. A schedule is a durable instruction plus
+There is no current `openbutler task` CLI. A schedule is a durable instruction plus
 trigger and scope, not simply a promise in assistant text. Normal input and a
 background worker are not automatically recurring schedules.
 
@@ -56,7 +56,7 @@ a host restart; it is not a new session per run. Updates that omit
 
 ## Every current trigger
 
-`ranite schedule capabilities` or `schedule {"action":"capabilities"}` returns
+`openbutler schedule capabilities` or `schedule {"action":"capabilities"}` returns
 the supported adapters and options for the installed host.
 
 | Adapter | Options and meaning |
@@ -92,16 +92,16 @@ No generic cron adapter exists in the reviewed capability list.
 ## Create, edit, run and inspect
 
 ```text
-ranite schedule capabilities
-ranite schedule list
-ranite schedule add <schedule.json>
-ranite schedule update <schedule.json>
-ranite schedule run <id>
-ranite schedule log <id>
-ranite schedule open <id>
-ranite schedule disable <id>
-ranite schedule enable <id>
-ranite schedule remove <id>
+openbutler schedule capabilities
+openbutler schedule list
+openbutler schedule add <schedule.json>
+openbutler schedule update <schedule.json>
+openbutler schedule run <id>
+openbutler schedule log <id>
+openbutler schedule open <id>
+openbutler schedule disable <id>
+openbutler schedule enable <id>
+openbutler schedule remove <id>
 ```
 
 Add/update also accept `--json=<object>`; a file avoids shell quoting problems.

@@ -98,10 +98,10 @@ describe('scheduleWorkspaceScope', () => {
   let scopeOf: (input: Record<string, unknown>, sessionWorkspaceRoot: string) => string;
 
   beforeEach(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ranite-task-scope-'));
-    home = mkdtempSync(join(tmpdir(), 'ranite-task-home-'));
-    away = mkdtempSync(join(tmpdir(), 'ranite-task-away-'));
-    vi.stubEnv('RANITE_DATA_DIR', dataDir);
+    dataDir = mkdtempSync(join(tmpdir(), 'openbutler-task-scope-'));
+    home = mkdtempSync(join(tmpdir(), 'openbutler-task-home-'));
+    away = mkdtempSync(join(tmpdir(), 'openbutler-task-away-'));
+    vi.stubEnv('OPENBUTLER_DATA_DIR', dataDir);
     // Settings paths resolve at module load, so the scope check needs a
     // module instance loaded after the data dir moves.
     vi.resetModules();

@@ -10,7 +10,7 @@ let ledger: ActivityLedger;
 let adapter: TelegramAdapter | undefined;
 beforeEach(() => {
   ledger = new ActivityLedger(':memory:');
-  vi.stubEnv('RANITE_TEST_TELEGRAM_TOKEN', TOKEN);
+  vi.stubEnv('OPENBUTLER_TEST_TELEGRAM_TOKEN', TOKEN);
 });
 afterEach(async () => {
   await adapter?.close();
@@ -74,7 +74,7 @@ function callbacks() {
 function config(paired = false): TelegramSettings {
   return {
     enabled: true,
-    tokenEnv: 'RANITE_TEST_TELEGRAM_TOKEN',
+    tokenEnv: 'OPENBUTLER_TEST_TELEGRAM_TOKEN',
     workspaceRoot: process.cwd(),
     ...(paired ? { chatId: '100', userId: '100' } : {}),
   };

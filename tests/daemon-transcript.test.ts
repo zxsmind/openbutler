@@ -24,8 +24,8 @@ let supportsClientKind: boolean;
 
 beforeEach(async () => {
   supportsClientKind = true;
-  root = mkdtempSync(join(tmpdir(), 'ranite-transcript-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-transcript-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   client = undefined;
   web = undefined;
@@ -104,7 +104,7 @@ afterEach(async () => {
   socket?.destroy();
   await new Promise<void>((done) => ipc.close(() => done()));
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-transcript-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-transcript-'))
     throw new Error('Unsafe transcript fixture cleanup path.');
   rmSync(root, { recursive: true, force: true });
 });
@@ -128,7 +128,7 @@ function patch(append: SessionEntry[] = [], appendText: Array<{ index: number; d
 
 it('refuses silent web-to-terminal fallback on an older host while retaining terminal compatibility', async () => {
   supportsClientKind = false;
-  await expect(connect(root, { clientKind: 'web' })).rejects.toThrow('Restart the Ranite host');
+  await expect(connect(root, { clientKind: 'web' })).rejects.toThrow('Restart the OpenButler host');
   client = await connect(root);
   expect(client.getSnapshot().session.id).toBe('chat');
 });

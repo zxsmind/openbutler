@@ -34,11 +34,11 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
       ? undefined
       : {
           method: 'POST',
-          headers: { 'content-type': 'application/json', ...(sessionId ? { 'x-ranite-session': sessionId } : {}) },
+          headers: { 'content-type': 'application/json', ...(sessionId ? { 'x-openbutler-session': sessionId } : {}) },
           body: JSON.stringify(body),
         },
   ).catch(() => {
-    throw new Error('Unable to reach Ranite. Check your connection and try again.');
+    throw new Error('Unable to reach OpenButler. Check your connection and try again.');
   });
   if (!response.ok) {
     let detail =
@@ -46,7 +46,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
         ? 'This content is currently unavailable. Try refreshing the page.'
         : response.status === 429
           ? 'Please wait a moment before trying again.'
-          : 'Ranite could not complete this request. Please try again.';
+          : 'OpenButler could not complete this request. Please try again.';
     try {
       const data: unknown = await response.json();
       if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') detail = data.error;

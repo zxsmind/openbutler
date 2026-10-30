@@ -6,7 +6,7 @@ source builds and manual upkeep. Related: [environment](environment.md),
 
 ## Persistent data inventory
 
-Derive the root from `ranite about` and [environment](environment.md).
+Derive the root from `openbutler about` and [environment](environment.md).
 
 | Path relative to data root | Meaning |
 | --- | --- |
@@ -19,12 +19,12 @@ Derive the root from `ranite about` and [environment](environment.md).
 | `catalog.ndjson` | Provider/model catalog cache |
 | `models/` | Prepared local memory-model assets |
 | `packages/` | Runtime packages installed on demand |
-| `skills/` | Ranite-specific global skills |
+| `skills/` | OpenButler-specific global skills |
 | `tool-output/` | Full tool/command output spilled beyond inline limits |
 | `mcp/` | Default MCP process working directory |
 | `telegram/` | Channel-staged incoming/outgoing media |
 | `team.db`, `team-files/` | Team hub state and file-sharing data |
-| `logs/ranite.log`, `logs/web.log`, `daemon.log` | Operational/lifecycle logs |
+| `logs/openbutler.log`, `logs/web.log`, `daemon.log` | Operational/lifecycle logs |
 
 Other discovery roots and OS environment variables live outside this root. A
 data-root backup alone does not include workspace source files, all globally
@@ -39,7 +39,7 @@ version is different from rebuilding a development checkout. Verify installed
 version with `--version`/`about`; then verify actual process identity and code
 activation. Current installer flags are in [environment](environment.md).
 
-There is no native universal `ranite update`/`ranite backup` command in the reviewed
+There is no native universal `openbutler update`/`openbutler backup` command in the reviewed
 CLI. Do not invent one. Updating the binary directory normally preserves data;
 removing data with purge is an independent operation.
 
@@ -60,7 +60,7 @@ reload after noticing a changed build when idle, but the web server's captured
 identity and the currently loaded bundle must be considered. A hard refresh can
 load new assets without proving backend code was replaced.
 
-`ranite restart` stops active host work and recycles a tracked web server. For a
+`openbutler restart` stops active host work and recycles a tracked web server. For a
 coordinated update, identify busy
 and queued state, settle/save appropriately, replace host, replace web server when
 its adapter/build identity changed, then confirm both process identities and
@@ -76,14 +76,14 @@ labeling require both host acknowledgement and a web process using that attachme
 2. Establish a consistent saved state. Idle, flushed sessions and stopped writers
    give an offline snapshot; copying a live SQLite file alone can omit WAL state.
    A supported SQLite online backup is another option for a competent operator;
-   there is no invented Ranite backup CLI.
+   there is no invented OpenButler backup CLI.
 3. Preserve canonical session directories with attachments, memory, settings,
    project catalog and durable ledgers. Protected secret-store backup is an
    owner/administrator credential operation, not a reason for agent file tools to
    read/display the store. Preserve required external secrets through their own
    supported management mechanism.
 4. Restore to the intended root and account, preserve file permissions, then launch
-   with the intended `RANITE_DATA_DIR`. Merely changing that variable does not move
+   with the intended `OPENBUTLER_DATA_DIR`. Merely changing that variable does not move
    old data. Validate configuration, sessions, memory and attachment paths.
 5. Re-establish missing workspace directories, service environment, packages and
    local model assets as needed. Rebuild derived search indexes through their
@@ -97,13 +97,13 @@ Keep the original backup until restored operations have been checked.
 ## Pruning and uninstall
 
 ```text
-ranite sessions prune --older-than 30d
-ranite sessions prune --older-than 30d --yes
-ranite events prune --older-than 30d
-ranite actions prune --older-than 30d
-ranite uninstall --dry-run
-ranite uninstall
-ranite uninstall --purge --dry-run
+openbutler sessions prune --older-than 30d
+openbutler sessions prune --older-than 30d --yes
+openbutler events prune --older-than 30d
+openbutler actions prune --older-than 30d
+openbutler uninstall --dry-run
+openbutler uninstall
+openbutler uninstall --purge --dry-run
 ```
 
 The first prune form previews; `--yes` performs the selected deletion. Session
@@ -149,7 +149,7 @@ Do not turn one checkout's absolute paths into a global skill installation path.
 
 ## Updating the built-in manual
 
-Edit source `skills/ranite`, not only `dist/builtin-skills/ranite`. Run the canonical
+Edit source `skills/openbutler`, not only `dist/builtin-skills/openbutler`. Run the canonical
 copy step or backend build to distribute all referenced resources. Validate YAML,
 relative links, supported command/tool names and discovery in both source and
 package. A higher-precedence skill can mask it. A frozen active model context can

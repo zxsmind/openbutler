@@ -7,15 +7,15 @@ let dataDir: string;
 let previousDataDir: string | undefined;
 
 beforeEach(() => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-tool-output-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-tool-output-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
   rmSync(dataDir, { recursive: true, force: true });
 });
 

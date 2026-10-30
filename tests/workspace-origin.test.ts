@@ -14,8 +14,8 @@ async function saveDefaultWorkspace(path: string | undefined): Promise<void> {
 }
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-workspace-origin-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-workspace-origin-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   settings = await import('../src/settings.js');
   workspaceOrigin = await import('../src/workspace-origin.js');
@@ -23,7 +23,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (dirname(resolvePath(root)) !== resolvePath(tmpdir()) || !basename(root).startsWith('ranite-workspace-origin-'))
+  if (dirname(resolvePath(root)) !== resolvePath(tmpdir()) || !basename(root).startsWith('openbutler-workspace-origin-'))
     throw new Error('Unsafe workspace-origin fixture cleanup path.');
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });

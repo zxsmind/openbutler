@@ -14,9 +14,9 @@ let server: StartedTeamServer | null = null;
 let target: JoinTarget;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-server-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-team-server-'));
   store = new TeamStore(join(dataDir, 'team.db'));
-  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', Date.now());
+  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', Date.now());
 });
 
 afterEach(async () => {
@@ -47,14 +47,14 @@ describe('team hub server', () => {
     expect(hub.fingerprint).toMatch(/^[0-9A-F]{4}:[0-9A-F]{4}:[0-9A-F]{4}$/);
 
     store.createInvite('kartal-1234', 60_000, Date.now());
-    const requestId = await postJoin(target, 'kartal-1234', 'Murphy-Ranite');
+    const requestId = await postJoin(target, 'kartal-1234', 'Murphy-OpenButler');
     expect(await pollJoin(target, requestId)).toEqual({ status: 'pending' });
-    expect(store.listPendingJoins().map((entry) => entry.name)).toEqual(['Murphy-Ranite']);
+    expect(store.listPendingJoins().map((entry) => entry.name)).toEqual(['Murphy-OpenButler']);
 
     const ticket = makeTicket();
     store.decideJoin(requestId, true, ticket, hashTicket(ticket), Date.now());
     const approved = await pollJoin(target, requestId);
-    expect(approved).toMatchObject({ status: 'approved', memberName: 'Murphy-Ranite', team: 'MyTeam' });
+    expect(approved).toMatchObject({ status: 'approved', memberName: 'Murphy-OpenButler', team: 'MyTeam' });
     expect(approved.status === 'approved' && approved.ticket).toBe(ticket);
     // Pickup is idempotent until the joiner confirms; a lost response is recoverable.
     const retry = await pollJoin(target, requestId);
@@ -63,8 +63,8 @@ describe('team hub server', () => {
     expect(store.peekTicket(requestId, Date.now(), 60_000)).toBeNull();
 
     const status = await fetchHubStatus(target, ticket);
-    expect(status.you).toBe('Murphy-Ranite');
-    expect(status.members.map((entry) => entry.name)).toEqual(['Atreus-Ranite', 'Murphy-Ranite']);
+    expect(status.you).toBe('Murphy-OpenButler');
+    expect(status.members.map((entry) => entry.name)).toEqual(['Atreus-OpenButler', 'Murphy-OpenButler']);
 
     await postLeave(target, ticket);
     expect(store.findByTicketHash(hashTicket(ticket))).toBeNull();
@@ -72,20 +72,20 @@ describe('team hub server', () => {
 
   it('rejects unknown, used, and expired codes with one message, and duplicate names', async () => {
     await startOnEphemeralPort();
-    await expect(postJoin(target, 'nope-0000', 'Murphy-Ranite')).rejects.toThrow('Invite code is invalid');
+    await expect(postJoin(target, 'nope-0000', 'Murphy-OpenButler')).rejects.toThrow('Invite code is invalid');
 
     store.createInvite('kartal-1234', 60_000, Date.now());
-    await postJoin(target, 'kartal-1234', 'Murphy-Ranite');
+    await postJoin(target, 'kartal-1234', 'Murphy-OpenButler');
     // Same code again: single use.
-    await expect(postJoin(target, 'kartal-1234', 'Other-Ranite')).rejects.toThrow('Invite code is invalid');
+    await expect(postJoin(target, 'kartal-1234', 'Other-OpenButler')).rejects.toThrow('Invite code is invalid');
 
     // Expired code.
     store.createInvite('expired-1', 1, Date.now() - 10);
-    await expect(postJoin(target, 'expired-1', 'Other-Ranite')).rejects.toThrow('Invite code is invalid');
+    await expect(postJoin(target, 'expired-1', 'Other-OpenButler')).rejects.toThrow('Invite code is invalid');
 
     // A taken name is refused before the request is recorded.
     store.createInvite('kartal-5678', 60_000, Date.now());
-    await expect(postJoin(target, 'kartal-5678', 'Atreus-Ranite')).rejects.toThrow('already taken');
+    await expect(postJoin(target, 'kartal-5678', 'Atreus-OpenButler')).rejects.toThrow('already taken');
   });
 
   it('requires a valid ticket for status and leave', async () => {
@@ -97,7 +97,7 @@ describe('team hub server', () => {
   it('denies a request so the joiner learns without a ticket', async () => {
     await startOnEphemeralPort();
     store.createInvite('kartal-1234', 60_000, Date.now());
-    const requestId = await postJoin(target, 'kartal-1234', 'Murphy-Ranite');
+    const requestId = await postJoin(target, 'kartal-1234', 'Murphy-OpenButler');
     store.decideJoin(requestId, false, null, null, Date.now());
     expect(await pollJoin(target, requestId)).toEqual({ status: 'denied' });
   });
@@ -108,16 +108,16 @@ describe('team hub server', () => {
     target = { host: '127.0.0.1', port: Number(new URL(started.url).port) };
     server = started;
 
-    await expect(postJoin(target, 'nope-0001', 'Murphy-Ranite')).rejects.toThrow('Invite code is invalid');
-    await expect(postJoin(target, 'nope-0002', 'Murphy-Ranite')).rejects.toThrow('Invite code is invalid');
-    await expect(postJoin(target, 'nope-0003', 'Murphy-Ranite')).rejects.toThrow('Invite code is invalid');
+    await expect(postJoin(target, 'nope-0001', 'Murphy-OpenButler')).rejects.toThrow('Invite code is invalid');
+    await expect(postJoin(target, 'nope-0002', 'Murphy-OpenButler')).rejects.toThrow('Invite code is invalid');
+    await expect(postJoin(target, 'nope-0003', 'Murphy-OpenButler')).rejects.toThrow('Invite code is invalid');
     // Fourth attempt is refused outright, even with a valid code.
     store.createInvite('kartal-9999', 600_000, clock);
-    await expect(postJoin(target, 'kartal-9999', 'Murphy-Ranite')).rejects.toThrow('Too many failed join attempts');
+    await expect(postJoin(target, 'kartal-9999', 'Murphy-OpenButler')).rejects.toThrow('Too many failed join attempts');
 
     // After the block window the brake releases.
     clock += 5 * 60_000 + 1;
-    const requestId = await postJoin(target, 'kartal-9999', 'Murphy-Ranite');
+    const requestId = await postJoin(target, 'kartal-9999', 'Murphy-OpenButler');
     expect(await pollJoin(target, requestId)).toEqual({ status: 'pending' });
   });
 
@@ -128,25 +128,25 @@ describe('team hub server', () => {
     server = started;
 
     store.createInvite('kartal-1234', 60_000, clock);
-    const requestId = await postJoin(target, 'kartal-1234', 'Murphy-Ranite');
+    const requestId = await postJoin(target, 'kartal-1234', 'Murphy-OpenButler');
     const ticket = makeTicket();
     store.decideJoin(requestId, true, ticket, hashTicket(ticket), clock);
     store.confirmTicket(requestId);
     // A second member who never polls.
-    store.createJoinRequest('jr_z', 'Zephyr-Ranite', 'kartal-5678', clock);
+    store.createJoinRequest('jr_z', 'Zephyr-OpenButler', 'kartal-5678', clock);
     const zephyrTicket = makeTicket();
     store.decideJoin('jr_z', true, zephyrTicket, hashTicket(zephyrTicket), clock);
 
     const live = await fetchHubStatus(target, ticket);
-    expect(live.members.find((entry) => entry.name === 'Murphy-Ranite')?.online).toBe(true);
+    expect(live.members.find((entry) => entry.name === 'Murphy-OpenButler')?.online).toBe(true);
     // The hub answers this query, so it is online by definition.
-    expect(live.members.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(true);
+    expect(live.members.find((entry) => entry.name === 'Atreus-OpenButler')?.online).toBe(true);
     expect(live.memberCount).toBe(3);
 
     // After the poll window, a member that has not polled falls offline.
     clock += 60_000;
     const later = await fetchHubStatus(target, ticket);
-    expect(later.members.find((entry) => entry.name === 'Zephyr-Ranite')?.online).toBe(false);
-    expect(later.members.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(true);
+    expect(later.members.find((entry) => entry.name === 'Zephyr-OpenButler')?.online).toBe(false);
+    expect(later.members.find((entry) => entry.name === 'Atreus-OpenButler')?.online).toBe(true);
   });
 });

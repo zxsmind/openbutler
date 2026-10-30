@@ -50,8 +50,8 @@ let store: Store;
 let registry: Registry;
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-session-registry-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-session-registry-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   store = await import('../src/session-store.js');
   registry = await import('../src/session-registry.js');
@@ -61,7 +61,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-registry-')) {
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-session-registry-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(root, { recursive: true, force: true });

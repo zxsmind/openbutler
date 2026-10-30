@@ -6,13 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-model-specs-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-model-specs-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   mkdirSync(dataDir, { recursive: true });
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 async function loadModules() {
@@ -67,7 +67,7 @@ describe('payload and modelSpecs in settings', () => {
   it('rejects an unknown model spec key', async () => {
     const { settings } = await loadModules();
     writeSettings(['providers:', '  lab:', '    models: [swift]', '    modelSpecs:', '      swift:', '        bogus: 1', ''].join('\n'));
-    expect(() => settings.loadSettings()).toThrow('modelSpecs.swift.bogus is not a model spec ranite knows');
+    expect(() => settings.loadSettings()).toThrow('modelSpecs.swift.bogus is not a model spec openbutler knows');
   });
 
   it('rejects a context that is not a positive whole number', async () => {
@@ -81,7 +81,7 @@ describe('payload and modelSpecs in settings', () => {
   it('still rejects an unknown provider key', async () => {
     const { settings } = await loadModules();
     writeSettings(['providers:', '  lab:', '    mystery: 1', ''].join('\n'));
-    expect(() => settings.loadSettings()).toThrow('providers.lab.mystery is not a setting ranite knows');
+    expect(() => settings.loadSettings()).toThrow('providers.lab.mystery is not a setting openbutler knows');
   });
 });
 

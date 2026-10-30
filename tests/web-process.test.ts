@@ -12,8 +12,8 @@ describe('web process spawn args', () => {
       '--hostname',
       '127.0.0.1',
     ]);
-    expect(webSpawnArgs('/opt/ranite/dist/cli.js', 46000, '0.0.0.0')).toEqual([
-      '/opt/ranite/dist/cli.js',
+    expect(webSpawnArgs('/opt/openbutler/dist/cli.js', 46000, '0.0.0.0')).toEqual([
+      '/opt/openbutler/dist/cli.js',
       'web',
       '--serve',
       '--port',

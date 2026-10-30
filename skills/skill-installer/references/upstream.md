@@ -1,22 +1,22 @@
-# Source and Ranite adaptation
+# Source and OpenButler adaptation
 
 Source: [jscraik skill-installer](https://github.com/jscraik/Agent-Skills/blob/afddb36dc2bdddd3e6ed84ac7c3393cd8e171f4c/skills-system/skill-installer/SKILL.md).
 Reviewed commit: `afddb36dc2bdddd3e6ed84ac7c3393cd8e171f4c`, 2026-10-22.
 The accompanying [Apache 2.0 license](../LICENSE.txt) is retained.
 
-This is a Ranite adaptation, not a byte-identical copy or an upstream endorsement.
+This is a OpenButler adaptation, not a byte-identical copy or an upstream endorsement.
 Retained concepts: distinguish listing/install/update; source and revision
 provenance; public/private/local routes; explicit destinations; collision handling;
 package resources/licenses; per-package results; copied/discovered/runtime evidence.
 
-Changes for Ranite:
+Changes for OpenButler:
 
-- Use Ranite's data-root/global/workspace discovery rather than a fixed Codex root.
-- Bind name/description validation to Ranite's actual metadata rules and overrides.
+- Use OpenButler's data-root/global/workspace discovery rather than a fixed Codex root.
+- Bind name/description validation to OpenButler's actual metadata rules and overrides.
 - Keep fetch/staging/review separate from the optional no-overwrite local-copy helper.
 - Preserve update recovery and user changes; no implicit library cutover.
 - Treat dependency readiness and behavioral proof separately from discovery.
-- Replace unconditional Codex-restart advice with Ranite's brief cache and frozen
+- Replace unconditional Codex-restart advice with OpenButler's brief cache and frozen
   context behavior; no automatic restart of active work.
 - Do not import the repository owner's personal migration exception, named machine
   policy, private SDK/Foundry/Tessl workflows, scoring thresholds or service gates.

@@ -5,19 +5,19 @@ Related: [workers](workers.md), [inbox](telegram-inbox.md), [commands](commands.
 
 ## Topology and setup
 
-A team is a closed group of independent Ranite machines over the intended tailnet,
+A team is a closed group of independent OpenButler machines over the intended tailnet,
 with one hub and members. A member's live tools/hardware are its own; local workers
 do not become peers. Membership settings and the secret team ticket are distinct.
 Hub identity/fingerprint is part of connecting to the intended hub.
 
 ```text
-ranite team init --as <member-name> --name <team-name> --port <port>
-ranite team invite --ttl-minutes 10
-ranite team join <hub-address> --code <invite-code> --as <member-name> --fingerprint <fingerprint>
-ranite team pending
-ranite team approve <request-id>
-ranite team join-status <hub-address> <request-id>
-ranite team status
+openbutler team init --as <member-name> --name <team-name> --port <port>
+openbutler team invite --ttl-minutes 10
+openbutler team join <hub-address> --code <invite-code> --as <member-name> --fingerprint <fingerprint>
+openbutler team pending
+openbutler team approve <request-id>
+openbutler team join-status <hub-address> <request-id>
+openbutler team status
 ```
 
 Initialize on the intended hub, create an invite there, join from the member,
@@ -35,13 +35,13 @@ relationship rather than continuing to rely on an old cached profile.
 ## Messaging and delivery
 
 ```text
-ranite team say <message>
-ranite team dm <member> <message>
-ranite team inbox
-ranite team read --from <member>
-ranite team read --group
-ranite team history --with <member> --limit 50
-ranite team history --group --before <seq> --limit 50
+openbutler team say <message>
+openbutler team dm <member> <message>
+openbutler team inbox
+openbutler team read --from <member>
+openbutler team read --group
+openbutler team history --with <member> --limit 50
+openbutler team history --group --before <seq> --limit 50
 ```
 
 Native tools are `team_send`, `team_group`, `team_history`, `team_status` and
@@ -76,9 +76,9 @@ past external effects. Use the exact action schema offered by this host version.
 ## Files and shared memory
 
 ```text
-ranite team send-file <member-or-group> <path>
-ranite team files
-ranite team get <file-id> --to <destination>
+openbutler team send-file <member-or-group> <path>
+openbutler team files
+openbutler team get <file-id> --to <destination>
 ```
 
 Tools: `team_send_file` (`path`, `to`), `team_files`, `team_receive_file` (`id`,

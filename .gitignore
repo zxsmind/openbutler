@@ -37,7 +37,7 @@ scripts/smoke.ts
 *.md
 !README.md
 !skills/**/SKILL.md
-!skills/ranite/references/*.md
+!skills/openbutler/references/*.md
 !skills/skill-creator/references/*.md
 !skills/skill-installer/references/*.md
 

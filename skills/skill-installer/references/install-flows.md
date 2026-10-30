@@ -5,10 +5,10 @@ Read once the source is resolved and staged. Source resolution is in
 
 ## Choose and preflight the destination
 
-Use `ranite about` for the actual data root and `ranite skills --workspace
-<directory>` for current winning paths. Cross-project Ranite-specific scope is
+Use `openbutler about` for the actual data root and `openbutler skills --workspace
+<directory>` for current winning paths. Cross-project OpenButler-specific scope is
 `<data-root>/skills/<name>`; project scope is `<workspace>/.agents/skills/<name>`.
-Ranite can also discover home Claude/Agents/Codex roots and a workspace Claude
+OpenButler can also discover home Claude/Agents/Codex roots and a workspace Claude
 root. A later root may override the same name. Explicit requested scope wins;
 do not silently install another copy into a more familiar product's directory.
 
@@ -43,17 +43,17 @@ Both arguments are explicit full package paths, not roots that imply a hidden
 Codex default. Preview reads only and prints source/destination, name, file count
 and hashes. Apply creates only a new destination, copies without overwriting
 existing files, verifies copied bytes and returns a receipt. Neither fetches,
-extracts, invokes scripts nor starts Ranite/model/network work.
+extracts, invokes scripts nor starts OpenButler/model/network work.
 
-The helper needs Node plus `js-yaml`, an existing Ranite dependency resolved from
+The helper needs Node plus `js-yaml`, an existing OpenButler dependency resolved from
 its bundled location. For a separately copied installer without that dependency,
 report the missing runtime dependency and use available native file tools with
 equivalent inspection/no-overwrite checks. Do not install another package manager
 or arbitrary dependencies just to satisfy a helper.
 
 `node` in these examples denotes the available/bundled Node executable. A release
-can bundle Node without exposing a global node command. Resolve the Ranite
-launcher with `Get-Command ranite` or `command -v ranite` and inspect its runtime
+can bundle Node without exposing a global node command. Resolve the OpenButler
+launcher with `Get-Command openbutler` or `command -v openbutler` and inspect its runtime
 path when needed. Resolve `<installer>` from the discovered skill path.
 
 The helper rejects invalid/mismatched metadata, source/destination nesting,
@@ -107,4 +107,4 @@ Report source URL/local source, commit/ref and package path; destination/scope;
 copied/changed file counts and manifest; license/dependency notes; structural
 validation and actual winning discovery path; behavioral checks performed or
 unrun. Keep runtime refresh separate from file-copy success. No universal Codex
-restart instruction applies to Ranite.
+restart instruction applies to OpenButler.

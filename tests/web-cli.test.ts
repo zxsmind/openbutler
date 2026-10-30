@@ -20,7 +20,7 @@ function spawnCli(args: string[], extraEnv: Record<string, string> = {}): ChildP
   const loader = pathToFileURL(resolve('node_modules/tsx/dist/loader.mjs')).href;
   const child = spawn(process.execPath, ['--import', loader, resolve('src/cli.ts'), ...args], {
     cwd: root,
-    env: { ...process.env, RANITE_DATA_DIR: root, NO_COLOR: '1', ...extraEnv },
+    env: { ...process.env, OPENBUTLER_DATA_DIR: root, NO_COLOR: '1', ...extraEnv },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -36,7 +36,7 @@ async function runCli(args: string[], timeoutMs = 45_000): Promise<{ code: numbe
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill();
-      rejectRun(new Error(`Web CLI fixture timed out: ranite ${args.join(' ')}`));
+      rejectRun(new Error(`Web CLI fixture timed out: openbutler ${args.join(' ')}`));
     }, timeoutMs);
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
@@ -96,8 +96,8 @@ async function freePort(): Promise<number> {
 }
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-web-cli-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-web-cli-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   // The web child attaches a real session client, so the fixture needs a configured
   // default provider plus an offline catalog snapshot before any server can start.
@@ -126,12 +126,12 @@ afterEach(async () => {
   }
   await stopWebProcess();
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-web-cli-check-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-web-cli-check-'))
     throw new Error('Unsafe web CLI fixture cleanup path.');
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }, 60_000);
 
-describe('ranite web pairing gate', () => {
+describe('openbutler web pairing gate', () => {
   it('starts in the background without a pairing link and reports an existing server', async () => {
     const { webProcessStatus } = await import('../src/daemon.js');
     const booted = await runCli(['restart']);
@@ -142,7 +142,7 @@ describe('ranite web pairing gate', () => {
     expect(started.stdout).toContain('running in the background');
     expect(started.stdout).toContain('(from launch)');
     expect(started.stdout).toContain(`:${port}`);
-    expect(started.stdout).toContain('ranite web --pair');
+    expect(started.stdout).toContain('openbutler web --pair');
     expect(started.stdout).not.toContain('one-time link');
     expect(started.stdout).not.toContain('/auth/pair');
 
@@ -164,7 +164,7 @@ describe('ranite web pairing gate', () => {
     expect(booted.code, booted.stderr).toBe(0);
     const port = await freePort();
     const pairFile = join(root, 'pair.url');
-    const child = spawnCli(['web', '--port', String(port), '--pair'], { RANITE_WEB_PAIR_FILE: pairFile });
+    const child = spawnCli(['web', '--port', String(port), '--pair'], { OPENBUTLER_WEB_PAIR_FILE: pairFile });
     const session = collect(child);
     await waitFor(() => existsSync(pairFile), 60_000, 'the pairing link file');
     const link = readFileSync(pairFile, 'utf8').trim();
@@ -194,7 +194,7 @@ describe('ranite web pairing gate', () => {
     expect(backgroundPid).toBeGreaterThan(0);
 
     const pairFile = join(root, 'pair.url');
-    const child = spawnCli(['web', '--port', String(port), '--pair'], { RANITE_WEB_PAIR_FILE: pairFile });
+    const child = spawnCli(['web', '--port', String(port), '--pair'], { OPENBUTLER_WEB_PAIR_FILE: pairFile });
     const session = collect(child);
     await waitFor(() => existsSync(pairFile), 60_000, 'the pairing link file');
 

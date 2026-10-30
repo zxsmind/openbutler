@@ -8,7 +8,7 @@ let dir: string;
 let path: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'ranite-outbox-'));
+  dir = mkdtempSync(join(tmpdir(), 'openbutler-outbox-'));
   path = join(dir, 'team-outbox.json');
 });
 
@@ -20,10 +20,10 @@ describe('team outbox', () => {
   it('queues, lists, and removes entries with stable identities', () => {
     const outbox = new TeamOutbox(path);
     outbox.enqueue({ teamId: 't_a', recipient: 'group', body: 'hello' });
-    outbox.enqueue({ teamId: 't_a', recipient: 'Atreus-Ranite', body: 'psst', replyTo: 'm_1' });
+    outbox.enqueue({ teamId: 't_a', recipient: 'Atreus-OpenButler', body: 'psst', replyTo: 'm_1' });
     const entries = outbox.list('t_a');
     expect(entries).toHaveLength(2);
-    expect(entries[1]).toMatchObject({ recipient: 'Atreus-Ranite', replyTo: 'm_1' });
+    expect(entries[1]).toMatchObject({ recipient: 'Atreus-OpenButler', replyTo: 'm_1' });
     expect(new Set(entries.map((entry) => entry.msgId)).size).toBe(2);
 
     outbox.remove(entries[0]!.msgId);

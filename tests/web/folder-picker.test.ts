@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * The picker registry is the one platform switch in the folder picker, so the
  * platform-neutral contract it exposes is what these tests pin down: a picker
- * on every platform Ranite serves, and an explanation instead of silence
+ * on every platform OpenButler serves, and an explanation instead of silence
  * anywhere else.
  */
 
@@ -12,7 +12,7 @@ async function registry() {
 }
 
 describe('folder picker registry', () => {
-  it('offers a picker on every platform Ranite serves', async () => {
+  it('offers a picker on every platform OpenButler serves', async () => {
     const { folderPickerFor } = await registry();
     for (const platform of ['win32', 'darwin', 'linux'] as const) {
       expect(typeof folderPickerFor(platform)).toBe('function');

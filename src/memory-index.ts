@@ -365,9 +365,9 @@ export class MemoryIndex {
       });
     }
 
-    // With RANITE_MEMORY_DEBUG=1 the gate is skipped, so the top rows and their
+    // With OPENBUTLER_MEMORY_DEBUG=1 the gate is skipped, so the top rows and their
     // components are visible; that is how the thresholds get recalibrated.
-    const debug = process.env.RANITE_MEMORY_DEBUG === '1';
+    const debug = process.env.OPENBUTLER_MEMORY_DEBUG === '1';
     const matches = (
       debug ? [...scored].sort((left, right) => right.score - left.score).slice(0, limit) : gateMemoryScores(scored, limit)
     ).map(({ chunk, score, ...components }) => ({
@@ -382,7 +382,7 @@ export class MemoryIndex {
       snippet: chunk.content.slice(0, 1_800),
       // Opt-in: shows why a row survived the gate, so the thresholds can be
       // recalibrated against a live corpus instead of by guesswork.
-      ...(process.env.RANITE_MEMORY_DEBUG === '1'
+      ...(process.env.OPENBUTLER_MEMORY_DEBUG === '1'
         ? {
             components: {
               vector: Number(components.vectorScore.toFixed(4)),
@@ -626,7 +626,7 @@ async function releaseEmbeddingRuntime(): Promise<void> {
 async function createEmbeddingRuntime() {
   const modelDirectory = memoryModelRevisionDirectory();
   if (!(await hasCompleteModelCache(modelDirectory))) {
-    throw new Error('The local memory model is not prepared. Run `ranite setup` and choose ”Prepare local memory model only”.');
+    throw new Error('The local memory model is not prepared. Run `openbutler setup` and choose ”Prepare local memory model only”.');
   }
 
   const [{ Tokenizer }, ort] = await Promise.all([import('@huggingface/tokenizers'), import('onnxruntime-node')]);

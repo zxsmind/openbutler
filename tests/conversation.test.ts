@@ -11,7 +11,7 @@ import {
 const queued = (text: string): ModelMessage => ({
   role: 'user',
   content: [{ type: 'text', text }],
-  providerOptions: { ranite: { queuedMessageId: text } },
+  providerOptions: { openbutler: { queuedMessageId: text } },
 });
 const call = (id: string): ModelMessage => ({
   role: 'assistant',
@@ -69,7 +69,7 @@ it('retires only previews covered by a completed saved checkpoint, preserving al
   const checkpoint: ModelMessage = {
     role: 'assistant',
     content: COMPACTION_SUMMARY_MARKER + 'Successful checkpoint',
-    providerOptions: { ranite: { compactionCheckpoint: true } },
+    providerOptions: { openbutler: { compactionCheckpoint: true } },
   };
   const user: ModelMessage = { role: 'user', content: 'Exact user requirement' };
   const fresh = [call('fresh'), result('fresh')];

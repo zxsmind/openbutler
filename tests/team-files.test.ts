@@ -19,12 +19,12 @@ let target: JoinTarget;
 let murphyTicket: string;
 
 beforeEach(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-files-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-team-files-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   store = new TeamStore(join(dataDir, 'team.db'));
   const now = Date.now();
-  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-  store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-1', now);
+  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+  store.createJoinRequest('jr_m', 'Murphy-OpenButler', 'kartal-1', now);
   murphyTicket = makeTicket();
   store.decideJoin('jr_m', true, murphyTicket, hashTicket(murphyTicket), now);
   store.confirmTicket('jr_m');
@@ -39,20 +39,20 @@ afterEach(async () => {
   server = null;
   store.close();
   rmSync(dataDir, { recursive: true, force: true });
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 describe('file registration rules', () => {
   it('validates name, size, sha256, and recipient', () => {
     const operations = new TeamOperations(store);
-    const good = { recipient: 'murphy-ranite', name: 'report.pdf', size: 10, sha256: 'a'.repeat(64) };
-    const message = operations.registerFile('Atreus-Ranite', good);
+    const good = { recipient: 'murphy-openbutler', name: 'report.pdf', size: 10, sha256: 'a'.repeat(64) };
+    const message = operations.registerFile('Atreus-OpenButler', good);
     expect(message.kind).toBe('file');
     expect(message.fileId).toBeTruthy();
-    expect(message.recipient).toBe('Murphy-Ranite');
-    expect(() => operations.registerFile('Atreus-Ranite', { ...good, name: 'bad\nname' })).toThrow(TeamError);
-    expect(() => operations.registerFile('Atreus-Ranite', { ...good, sha256: 'nope' })).toThrow(TeamError);
-    expect(() => operations.registerFile('Atreus-Ranite', { ...good, recipient: 'ghost' })).toThrow(TeamError);
+    expect(message.recipient).toBe('Murphy-OpenButler');
+    expect(() => operations.registerFile('Atreus-OpenButler', { ...good, name: 'bad\nname' })).toThrow(TeamError);
+    expect(() => operations.registerFile('Atreus-OpenButler', { ...good, sha256: 'nope' })).toThrow(TeamError);
+    expect(() => operations.registerFile('Atreus-OpenButler', { ...good, recipient: 'ghost' })).toThrow(TeamError);
   });
 });
 
@@ -81,7 +81,7 @@ describe('file transfer over the hub', () => {
     expect(readFileSync(destination).equals(bytes)).toBe(true);
 
     // The announcement is a real message: it appears in the group with kind 'file'.
-    const group = await remoteChannel(target, murphyTicket, 'Murphy-Ranite').groupRead(50);
+    const group = await remoteChannel(target, murphyTicket, 'Murphy-OpenButler').groupRead(50);
     expect(group.messages[0]).toMatchObject({ kind: 'file', fileId: uploaded.id });
   });
 
@@ -101,11 +101,11 @@ describe('file transfer over the hub', () => {
   });
 
   it('sends through the local channel for the hub and the remote channel for a member', async () => {
-    const hub = localChannel(store, 'Atreus-Ranite');
-    const member = remoteChannel(target, murphyTicket, 'Murphy-Ranite');
+    const hub = localChannel(store, 'Atreus-OpenButler');
+    const member = remoteChannel(target, murphyTicket, 'Murphy-OpenButler');
     const source = join(dataDir, 'from-hub.txt');
     writeFileSync(source, 'hello from the hub');
-    const sent = await hub.sendFile({ recipient: 'Murphy-Ranite', path: source });
+    const sent = await hub.sendFile({ recipient: 'Murphy-OpenButler', path: source });
     const to = join(dataDir, 'received.txt');
     await member.receiveFile({ id: sent.id, to });
     expect(readFileSync(to, 'utf8')).toBe('hello from the hub');
@@ -116,12 +116,12 @@ describe('file delivery invariants', () => {
   it('reuses the same transfer id without duplicating metadata or notifications', async () => {
     const bytes = Buffer.from('same report bytes');
     const sha256 = (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex');
-    const input = { id: 'f_1234567890abcdef', recipient: 'Atreus-Ranite', name: 'report.md', size: bytes.length, sha256 };
+    const input = { id: 'f_1234567890abcdef', recipient: 'Atreus-OpenButler', name: 'report.md', size: bytes.length, sha256 };
     const first = await uploadFile(target, murphyTicket, { ...input, source: Readable.from(bytes) });
     const retry = await uploadFile(target, murphyTicket, { ...input, source: Readable.from(bytes) });
     expect(retry).toEqual(first);
-    expect(store.filesForMember('Atreus-Ranite')).toHaveLength(1);
-    expect(store.unreadDmCount('Atreus-Ranite')).toBe(1);
+    expect(store.filesForMember('Atreus-OpenButler')).toHaveLength(1);
+    expect(store.unreadDmCount('Atreus-OpenButler')).toBe(1);
     await expect(uploadFile(target, murphyTicket, { ...input, name: 'different-intent.md', source: Readable.from(bytes) })).rejects.toThrow(
       'different file',
     );
@@ -133,7 +133,7 @@ describe('file delivery invariants', () => {
     const destination = join(dataDir, 'destination.txt');
     writeFileSync(source, 'original');
     writeFileSync(destination, 'keep this file');
-    const hub = localChannel(store, 'Atreus-Ranite');
+    const hub = localChannel(store, 'Atreus-OpenButler');
     const sent = await hub.sendFile({ recipient: 'group', path: source });
     writeFileSync(filePath(sent.id), 'tampered');
     await expect(hub.receiveFile({ id: sent.id, to: destination })).rejects.toThrow('sha256');
@@ -145,7 +145,7 @@ describe('file delivery invariants', () => {
     vi.spyOn(AbortSignal, 'timeout').mockReturnValue(abort);
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       if (String(url).endsWith('/v1/status'))
-        return new Response(JSON.stringify({ protocol: 'ranite-team/2', team: 'Proof', you: 'Self', members: [] }));
+        return new Response(JSON.stringify({ protocol: 'openbutler-team/2', team: 'Proof', you: 'Self', members: [] }));
       expect(init?.signal).toBe(abort);
       throw abort.reason;
     });

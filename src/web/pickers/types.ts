@@ -1,5 +1,5 @@
 /**
- * One native folder picker for the machine Ranite runs on.
+ * One native folder picker for the machine OpenButler runs on.
  *
  * A picker resolves to the full path the owner chose, or `null` when they
  * cancelled. It rejects when the picker could not run at all, so the caller

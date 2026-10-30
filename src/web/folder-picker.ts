@@ -5,7 +5,7 @@ import { folderPickerFor } from './pickers/index.js';
 let picking = false;
 
 /**
- * A folder from the machine Ranite runs on, including when the browser lives on
+ * A folder from the machine OpenButler runs on, including when the browser lives on
  * another device. The owner picks in this platform's own dialog — the platform
  * specifics sit behind one adapter — and the chosen string is canonicalized
  * once, here, so every platform hands the caller the same promise: a full path,

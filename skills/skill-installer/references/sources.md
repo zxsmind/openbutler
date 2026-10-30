@@ -7,7 +7,7 @@ publication after review. Source content is inspected as data, not executed.
 
 If the user names a catalog, list that catalog rather than substituting another.
 For an unspecified curated listing, `openai/skills` at `skills/.curated` is a useful
-public source. Label repo/ref/path and annotate installed state from Ranite's
+public source. Label repo/ref/path and annotate installed state from OpenButler's
 actual winning paths, not only `$CODEX_HOME/skills`. An experimental directory
 may not exist: report its absence rather than silently treating it as an empty
 catalog or inventing packages. A list request creates no installation.
@@ -69,12 +69,12 @@ out of public summaries; report only the necessary repo/path/revision and result
 A 404 can mean a missing ref/path or lack of permission. Distinguish those from
 an empty catalog. Do not repeatedly retry an authorization rejection as a network
 fluke. A provider-managed system skill in another product is not automatically
-preinstalled in Ranite; inspect Ranite's discovery before making that claim.
+preinstalled in OpenButler; inspect OpenButler's discovery before making that claim.
 
 ## Local directories and archives
 
 Resolve the named local path and package root without following symlinks into
-unrelated data. An archive is a transport format; Ranite needs an extracted valid
+unrelated data. An archive is a transport format; OpenButler needs an extracted valid
 directory. Stage a zip/tar outside active discovery and review its filenames,
 resources and entrypoint first. Preserve source metadata, licenses and relevant
 sidecars. Large caches, build products or an entire source repository do not need
@@ -85,7 +85,7 @@ to become a skill just because they were downloaded beside it.
 Separate instruction portability from executable readiness. Inspect foreign tool
 names, fixed home paths, required CLIs/libraries, model/API dependencies, expected
 output viewers and hard-coded agent-platform APIs. `agents/openai.yaml` may be
-valuable package metadata but does not implement Codex policy in Ranite. A foreign
+valuable package metadata but does not implement Codex policy in OpenButler. A foreign
 SDK's contracts or private service are not universal install gates.
 
 If rewriting is needed, preserve the original source snapshot and state the

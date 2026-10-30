@@ -1,4 +1,4 @@
-// Ranite helper; see LICENSE.txt and NOTICE.txt in this package.
+// OpenButler helper; see LICENSE.txt and NOTICE.txt in this package.
 import process from 'node:process';
 import console from 'node:console';
 import { Buffer } from 'node:buffer';
@@ -10,7 +10,7 @@ try {
   ({ load } = await import('js-yaml'));
 } catch {
   console.error(
-    JSON.stringify({ status: 'blocked', error: 'js-yaml is unavailable; use the bundled Ranite helper or an available YAML parser.' }),
+    JSON.stringify({ status: 'blocked', error: 'js-yaml is unavailable; use the bundled OpenButler helper or an available YAML parser.' }),
   );
   process.exit(2);
 }
@@ -63,7 +63,7 @@ function validate(directory) {
     const text = readFileSync(join(root, 'SKILL.md'), 'utf8');
     const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
     if (!header) throw new Error('Missing or unterminated YAML frontmatter.');
-    if (Buffer.byteLength(header[0], 'utf8') > 8192) errors.push('Frontmatter exceeds the Ranite discovery prefix.');
+    if (Buffer.byteLength(header[0], 'utf8') > 8192) errors.push('Frontmatter exceeds the OpenButler discovery prefix.');
     let metadata;
     try {
       metadata = load(header[1]);

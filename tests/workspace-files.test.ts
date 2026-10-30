@@ -17,8 +17,8 @@ let outside: string;
 const posix = (value: string) => value.replace(/\\/g, '/').toLowerCase();
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-files-root-'));
-  outside = mkdtempSync(join(tmpdir(), 'ranite-files-outside-'));
+  root = mkdtempSync(join(tmpdir(), 'openbutler-files-root-'));
+  outside = mkdtempSync(join(tmpdir(), 'openbutler-files-outside-'));
   mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'src', 'inside.ts'), 'export const inside = 1;', 'utf8');
   writeFileSync(join(outside, 'cited.ts'), 'export const cited = 2;', 'utf8');

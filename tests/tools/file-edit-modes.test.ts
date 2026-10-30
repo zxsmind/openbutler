@@ -7,7 +7,7 @@ import { createEditTool } from '../../src/tools/file-edit.js';
 let workspace: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), 'ranite-edit-modes-'));
+  workspace = await mkdtemp(join(tmpdir(), 'openbutler-edit-modes-'));
 });
 
 afterEach(async () => {

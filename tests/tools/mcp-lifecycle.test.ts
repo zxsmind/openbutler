@@ -8,16 +8,16 @@ import type { McpConnectionManager } from '../../src/tools/mcp.js';
 let root: string;
 let manager: McpConnectionManager | undefined;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-mcp-wire-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
-  vi.stubEnv('RANITE_MCP_FIXTURE_SECRET', 'private-fixture-value');
+  root = mkdtempSync(join(tmpdir(), 'openbutler-mcp-wire-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
+  vi.stubEnv('OPENBUTLER_MCP_FIXTURE_SECRET', 'private-fixture-value');
   vi.resetModules();
 });
 afterEach(async () => {
   await manager?.close();
   manager = undefined;
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-mcp-wire-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-mcp-wire-'))
     throw new Error('Unsafe fixture path.');
   rmSync(root, { recursive: true, force: true });
 });
@@ -55,7 +55,7 @@ it('shares a real stdio transport, detects its exit, reconnects and redacts star
     transport: 'stdio',
     command: process.execPath,
     args: ['-e', serverScript],
-    env: { MCP_SECRET: 'RANITE_MCP_FIXTURE_SECRET' },
+    env: { MCP_SECRET: 'OPENBUTLER_MCP_FIXTURE_SECRET' },
   };
   settings.saveSettings(store);
   const { createMcpConnectionManager } = await import('../../src/tools/mcp.js');

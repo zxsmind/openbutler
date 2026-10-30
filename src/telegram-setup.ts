@@ -1,7 +1,7 @@
 /**
  * Guided Telegram onboarding helpers.
  *
- * Pure, testable pieces of the `ranite telegram setup` flow: bot-token shape
+ * Pure, testable pieces of the `openbutler telegram setup` flow: bot-token shape
  * and live validation against the Bot API, user-environment persistence, and
  * the pairing wait loop. CLI prompting and host calls stay in `cli-main.ts`.
  * The token lives in memory and the host environment only — it is never
@@ -41,9 +41,9 @@ export async function resolveTokenEnv(name: string): Promise<string | undefined>
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        "[Console]::Write([Environment]::GetEnvironmentVariable($env:RANITE_TOKEN_ENV_NAME, 'User'))",
+        "[Console]::Write([Environment]::GetEnvironmentVariable($env:OPENBUTLER_TOKEN_ENV_NAME, 'User'))",
       ],
-      { windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024, env: { ...process.env, RANITE_TOKEN_ENV_NAME: name } },
+      { windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024, env: { ...process.env, OPENBUTLER_TOKEN_ENV_NAME: name } },
     );
     return stdout.trim() || undefined;
   } catch {
@@ -54,7 +54,7 @@ export async function resolveTokenEnv(name: string): Promise<string | undefined>
 
 /** Message the setup flow sends to prove the owner channel works end to end. */
 export const TELEGRAM_SETUP_TEST_MESSAGE =
-  'Ranite Telegram channel is connected. Send a message here any time; /approvals re-sends pending approvals and /stop stops the current run.';
+  'OpenButler Telegram channel is connected. Send a message here any time; /approvals re-sends pending approvals and /stop stops the current run.';
 
 /** Shape check only — fast typo feedback before any network call. */
 export function isPlausibleBotToken(value: string): boolean {
@@ -130,7 +130,9 @@ export async function persistTokenEnv(name: string, value: string, homeDir: stri
     try {
       await execFileAsync('setx', [name, value], { windowsHide: true });
     } catch {
-      throw new Error(`Could not save ${name} with setx. Set it manually in the user environment, then re-run \`ranite telegram setup\`.`);
+      throw new Error(
+        `Could not save ${name} with setx. Set it manually in the user environment, then re-run \`openbutler telegram setup\`.`,
+      );
     }
     return { location: `user environment (${name})` };
   }

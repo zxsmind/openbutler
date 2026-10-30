@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 let cached: string | undefined;
 
 /** The published package version, read once from the manifest next to the build output. */
-export function getRaniteVersion(): string {
+export function getOpenButlerVersion(): string {
   if (cached !== undefined) return cached;
   cached = 'unknown';
   try {

@@ -13,9 +13,9 @@ let dataDir: string;
 let fallback: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-project-data-'));
-  fallback = mkdtempSync(join(tmpdir(), 'ranite-project-launch-'));
-  vi.stubEnv('RANITE_DATA_DIR', dataDir);
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-project-data-'));
+  fallback = mkdtempSync(join(tmpdir(), 'openbutler-project-launch-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', dataDir);
   vi.resetModules();
 });
 
@@ -35,13 +35,13 @@ describe('a chat without a project takes the scope its caller owns', () => {
     const selection = resolveProjectSelection(null, fallback);
     expect(statSync(selection.workspaceRoot).isDirectory()).toBe(true);
     expect(selection.workspaceRoot.toLowerCase()).toBe(fallback.toLowerCase().replace(/[\\/]+$/, ''));
-    expect(selection.workspaceRoot).not.toContain(join('ranite', 'workspace'));
+    expect(selection.workspaceRoot).not.toContain(join('openbutler', 'workspace'));
     expect(selection.projectContext).toBeUndefined();
   });
 
   it('keeps a selected project ahead of any fallback', async () => {
     const { resolveProjectSelection, createProject } = await store();
-    const projectDir = mkdtempSync(join(tmpdir(), 'ranite-project-folder-'));
+    const projectDir = mkdtempSync(join(tmpdir(), 'openbutler-project-folder-'));
     try {
       const project = await createProject({ name: 'Demo', folders: [projectDir] });
       const selection = resolveProjectSelection(project.id, fallback);

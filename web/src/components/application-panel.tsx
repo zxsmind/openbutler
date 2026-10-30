@@ -109,7 +109,7 @@ export function ApplicationPanel({
   const [address, setAddress] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
-    setAddress(destination ? `ranite://${destination}` : '');
+    setAddress(destination ? `openbutler://${destination}` : '');
     setNotice(null);
   }, [active, destination]);
   useLayoutEffect(() => {
@@ -173,7 +173,7 @@ export function ApplicationPanel({
   const history = (delta: number) => setTabs((previous) => previous.map((tab) => (tab.id === active ? movePanelHistory(tab, delta) : tab)));
   const reload = () => {
     setNotice(null);
-    setAddress(destination ? `ranite://${destination}` : '');
+    setAddress(destination ? `openbutler://${destination}` : '');
     if (destination)
       setTabs((previous) =>
         previous.map((tab) =>

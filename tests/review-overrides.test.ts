@@ -20,16 +20,16 @@ async function store() {
 }
 
 beforeEach(() => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  root = mkdtempSync(join(tmpdir(), 'ranite-review-overrides-'));
-  process.env.RANITE_DATA_DIR = root;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  root = mkdtempSync(join(tmpdir(), 'openbutler-review-overrides-'));
+  process.env.OPENBUTLER_DATA_DIR = root;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-review-overrides-')) {
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-review-overrides-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(root, { recursive: true, force: true });

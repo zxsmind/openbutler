@@ -14,7 +14,7 @@ const MAX_SESSION_MESSAGE_CHARS = 2_000;
  * The write side of the session tools (P3): the machine custodian can steer a live worker
  * with a short text message. The rules are enforced by the host, not here: only a
  * machine custodian session may send, the receiver must be a live worker
- * session, and the receiver is told the message comes from another Ranite session
+ * session, and the receiver is told the message comes from another OpenButler session
  * that can never approve anything on its own.
  */
 export function createSessionMessageTool(
@@ -23,7 +23,7 @@ export function createSessionMessageTool(
   return {
     providerId: 'host',
     name: 'session_message',
-    description: `Send a short text message into another running Ranite session on this machine (steering). Only the machine custodian may send, only to live worker sessions such as scheduled runs; worker-to-worker messages are refused. The receiver sees the text as a message from another Ranite session, never from the user, and it can never approve actions or change settings by itself. Use it to redirect or correct work in progress; read the worker first with session_read when its state is unclear. Text only, at most ${MAX_SESSION_MESSAGE_CHARS} characters.`,
+    description: `Send a short text message into another running OpenButler session on this machine (steering). Only the machine custodian may send, only to live worker sessions such as scheduled runs; worker-to-worker messages are refused. The receiver sees the text as a message from another OpenButler session, never from the user, and it can never approve actions or change settings by itself. Use it to redirect or correct work in progress; read the worker first with session_read when its state is unclear. Text only, at most ${MAX_SESSION_MESSAGE_CHARS} characters.`,
     inputSchema: {
       type: 'object',
       properties: {

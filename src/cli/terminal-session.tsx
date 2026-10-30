@@ -19,7 +19,7 @@ import { listSupportedPackages, listCatalogModels, providerIsConfigured, resolve
 import { loadSettings, rememberProviderModel } from '../settings.js';
 import { listSavedSessions, type SessionEntry, type SessionSummary, type NoticeTone } from '../session-store.js';
 import { upsertProvider, writeSettings } from './config-edit.js';
-import { getRaniteVersion } from '../version.js';
+import { getOpenButlerVersion } from '../version.js';
 import { detectTerminalTheme } from './terminal-detect.js';
 import { glyphs, uiTokens, type ResolvedTheme, type UiTheme, type UiTokens } from './theme.js';
 
@@ -747,7 +747,7 @@ export function SessionScreen({
           skills.length > 0
             ? [
                 ...skills.slice(0, 12).map((skill) => skill.name + ' [' + skill.scope + ']: ' + skill.description),
-                ...(skills.length > 12 ? ['... ' + (skills.length - 12) + ' more. Run ranite skills for the full list.'] : []),
+                ...(skills.length > 12 ? ['... ' + (skills.length - 12) + ' more. Run openbutler skills for the full list.'] : []),
               ].join('\n')
             : 'No Agent Skills found. Search paths: ' +
               getSkillRoots(runtime.workspaceRoot)
@@ -1527,7 +1527,7 @@ export function SessionScreen({
       {entries.length === 0 ? (
         <Box flexDirection="column" alignItems="center" marginTop={2} marginBottom={2} flexShrink={0}>
           <Text bold dimColor={popupOpen} {...(popupOpen ? {} : { color: tokens.accent })}>
-            Ranite {getRaniteVersion()}
+            OpenButler {getOpenButlerVersion()}
           </Text>
           <Text dimColor>{`${runtime.modelId} · ${activeReasoningLabel} · ${runtime.approvalMode}`}</Text>
           {runtime.workspaceRoot ? <Text dimColor>{clipTerminalWidth(runtime.workspaceRoot, Math.max(8, width - 8))}</Text> : null}
@@ -1789,7 +1789,7 @@ export function SessionScreen({
           tokens={tokens}
           width={Math.max(24, Math.min(64, columns - 8))}
           title="Tool access"
-          subtitle={`Choose how Ranite handles actions outside this workspace.\n${clipped(runtime.workspaceRoot, Math.max(12, Math.min(52, columns - 18)))}`}
+          subtitle={`Choose how OpenButler handles actions outside this workspace.\n${clipped(runtime.workspaceRoot, Math.max(12, Math.min(52, columns - 18)))}`}
           hint="↑/↓ move · Enter select · Esc close"
         >
           {[
@@ -1832,7 +1832,7 @@ export function SessionScreen({
           {runtime.reasoningVariants.length <= 1 ? (
             <Text dimColor>
               {(runtime.reasoningSupport ?? 'model-unsupported') === 'adapter-unmapped'
-                ? 'This model lists reasoning support, but Ranite has no reasoning mapping for this adapter yet.'
+                ? 'This model lists reasoning support, but OpenButler has no reasoning mapping for this adapter yet.'
                 : 'No selectable reasoning variants are listed for this model.'}
             </Text>
           ) : (
@@ -2432,7 +2432,7 @@ function ProviderPicker({
     },
     key: {
       title: providerName,
-      subtitle: 'Paste this provider’s API key. The key is stored in Ranite settings.',
+      subtitle: 'Paste this provider’s API key. The key is stored in OpenButler settings.',
       hint: customDraft ? 'Enter save · Esc endpoint' : 'Enter continue · Esc providers',
     },
     models: {

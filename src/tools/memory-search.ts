@@ -54,7 +54,7 @@ export function createMemorySearchTool(index: MemoryIndex): ToolDefinition {
         return {
           status: 'model_unavailable',
           query,
-          message: `The local embedding model is not ready: ${preparation.error ?? 'preparation failed'}. Retry later, or run \`ranite setup\` and choose the local memory model option.`,
+          message: `The local embedding model is not ready: ${preparation.error ?? 'preparation failed'}. Retry later, or run \`openbutler setup\` and choose the local memory model option.`,
         };
       }
       const search = await index.search(query, rawLimit);

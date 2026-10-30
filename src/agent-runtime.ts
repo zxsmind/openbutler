@@ -95,7 +95,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   const modelId = defaultChoice?.modelId ?? '';
   const provider = settings.providers[providerId];
   if (!providerId || !modelId || !provider?.enabled || !providerIsConfigured(providerId, provider)) {
-    throw new Error('No ready default provider and model. Run `ranite setup` first.');
+    throw new Error('No ready default provider and model. Run `openbutler setup` first.');
   }
 
   const { MemoryIndex, isMemoryEmbeddingModelPrepared } = await import('./memory-index.js');
@@ -114,7 +114,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
   }
 
   if (!defaultModelIsUsable({ ...settings, defaultProvider: providerId, defaultModel: modelId })) {
-    throw new Error('The default model is not ready. Configure its provider and model: ranite setup');
+    throw new Error('The default model is not ready. Configure its provider and model: openbutler setup');
   }
   // Retry and key-rotation events surface through here so the session can show
   // them in the transcript; the handler is swapped per run.

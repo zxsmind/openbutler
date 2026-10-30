@@ -1,4 +1,4 @@
-// Ranite helper; see LICENSE.txt and NOTICE.txt in this package.
+// OpenButler helper; see LICENSE.txt and NOTICE.txt in this package.
 import process from 'node:process';
 import console from 'node:console';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';

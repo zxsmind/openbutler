@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 test('the explorer uses real changes, respects a workspace subfolder, and filters nested paths', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ranite-file-tree-'));
+  const root = await mkdtemp(join(tmpdir(), 'openbutler-file-tree-'));
   folders.push(root);
   const workspace = join(root, 'nested workspace');
   await mkdir(join(workspace, 'docs'), { recursive: true });

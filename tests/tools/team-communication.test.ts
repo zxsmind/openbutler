@@ -13,8 +13,8 @@ describe('team_send tool', () => {
     const tool = createTeamSendTool(send);
     await tool.execute!({ text: 'hello' });
     expect(send).toHaveBeenCalledWith({ recipient: 'group', text: 'hello' });
-    await tool.execute!({ text: 'psst', recipient: 'Atreus-Ranite', replyTo: 'm_1' });
-    expect(send).toHaveBeenLastCalledWith({ recipient: 'Atreus-Ranite', text: 'psst', replyTo: 'm_1' });
+    await tool.execute!({ text: 'psst', recipient: 'Atreus-OpenButler', replyTo: 'm_1' });
+    expect(send).toHaveBeenLastCalledWith({ recipient: 'Atreus-OpenButler', text: 'psst', replyTo: 'm_1' });
   });
 
   it('refuses an empty body without calling the host', async () => {
@@ -54,8 +54,8 @@ describe('team_history tool', () => {
     const tool = createTeamHistoryTool(history);
     await tool.execute!({ scope: 'group', limit: 10 });
     expect(history).toHaveBeenLastCalledWith({ scope: 'group', limit: 10 });
-    await tool.execute!({ scope: 'dm', peer: 'Atreus-Ranite' });
-    expect(history).toHaveBeenLastCalledWith({ scope: 'dm', peer: 'Atreus-Ranite' });
+    await tool.execute!({ scope: 'dm', peer: 'Atreus-OpenButler' });
+    expect(history).toHaveBeenLastCalledWith({ scope: 'dm', peer: 'Atreus-OpenButler' });
 
     const bad = (await tool.execute!({ scope: 'dm' })) as { status: string };
     expect(bad.status).toBe('invalid');

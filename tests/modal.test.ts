@@ -7,8 +7,8 @@ import { verifyModalCredentials } from '../src/modal.js';
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-modal-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-modal-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
 });
 

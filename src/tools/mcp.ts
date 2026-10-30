@@ -13,7 +13,7 @@ import { imageTypeFromBytes, summarizeFileToolResult, summarizeImageToolResult }
 import { getMcpWorkingDirectory } from '../paths.js';
 import { killProcessTree } from '../process-tree.js';
 import { loadSettings, parseMcpServerState, saveSettings, type McpServerState } from '../settings.js';
-import { getRaniteVersion } from '../version.js';
+import { getOpenButlerVersion } from '../version.js';
 import type { ToolDefinition, ToolEffect } from './registry.js';
 import { DEFAULT_TOOL_TIMEOUT_SECONDS, runWithToolTimeout } from './timeout.js';
 import { redactSensitiveText } from '../sensitive-data.js';
@@ -450,7 +450,7 @@ export function createMcpManagementTool(manager: McpConnectionManager, onConnect
     providerId: 'host',
     name: 'mcp_manage',
     description:
-      'Inspect and manage Ranite global MCP server connections. Actions: list, add, connect, disconnect, remove. For add, provide serverId and a config with stdio command/args/env/cwd or http/sse url/headers. env and headers map server names to existing host environment-variable names, never to secret values. Changes use global settings and connect immediately after approval.',
+      'Inspect and manage OpenButler global MCP server connections. Actions: list, add, connect, disconnect, remove. For add, provide serverId and a config with stdio command/args/env/cwd or http/sse url/headers. env and headers map server names to existing host environment-variable names, never to secret values. Changes use global settings and connect immediately after approval.',
     maxInputChars: 20_000,
     inputSchema: {
       type: 'object',
@@ -526,7 +526,7 @@ async function openMcpServer(
   onDisconnected?: (server: ConnectedMcpServer) => void,
   shutdownSignal?: AbortSignal,
 ): Promise<ConnectedMcpServer | null> {
-  const client = new Client({ name: 'ranite', version: getRaniteVersion() });
+  const client = new Client({ name: 'openbutler', version: getOpenButlerVersion() });
   const server: ConnectedMcpServer = { id, client, tools: [], alive: true, expectedClose: false, stderr: '' };
   const secrets = Object.values(config.transport === 'stdio' ? config.env : config.headers)
     .map((name) => process.env[name])

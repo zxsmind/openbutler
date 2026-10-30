@@ -1,4 +1,4 @@
-// Ranite helper; see LICENSE.txt and NOTICE.txt in this package.
+// OpenButler helper; see LICENSE.txt and NOTICE.txt in this package.
 import process from 'node:process';
 import console from 'node:console';
 import { Buffer } from 'node:buffer';
@@ -13,7 +13,7 @@ try {
   console.error(
     JSON.stringify({
       status: 'blocked',
-      error: 'js-yaml is unavailable; use the bundled Ranite helper or the documented inspected file-copy workflow.',
+      error: 'js-yaml is unavailable; use the bundled OpenButler helper or the documented inspected file-copy workflow.',
     }),
   );
   process.exit(2);

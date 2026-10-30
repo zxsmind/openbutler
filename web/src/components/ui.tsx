@@ -19,5 +19,5 @@ export function IconButton({ icon, label, className = '', ...props }: Omit<Butto
   return <Button {...props} icon={icon} className={`icon-button ${className}`} aria-label={label} title={label} />;
 }
 export function Brand({ large = false }: { large?: boolean }) {
-  return <span role="img" aria-label="Ranite" className={large ? 'brand-symbol large' : 'brand-symbol'} />;
+  return <span role="img" aria-label="OpenButler" className={large ? 'brand-symbol large' : 'brand-symbol'} />;
 }

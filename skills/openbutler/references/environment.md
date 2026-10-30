@@ -13,7 +13,7 @@ Related: [configuration](configuration.md), [web](web.md), [maintenance](mainten
 | Browser | Chat/settings rendering and local text drafts | Closes the view, not the job |
 | Telegram adapter | Paired-owner input and outbound delivery | Managed by host/channel settings |
 | Worker | Bounded local agent session | Separate lifecycle and saved transcript |
-| Team peer | Another Ranite machine | Independent host, capabilities and connectivity |
+| Team peer | Another OpenButler machine | Independent host, capabilities and connectivity |
 
 Files and shell commands operate on the host using the turn's workspace. Opening
 web on a phone does not move tools onto the phone. An MCP server may run on another
@@ -22,11 +22,11 @@ machine; its configured command/transport/endpoint determines that location.
 ## Inspect an installation
 
 ```text
-ranite --version
-ranite about
-ranite config
-ranite daemon status
-ranite workspace default
+openbutler --version
+openbutler about
+openbutler config
+openbutler daemon status
+openbutler workspace default
 ```
 
 `about` prints version, Node/platform/architecture, settings/secret-store paths and
@@ -48,19 +48,19 @@ published for that OS.
 Public installer entry points execute downloaded installer code:
 
 ```powershell
-irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/zxsmind/openbutler/main/install.ps1 | iex
 ```
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zxsmind/ranite/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zxsmind/openbutler/main/install.sh | bash
 ```
 
 For an inspected copy, download the installer first, then invoke that file. Shell
 options include `--version` and `--no-modify-path`; PowerShell uses `-Version`
 and `-NoModifyPath`. Open a new terminal after PATH changes. Verify the invoked
-copy with `ranite --version` and `ranite about`.
+copy with `openbutler --version` and `openbutler about`.
 
-`ranite setup` selects a provider, masked credential input and a
+`openbutler setup` selects a provider, masked credential input and a
 model, then prepares local memory assets. The wizard saves its settings at the
 final step. Existing installations can prepare the memory model separately.
 Setup can contact the network and download packages/model assets.
@@ -68,11 +68,11 @@ Setup can contact the network and download packages/model assets.
 ## Launch and choose scope
 
 ```text
-ranite
-ranite --workspace <directory>
-ranite --c "Inspect service status"
-ranite workspace default <directory>
-ranite daemon start
+openbutler
+openbutler --workspace <directory>
+openbutler --c "Inspect service status"
+openbutler workspace default <directory>
+openbutler daemon start
 ```
 
 Bare launches use configured `defaultWorkspaceRoot`, otherwise the invoking
@@ -86,16 +86,16 @@ longer than starting the process. A model/provider may be configured but not rea
 
 ## Lifecycle and automatic startup
 
-`ranite stop` / `ranite daemon stop` stop the host. `ranite restart` saves sessions,
+`openbutler stop` / `openbutler daemon stop` stop the host. `openbutler restart` saves sessions,
 stops active runs, waits for exit, starts a replacement, and recycles a tracked
 web server with it. Clients reconnect and
 recover history; interrupted side effects are not retroactively completed. TUI
 `/stop` and web Stop target work, not daemon ownership; see [sessions](terminal-sessions.md).
 
 ```text
-ranite daemon autostart status
-ranite daemon autostart on
-ranite daemon autostart off
+openbutler daemon autostart status
+openbutler daemon autostart on
+openbutler daemon autostart off
 ```
 
 `daemon install` / `uninstall` manage startup registration, not program installation.
@@ -108,13 +108,13 @@ setup includes platform-specific token propagation.
 
 | Platform | Default data root |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\ranite` |
-| macOS | `~/Library/Application Support/ranite` |
-| Linux | `$XDG_DATA_HOME/ranite`, otherwise `~/.local/share/ranite` |
+| Windows | `%LOCALAPPDATA%\openbutler` |
+| macOS | `~/Library/Application Support/openbutler` |
+| Linux | `$XDG_DATA_HOME/openbutler`, otherwise `~/.local/share/openbutler` |
 
-`RANITE_DATA_DIR` overrides the root per process. Different values can produce
+`OPENBUTLER_DATA_DIR` overrides the root per process. Different values can produce
 different data/host instances. Scratch is under the OS temp directory at
-`ranite/YYYY-MM-DD`; it is disposable. Data contents are mapped in
+`openbutler/YYYY-MM-DD`; it is disposable. Data contents are mapped in
 [maintenance](maintenance.md). The installation, source checkout, workspace and
 data directory are different places. Shell syntax and service management are
 platform-specific; a PowerShell example is not a portable POSIX command.

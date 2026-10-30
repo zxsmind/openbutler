@@ -59,7 +59,7 @@ export function getDaemonEndpoint(): string {
   const directory = resolve(getDataDir());
   if (process.platform === 'win32') {
     const suffix = createHash('sha256').update(directory.toLocaleLowerCase('en-US')).digest('hex').slice(0, 24);
-    return `\\\\.\\pipe\\ranite-${suffix}`;
+    return `\\\\.\\pipe\\openbutler-${suffix}`;
   }
   return join(directory, 'daemon.sock');
 }
@@ -106,7 +106,7 @@ export function hostVintageMismatchWarning(clientEntry: string | undefined | nul
   const host = hostVintage(hostEntry);
   if (client === 'unknown' || host === 'unknown' || client === host) return null;
   const label = (kind: 'source' | 'dist') => (kind === 'source' ? 'source (tsx)' : 'a built bundle');
-  return `Code vintage mismatch: this client runs ${label(client)} but the background host runs ${label(host)}. Run \`ranite restart\` here to relaunch the host from this client.`;
+  return `Code vintage mismatch: this client runs ${label(client)} but the background host runs ${label(host)}. Run \`openbutler restart\` here to relaunch the host from this client.`;
 }
 
 /**
@@ -116,30 +116,32 @@ export function hostVintageMismatchWarning(clientEntry: string | undefined | nul
  */
 export async function requireBackgroundHost(): Promise<DaemonStatus> {
   const status = await getDaemonStatus();
-  if (!status) throw new Error('The background host is not running. Start it with `ranite daemon start`.');
-  if (status.legacy) throw new Error('An older Ranite host is still running. Stop it with `ranite daemon stop`, then start Ranite again.');
+  if (!status) throw new Error('The background host is not running. Start it with `openbutler daemon start`.');
+  if (status.legacy)
+    throw new Error('An older OpenButler host is still running. Stop it with `openbutler daemon stop`, then start OpenButler again.');
   if (status.unresponsive)
-    throw new Error(`The background host process ${status.pid} does not answer IPC health checks. Recover it with \`ranite restart\`.`);
+    throw new Error(`The background host process ${status.pid} does not answer IPC health checks. Recover it with \`openbutler restart\`.`);
   return status;
 }
 
 export async function requestHost(action: string, payload: Record<string, unknown> = {}): Promise<unknown> {
   const response = await requestDaemon(action, payload, 45_000);
-  if (!response.ok) throw new Error(response.error ?? 'Ranite host request failed.');
+  if (!response.ok) throw new Error(response.error ?? 'OpenButler host request failed.');
   return response.result;
 }
 
 export async function startDaemon(_legacyWorkspaceScope?: string): Promise<DaemonStatus> {
   const active = await getDaemonStatus();
-  if (active?.legacy) throw new Error('An older Ranite host is still running. Stop it with `ranite daemon stop`, then start Ranite again.');
+  if (active?.legacy)
+    throw new Error('An older OpenButler host is still running. Stop it with `openbutler daemon stop`, then start OpenButler again.');
   if (active?.unresponsive)
     throw new Error(
-      `Ranite host process ${active.pid} is alive but does not answer IPC health checks. Recover it with \`ranite restart\`.`,
+      `OpenButler host process ${active.pid} is alive but does not answer IPC health checks. Recover it with \`openbutler restart\`.`,
     );
   if (active) return active;
 
   const entry = process.argv[1];
-  if (!entry) throw new Error('Could not locate the Ranite CLI entry point.');
+  if (!entry) throw new Error('Could not locate the OpenButler CLI entry point.');
   const dataDirectory = getDataDir();
   const custodianDirectory = getDataPath('custodian');
   mkdirSync(dataDirectory, { recursive: true });
@@ -154,7 +156,7 @@ export async function startDaemon(_legacyWorkspaceScope?: string): Promise<Daemo
       cwd: custodianDirectory,
       env: {
         ...process.env,
-        RANITE_DAEMON_CHILD: '1',
+        OPENBUTLER_DAEMON_CHILD: '1',
       },
       detached: true,
       stdio: ['ignore', logFd, logFd],
@@ -183,13 +185,15 @@ export async function startDaemon(_legacyWorkspaceScope?: string): Promise<Daemo
       const logTail = readDaemonLogSince(logPath, logOffset);
       const { code, signal } = childExit;
       throw new Error(
-        `Ranite host process exited before becoming ready${code === null ? ` (${signal ?? 'unknown signal'})` : ` (exit code ${code})`}.${logTail ? `\n${logTail}` : ''}`,
+        `OpenButler host process exited before becoming ready${code === null ? ` (${signal ?? 'unknown signal'})` : ` (exit code ${code})`}.${logTail ? `\n${logTail}` : ''}`,
       );
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   }
   const logTail = readDaemonLogSince(logPath, logOffset);
-  throw new Error(`Ranite host did not become ready within ${DAEMON_START_TIMEOUT_MS / 1_000} seconds.${logTail ? `\n${logTail}` : ''}`);
+  throw new Error(
+    `OpenButler host did not become ready within ${DAEMON_START_TIMEOUT_MS / 1_000} seconds.${logTail ? `\n${logTail}` : ''}`,
+  );
 }
 
 export async function stopDaemon(restarting = false): Promise<boolean> {
@@ -199,7 +203,7 @@ export async function stopDaemon(restarting = false): Promise<boolean> {
     const protocolVersion = active.legacy ? PREVIOUS_DAEMON_PROTOCOL_VERSION : DAEMON_PROTOCOL_VERSION;
     try {
       const response = await requestDaemon('stop', restarting ? { restart: true } : {}, DAEMON_REQUEST_TIMEOUT_MS, protocolVersion);
-      if (!response.ok) throw new Error(response.error ?? 'The Ranite host could not stop.');
+      if (!response.ok) throw new Error(response.error ?? 'The OpenButler host could not stop.');
     } catch (error) {
       const status = await getDaemonStatus();
       if (status?.pid === active.pid && !status.unresponsive) throw error;
@@ -215,13 +219,15 @@ export async function stopDaemon(restarting = false): Promise<boolean> {
     Boolean(record?.identity) && record?.pid === active.pid && record.startedAt === active.startedAt && liveIdentity === record?.identity;
   // A pid file can only describe one host, and a restart that raced a slow
   // shutdown leaves several alive. The process itself is the authority: a live
-  // ranite host is safe to terminate even when the file talks about its sibling.
-  const isRaniteHost = Boolean(liveCommand && /daemon\s+run/.test(liveCommand) && /cli\.(?:js|ts)/.test(liveCommand));
-  if (!recordMatches && !isRaniteHost) {
-    throw new Error(`Ranite host process ${active.pid} did not stop. Its process identity cannot be verified, so it was not terminated.`);
+  // openbutler host is safe to terminate even when the file talks about its sibling.
+  const isOpenButlerHost = Boolean(liveCommand && /daemon\s+run/.test(liveCommand) && /cli\.(?:js|ts)/.test(liveCommand));
+  if (!recordMatches && !isOpenButlerHost) {
+    throw new Error(
+      `OpenButler host process ${active.pid} did not stop. Its process identity cannot be verified, so it was not terminated.`,
+    );
   }
   console.error(
-    `Ranite host process ${active.pid} did not finish shutdown within 30 seconds; terminating the verified host. Only the last saved session state can be recovered. Per-step shutdown timings are in logs/ranite.log, on lines starting with "[shutdown]".`,
+    `OpenButler host process ${active.pid} did not finish shutdown within 30 seconds; terminating the verified host. Only the last saved session state can be recovered. Per-step shutdown timings are in logs/openbutler.log, on lines starting with "[shutdown]".`,
   );
   try {
     process.kill(active.pid, 'SIGKILL');
@@ -229,7 +235,7 @@ export async function stopDaemon(restarting = false): Promise<boolean> {
     if (processIsAlive(active.pid)) throw error;
   }
   if (await waitForProcessExit(active.pid, 5_000)) return true;
-  throw new Error(`Ranite host process ${active.pid} could not be terminated.`);
+  throw new Error(`OpenButler host process ${active.pid} could not be terminated.`);
 }
 
 export type RestartOutcome = { status: DaemonStatus; web: WebPidRecord | null; webFailure: string | null };
@@ -258,7 +264,7 @@ export async function restartDaemon(_legacyWorkspaceScope?: string): Promise<Res
   }
 }
 
-/** The optional web server `ranite daemon start --web` opens: its own pid record so stop reaches it. */
+/** The optional web server `openbutler daemon start --web` opens: its own pid record so stop reaches it. */
 function webPidPath(): string {
   return getDataPath('web.pid');
 }
@@ -311,7 +317,7 @@ export function webSpawnArgs(entry: string, port: number, host: string): string[
 export async function startWebProcess(entry: string | undefined, port: number, host: string, dir: string): Promise<WebPidRecord> {
   const existing = readWebPidRecord();
   if (existing) return existing;
-  if (!entry) throw new Error('Could not locate the Ranite CLI entry point.');
+  if (!entry) throw new Error('Could not locate the OpenButler CLI entry point.');
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error(`Invalid --port value "${port}". Use a number between 1 and 65535.`);
   const logPath = getDataPath('daemon.log');
@@ -363,14 +369,14 @@ export async function startWebProcess(entry: string | undefined, port: number, h
   throw new Error(`The web server did not become ready within ${DAEMON_START_TIMEOUT_MS / 1_000} seconds.`);
 }
 
-/** Stops the tracked web process; only a verified Ranite web child is signalled. */
+/** Stops the tracked web process; only a verified OpenButler web child is signalled. */
 export async function stopWebProcess(): Promise<boolean> {
   const path = webPidPath();
   const record = readWebPidRecord();
   if (!record) return false;
   const liveCommand = await readProcessCommandLine(record.pid);
-  const isRaniteWeb = Boolean(liveCommand && /\bweb\b/.test(liveCommand) && /cli\.(?:js|ts)/.test(liveCommand));
-  if (!isRaniteWeb) return false;
+  const isOpenButlerWeb = Boolean(liveCommand && /\bweb\b/.test(liveCommand) && /cli\.(?:js|ts)/.test(liveCommand));
+  if (!isOpenButlerWeb) return false;
   try {
     process.kill(record.pid, 'SIGTERM');
   } catch {
@@ -412,14 +418,14 @@ export function untrackWebProcess(pid: number): void {
   }
 }
 
-/** Internal child-process entry point for `ranite daemon run`. */
+/** Internal child-process entry point for `openbutler daemon run`. */
 export async function runDaemonProcess(): Promise<void> {
   const startLock = await acquireDaemonStartLock();
   try {
     const active = await getDaemonStatus();
     if (active?.legacy)
-      throw new Error('An older Ranite host is still running. Stop it with `ranite daemon stop`, then start Ranite again.');
-    if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+      throw new Error('An older OpenButler host is still running. Stop it with `openbutler daemon stop`, then start OpenButler again.');
+    if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
     await runLockedDaemonProcess(startLock.startedAt);
   } finally {
     releaseDaemonStartLock(startLock);
@@ -465,7 +471,7 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
     await host.start();
     await writeDaemonPidFile(startedAt);
-    console.log(`Ranite host ready (${process.pid}); ${host.getStatus().workspaceCount} workspace loaded.`);
+    console.log(`OpenButler host ready (${process.pid}); ${host.getStatus().workspaceCount} workspace loaded.`);
     await stopRequested;
   } finally {
     process.off('SIGINT', onSigint);
@@ -488,7 +494,7 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
       }
     }
     removeDaemonPidFile();
-    console.error(`Ranite host stopped (${shutdownReason ?? 'startup failed'}).`);
+    console.error(`OpenButler host stopped (${shutdownReason ?? 'startup failed'}).`);
     // A host that was asked to stop leaves on its own schedule: the loop may still hold
     // handles (child pipes, sockets, watchers) that no longer matter, and waiting for them
     // to drain by themselves is exactly what used to end in the CLI's force-kill.
@@ -503,17 +509,19 @@ async function listenDaemonServer(server: Server, endpoint: string): Promise<voi
     if (process.platform === 'win32' || !isAddressInUse(error)) {
       if (isAddressInUse(error)) {
         const active = await getDaemonStatus();
-        if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+        if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
         const recordedPid = readDaemonPid();
         const holder = processIsAlive(recordedPid)
           ? `The recorded host process ${recordedPid} is still alive but did not answer IPC health checks.`
           : 'The endpoint is occupied by an incompatible or unresponsive process.';
-        throw new Error(`${holder} Stop the verified host process before retrying; Ranite will not remove an endpoint it cannot identify.`);
+        throw new Error(
+          `${holder} Stop the verified host process before retrying; OpenButler will not remove an endpoint it cannot identify.`,
+        );
       }
       throw error;
     }
     const active = await getDaemonStatus();
-    if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+    if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
     const recordedPid = readDaemonPid();
     if (recordedPid === null || processIsAlive(recordedPid)) {
       throw new Error(
@@ -579,26 +587,26 @@ function requestDaemon(
       if (error) rejectPromise(error);
       else resolvePromise(response!);
     };
-    const timeout = setTimeout(() => finish(new Error('Ranite host control request timed out.')), timeoutMs);
+    const timeout = setTimeout(() => finish(new Error('OpenButler host control request timed out.')), timeoutMs);
     socket.once('connect', () => socket.write(request));
     socket.on('data', (chunk: Buffer) => {
       responseBuffer = Buffer.concat([responseBuffer, chunk]);
       if (responseBuffer.byteLength > MAX_DAEMON_FRAME_BYTES) {
-        finish(new Error('Ranite host response exceeded the frame limit.'));
+        finish(new Error('OpenButler host response exceeded the frame limit.'));
         return;
       }
       const newline = responseBuffer.indexOf(0x0a);
       if (newline < 0) return;
       try {
         const value: unknown = JSON.parse(responseBuffer.subarray(0, newline).toString('utf8'));
-        if (!isBasicResponse(value, protocolVersion) || value.id !== id) throw new Error('Invalid Ranite host response.');
+        if (!isBasicResponse(value, protocolVersion) || value.id !== id) throw new Error('Invalid OpenButler host response.');
         finish(undefined, value);
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
       }
     });
     socket.once('error', (error) => finish(error));
-    socket.once('close', () => finish(new Error('Ranite host closed the control connection before replying.')));
+    socket.once('close', () => finish(new Error('OpenButler host closed the control connection before replying.')));
   });
 }
 
@@ -659,7 +667,7 @@ async function acquireDaemonStartLock(): Promise<DaemonStartLock> {
     }
 
     const active = await getDaemonStatus();
-    if (active) throw new Error(`A Ranite host is already running (pid ${active.pid}).`);
+    if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
     const lockOwner = readDaemonStartLockRecord(path);
     const daemonRecord = readDaemonPidRecord();
     if (
@@ -669,10 +677,10 @@ async function acquireDaemonStartLock(): Promise<DaemonStartLock> {
       lockOwner.startedAt === daemonRecord.startedAt &&
       processIsAlive(lockOwner.pid)
     ) {
-      throw new Error(`Ranite host process ${lockOwner.pid} is alive but does not answer IPC health checks.`);
+      throw new Error(`OpenButler host process ${lockOwner.pid} is alive but does not answer IPC health checks.`);
     }
     if (removeStaleDaemonStartLock(path)) continue;
-    if (Date.now() >= deadline) throw new Error('Another Ranite host is still starting. Retry after its startup finishes.');
+    if (Date.now() >= deadline) throw new Error('Another OpenButler host is still starting. Retry after its startup finishes.');
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
 }

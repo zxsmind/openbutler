@@ -9,7 +9,7 @@ const distDir = new URL('../dist/assets/branding/', import.meta.url);
 mkdirSync(sourceDir, { recursive: true });
 mkdirSync(distDir, { recursive: true });
 
-const svg = readFileSync(new URL('ranite.svg', sourceDir));
+const svg = readFileSync(new URL('openbutler.svg', sourceDir));
 const sourceText = svg.toString('utf8');
 if (!sourceText.includes('</svg>')) throw new Error('The canonical brand SVG is invalid.');
 
@@ -45,7 +45,7 @@ const frames = iconSizes.map((size, index) => {
 });
 generated.set('favicon.ico', Buffer.concat([header, ...frames]));
 
-copyFileSync(new URL('ranite.svg', sourceDir), new URL('ranite.svg', distDir));
+copyFileSync(new URL('openbutler.svg', sourceDir), new URL('openbutler.svg', distDir));
 for (const [filename, bytes] of generated) {
   writeFileSync(new URL(filename, sourceDir), bytes);
   writeFileSync(new URL(filename, distDir), bytes);

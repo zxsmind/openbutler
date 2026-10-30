@@ -27,8 +27,8 @@ vi.mock('@modelcontextprotocol/client', async (original) => ({
 let root: string;
 beforeEach(() => {
   vi.resetModules();
-  root = mkdtempSync(join(tmpdir(), 'ranite-mcp-timeout-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-mcp-timeout-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.useFakeTimers();
   client.connect.mockReset().mockResolvedValue(undefined);
   client.instances.length = 0;
@@ -47,7 +47,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-mcp-timeout-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-mcp-timeout-'))
     throw new Error('Invalid fixture cleanup path.');
   rmSync(root, { recursive: true, force: true });
 });

@@ -11,8 +11,8 @@ let root: string;
 let ledger: ActivityLedger;
 let runner: ScheduleRunner | undefined;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-background-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-background-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   ledger = new ActivityLedger(':memory:');
 });
 afterEach(() => {
@@ -21,7 +21,7 @@ afterEach(() => {
   ledger.close();
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-background-check-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-background-check-'))
     throw new Error('Unsafe fixture cleanup path.');
   rmSync(root, { recursive: true, force: true });
 });

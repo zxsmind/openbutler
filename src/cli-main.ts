@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { toolEntryDetails } from './tool-display.js';
 /**
- * Ranite CLI.
+ * OpenButler CLI.
  *
  * Every output goes through the UI kit so piped output stays readable and
  * interactive output stays animated.
@@ -33,7 +33,7 @@ import {
 } from './daemon-autostart.js';
 import { connectDaemonSession } from './daemon-client.js';
 import { parseRetentionDuration, selectFilesToPrune } from './retention.js';
-import { getRaniteVersion } from './version.js';
+import { getOpenButlerVersion } from './version.js';
 import { getCatalogIndex } from './provider/catalog.js';
 import { resolveModelName } from './provider/model-presentation.js';
 import {
@@ -78,40 +78,40 @@ import type { McpServerRequest } from './tools/mcp.js';
 const DEFAULT_MODEL_LIMIT = 200;
 
 function usage(): void {
-  ui.line('Usage  ranite [options]');
+  ui.line('Usage  openbutler [options]');
   ui.line();
   ui.line('Commands:');
   printHelpRows([
-    ['ranite', 'Open an interactive terminal session', '[default]'],
-    ['ranite setup', 'First-run wizard. Saves once at the end.'],
-    ['ranite config', 'Show the current settings.'],
-    ['ranite keys [add <provider>|list|remove <provider>]', 'Manage provider API keys in the secret store.'],
+    ['openbutler', 'Open an interactive terminal session', '[default]'],
+    ['openbutler setup', 'First-run wizard. Saves once at the end.'],
+    ['openbutler config', 'Show the current settings.'],
+    ['openbutler keys [add <provider>|list|remove <provider>]', 'Manage provider API keys in the secret store.'],
     [
-      'ranite permissions [workspace|auto-review|full-access]',
+      'openbutler permissions [workspace|auto-review|full-access]',
       'Choose the tool approval mode; --review-timeout <seconds> tunes auto-review.',
     ],
     [
-      'ranite daemon',
+      'openbutler daemon',
       'Start, inspect, stop, or toggle automatic startup of the background host; start --web also opens the browser client.',
     ],
-    ['ranite usage', 'Show recorded token use and cost: --days, --session, --model, --json.'],
-    ['ranite logs', 'Read the machine log: --lines, --level, --event, --json.'],
-    ['ranite stop', 'Stop the background host.'],
-    ['ranite restart', 'Restart the background host and the browser server, then reconnect open sessions.'],
-    ['ranite mcp', 'Manage global MCP servers.'],
-    ['ranite schedule', 'List, add, run, and open scheduled wakeups.'],
-    ['ranite telegram', 'Configure and pair the owner Telegram channel.'],
-    ['ranite web', 'Serve the browser client in the background; --pair pairs a new device (--port, --hostname, --dir).'],
-    ['ranite team <subcommand>', 'Form a closed team of ranites over the tailnet (init, invite, join, …).'],
-    ['ranite events', 'Inspect the durable event ledger.'],
-    ['ranite actions', 'Inspect the durable tool action ledger.'],
-    ['ranite sessions index', 'Build or refresh the derived session search index (--rebuild to redo it).'],
-    ['ranite sessions prune', 'Delete session files older than an explicit cutoff (needs --yes).'],
-    ['ranite workspace default <path>', 'Choose the workspace used by bare Ranite launches.'],
-    ['ranite skills', 'List global and active-workspace Agent Skills.'],
-    ['ranite approve', 'List recent auto-review denials; approve <n> retries one exactly once.'],
-    ['ranite about', 'Version, runtime, configuration paths.'],
-    ['ranite uninstall', 'Remove the installed program. Keeps data; --purge removes it too.'],
+    ['openbutler usage', 'Show recorded token use and cost: --days, --session, --model, --json.'],
+    ['openbutler logs', 'Read the machine log: --lines, --level, --event, --json.'],
+    ['openbutler stop', 'Stop the background host.'],
+    ['openbutler restart', 'Restart the background host and the browser server, then reconnect open sessions.'],
+    ['openbutler mcp', 'Manage global MCP servers.'],
+    ['openbutler schedule', 'List, add, run, and open scheduled wakeups.'],
+    ['openbutler telegram', 'Configure and pair the owner Telegram channel.'],
+    ['openbutler web', 'Serve the browser client in the background; --pair pairs a new device (--port, --hostname, --dir).'],
+    ['openbutler team <subcommand>', 'Form a closed team of openbutlers over the tailnet (init, invite, join, …).'],
+    ['openbutler events', 'Inspect the durable event ledger.'],
+    ['openbutler actions', 'Inspect the durable tool action ledger.'],
+    ['openbutler sessions index', 'Build or refresh the derived session search index (--rebuild to redo it).'],
+    ['openbutler sessions prune', 'Delete session files older than an explicit cutoff (needs --yes).'],
+    ['openbutler workspace default <path>', 'Choose the workspace used by bare OpenButler launches.'],
+    ['openbutler skills', 'List global and active-workspace Agent Skills.'],
+    ['openbutler approve', 'List recent auto-review denials; approve <n> retries one exactly once.'],
+    ['openbutler about', 'Version, runtime, configuration paths.'],
+    ['openbutler uninstall', 'Remove the installed program. Keeps data; --purge removes it too.'],
   ]);
   ui.line();
   ui.line('Options:');
@@ -150,13 +150,13 @@ function describeReasoningPreference(settings: ReturnType<typeof loadSettings>):
 async function runConfig(): Promise<void> {
   const settings = loadSettings();
   showMcpServers(settings);
-  ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(choose when opening Ranite)');
+  ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(choose when opening OpenButler)');
   ui.kv('Tool access', formatApprovalMode(settings.approvalMode));
   if (Object.keys(settings.providers).length === 0) {
     ui.section('Providers');
     ui.line();
     ui.warn('No provider is configured.');
-    ui.info('Set one up: ranite setup');
+    ui.info('Set one up: openbutler setup');
     return;
   }
   /* Loaded before summarizing: a tool-capable count taken with no catalog is
@@ -190,14 +190,14 @@ async function runConfig(): Promise<void> {
   if (report.ready) ui.success('Ready to run.');
   else for (const problem of report.problems) ui.failure(problem);
   for (const hint of report.hints) ui.info(hint);
-  if (!defaultChoice) ui.info('Change the default model: ranite setup');
+  if (!defaultChoice) ui.info('Change the default model: openbutler setup');
 }
 
 async function runPermissions(parsed: Parsed): Promise<void> {
   const requestedMode = parsed.words[0] ?? '';
   if (requestedMode && !['ask', 'workspace', 'auto-review', 'full-access'].includes(requestedMode)) {
     throw new Error(
-      'Usage: ranite permissions [workspace|auto-review|full-access] [--review-timeout <seconds>] [--approval-timeout <seconds>] [--review-model <provider/model|none>]',
+      'Usage: openbutler permissions [workspace|auto-review|full-access] [--review-timeout <seconds>] [--approval-timeout <seconds>] [--review-model <provider/model|none>]',
     );
   }
   const timeoutFlag = parsed.flags.get('review-timeout');
@@ -261,7 +261,7 @@ async function runPermissions(parsed: Parsed): Promise<void> {
     const activeHost = await getDaemonStatus();
     if (activeHost?.legacy) {
       saveSettings(settings);
-      ui.warn('Saved for the next host start. Stop the older host with `ranite daemon stop`, then reopen Ranite.');
+      ui.warn('Saved for the next host start. Stop the older host with `openbutler daemon stop`, then reopen OpenButler.');
     } else if (activeHost) await requestHost('permissions.set-mode', { mode: settings.approvalMode });
     else saveSettings(settings);
   }
@@ -280,7 +280,7 @@ async function runPermissions(parsed: Parsed): Promise<void> {
     settings.autoReviewProvider && settings.autoReviewModel ? `${settings.autoReviewProvider}/${settings.autoReviewModel}` : '(main model)',
   );
   ui.info('Workspace paths run without prompts. Auto-review asks the selected model about actions outside the workspace.');
-  ui.info('Use `ranite permissions full-access` to disable tool permission prompts.');
+  ui.info('Use `openbutler permissions full-access` to disable tool permission prompts.');
   if (requestedMode) ui.success(`Saved ${formatApprovalMode(settings.approvalMode)} mode.`);
   if (timeoutSeconds !== undefined) ui.success(`Auto-review timeout set to ${timeoutSeconds} seconds.`);
   if (approvalTimeoutSeconds !== undefined) ui.success(`Approval timeout set to ${approvalTimeoutSeconds} seconds.`);
@@ -290,7 +290,7 @@ async function runPermissions(parsed: Parsed): Promise<void> {
         ? 'Auto-review will reuse the main model.'
         : `Auto-review model set to ${reviewModelOverride.providerId}/${reviewModelOverride.modelId}.`,
     );
-  if (reviewModelOverride !== undefined) ui.info('Restart the host for the reviewer model to take effect: ranite restart');
+  if (reviewModelOverride !== undefined) ui.info('Restart the host for the reviewer model to take effect: openbutler restart');
   await showAutoReviewHistory();
 }
 
@@ -324,17 +324,17 @@ function formatApprovalMode(mode: ReturnType<typeof loadSettings>['approvalMode'
 }
 
 function runWorkspaceCommand(parsed: Parsed): void {
-  if (parsed.words[0] !== 'default' || parsed.words.length > 2) throw new Error('Usage: ranite workspace default [path]');
+  if (parsed.words[0] !== 'default' || parsed.words.length > 2) throw new Error('Usage: openbutler workspace default [path]');
   const settings = loadSettings();
   const path = parsed.words[1];
   if (path === undefined) {
-    ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(none; bare Ranite uses the launch directory)');
+    ui.kv('Default workspace', settings.defaultWorkspaceRoot ?? '(none; bare OpenButler uses the launch directory)');
     return;
   }
   const root = canonicalScopeRoot(path);
   settings.defaultWorkspaceRoot = root;
   saveSettings(settings);
-  ui.success(`Bare Ranite launches will use ${root}.`);
+  ui.success(`Bare OpenButler launches will use ${root}.`);
 }
 
 async function resolveSessionWorkspace(path: string | undefined): Promise<string> {
@@ -355,18 +355,18 @@ function showMcpServers(settings: ReturnType<typeof loadSettings>): void {
       ]),
     );
   }
-  ui.info('Manage global servers with ranite mcp. Credentials are environment-variable references, not saved values.');
+  ui.info('Manage global servers with openbutler mcp. Credentials are environment-variable references, not saved values.');
   ui.line();
 }
 
 async function runMcpManager(requestedAction = ''): Promise<void> {
   const settings = loadSettings();
   if (requestedAction && !['list', 'add', 'remove'].includes(requestedAction)) {
-    throw new Error('Usage: ranite mcp [list|add|remove]');
+    throw new Error('Usage: openbutler mcp [list|add|remove]');
   }
   if (requestedAction === 'list' || !process.stdin.isTTY) {
     showMcpServers(settings);
-    if (requestedAction !== 'list') ui.info('Use an interactive terminal with ranite mcp to add or remove servers.');
+    if (requestedAction !== 'list') ui.info('Use an interactive terminal with openbutler mcp to add or remove servers.');
     return;
   }
 
@@ -447,7 +447,7 @@ async function runMcpManager(requestedAction = ''): Promise<void> {
       }
       settings.mcpServers[id] = server;
       saveSettings(settings);
-      ui.success('Saved global MCP server ' + id + '. Ranite will ask before connecting at session start.');
+      ui.success('Saved global MCP server ' + id + '. OpenButler will ask before connecting at session start.');
     } else if (action === 'remove') {
       const ids = Object.keys(settings.mcpServers);
       if (ids.length === 0) ui.info('No MCP servers are configured.');
@@ -509,7 +509,7 @@ async function runListModels(parsed: Parsed): Promise<void> {
   const settings = loadSettings();
   const configured = settings.providerOrder.filter((id) => id in settings.providers);
   if (configured.length === 0) {
-    ui.warn('Configure a provider first: ranite setup');
+    ui.warn('Configure a provider first: openbutler setup');
     return;
   }
   await getCatalogIndex();
@@ -581,7 +581,7 @@ async function runApprove(parsed: Parsed): Promise<void> {
       ]),
     );
     ui.line();
-    ui.info('Approve one retry with: ranite approve <n>. The retry still goes through auto-review.');
+    ui.info('Approve one retry with: openbutler approve <n>. The retry still goes through auto-review.');
     return;
   }
   const byFingerprint =
@@ -595,9 +595,9 @@ async function runApprove(parsed: Parsed): Promise<void> {
           const index = Number(target);
           return Number.isInteger(index) && index >= 1 && index <= denials.length ? denials[index - 1] : undefined;
         })();
-  if (!picked) throw new Error('Usage: ranite approve [n]. Pick a number from the denial list.');
+  if (!picked) throw new Error('Usage: openbutler approve [n]. Pick a number from the denial list.');
   const approved = approveDeniedAction(picked.fingerprint);
-  if (!approved) throw new Error('That denial is no longer available; list them again with ranite approve.');
+  if (!approved) throw new Error('That denial is no longer available; list them again with openbutler approve.');
   ui.success(`Approved one retry of ${approved.providerId}/${approved.name}. It still goes through auto-review.`);
 }
 
@@ -631,7 +631,7 @@ async function defaultModelReady(): Promise<boolean> {
 }
 
 async function runQuestion(question: string, workspaceRoot: string): Promise<void> {
-  if (!(await defaultModelReady())) throw new Error('Configure a default model first: ranite setup');
+  if (!(await defaultModelReady())) throw new Error('Configure a default model first: openbutler setup');
 
   const hostStatus = await requireBackgroundHost();
   const vintageWarning = hostVintageMismatchWarning(process.argv[1], hostStatus.entry);
@@ -639,7 +639,7 @@ async function runQuestion(question: string, workspaceRoot: string): Promise<voi
   const controller = await connectDaemonSession(workspaceRoot, { isolatedSession: true });
   const runtime = controller.runtime;
   const destination = runtime.providerName ?? runtime.providerId;
-  ui.section('Ranite agent');
+  ui.section('OpenButler agent');
   ui.kv('Model', `${runtime.modelName} / ${runtime.modelId}`);
   ui.kv('Provider', destination);
   ui.info(`Your request, tool definitions, and approved tool results will be sent to ${destination}.`);
@@ -799,7 +799,7 @@ async function runSession(workspaceRoot: string): Promise<void> {
   if (warning) ui.warn(warning);
   ui.kv(
     'Automatic startup',
-    isAutostartInstalled() ? `installed (${autostartDescription()})` : 'not installed (enable with `ranite daemon autostart on`)',
+    isAutostartInstalled() ? `installed (${autostartDescription()})` : 'not installed (enable with `openbutler daemon autostart on`)',
   );
   let controller;
   const connecting = ui.spinner({ text: 'Connecting to host…', discardStdin: false }).start();
@@ -823,7 +823,7 @@ async function runSession(workspaceRoot: string): Promise<void> {
   }
   const after = await getDaemonStatus();
   if (after && !after.legacy && !after.unresponsive) {
-    ui.info(`Detached. Background host keeps running (pid ${after.pid}). Stop it with \`ranite daemon stop\`.`);
+    ui.info(`Detached. Background host keeps running (pid ${after.pid}). Stop it with \`openbutler daemon stop\`.`);
   } else {
     ui.info('Detached. Background host is not running.');
   }
@@ -887,7 +887,7 @@ async function approveToolCall(request: ToolCallRequest, runtime: AgentSessionRu
             ? 'This modifies an existing file in place.'
             : 'This replaces the entire file content.'
           : mcpAction === 'add' || mcpAction === 'connect'
-            ? 'Ranite will start or contact this MCP server. It receives the configured environment variables; its tools require separate approvals.'
+            ? 'OpenButler will start or contact this MCP server. It receives the configured environment variables; its tools require separate approvals.'
             : mcpAction === 'disconnect' || mcpAction === 'remove'
               ? 'This changes the active global MCP connection and removes its tools from the agent.'
               : `Tool input goes to ${request.providerId}; its result will be sent to ${destination}.`,
@@ -917,7 +917,7 @@ async function approveToolCall(request: ToolCallRequest, runtime: AgentSessionRu
 
 async function answerQuestionPrompt(question: { id: string; question: string; options: string[] | null }): Promise<string | null> {
   if (!process.stdin.isTTY) return null;
-  ui.section('Question from Ranite');
+  ui.section('Question from OpenButler');
   ui.line(question.question);
   const { input, select } = await import('@inquirer/prompts');
   if (question.options && question.options.length > 0) {
@@ -936,8 +936,8 @@ async function answerQuestionPrompt(question: { id: string; question: string; op
 }
 
 function runAbout(): void {
-  ui.section('Ranite');
-  ui.kv('Version', getRaniteVersion());
+  ui.section('OpenButler');
+  ui.kv('Version', getOpenButlerVersion());
   ui.kv('Runtime', `${process.version} (${process.platform}/${process.arch})`);
   ui.kv('Settings', getSettingsPath());
   ui.kv('Secrets', getConfigPath());
@@ -994,7 +994,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
   const schedules = loadSettings().schedules;
   if (action === 'list') {
     if (schedules.length === 0) {
-      ui.info('No schedules are configured. Ask Ranite to create one, or use `ranite schedule add <schedule.json>`.');
+      ui.info('No schedules are configured. Ask OpenButler to create one, or use `openbutler schedule add <schedule.json>`.');
       return;
     }
     let rows: ScheduleRow[];
@@ -1025,7 +1025,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
   }
   if (action === 'log') {
     const scheduleId = parsed.words[1];
-    if (!scheduleId) throw new Error('Usage: ranite schedule log <id>');
+    if (!scheduleId) throw new Error('Usage: openbutler schedule log <id>');
     await requireBackgroundHost();
     const result = (await requestHost('schedule.manage', {
       input: { action: 'log', scheduleId },
@@ -1073,7 +1073,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
     input = { action, schedule };
   } else {
     if (!['remove', 'enable', 'disable', 'run'].includes(action))
-      throw new Error('Usage: ranite schedule [list|log|capabilities|add|update|remove|enable|disable|run|open]');
+      throw new Error('Usage: openbutler schedule [list|log|capabilities|add|update|remove|enable|disable|run|open]');
     const scheduleId = parsed.words[1];
     if (!scheduleId) throw new Error('Provide a schedule id.');
     input = { action, scheduleId };
@@ -1099,7 +1099,7 @@ async function runSchedule(parsed: Parsed): Promise<void> {
     ...(commandWorkspaceRoot ? { workspaceRoot: commandWorkspaceRoot } : {}),
   })) as { status?: string; schedule?: ScheduleRow; scheduleId?: string; runtime?: { state?: string } };
   if (action === 'run') {
-    ui.success(`Schedule ${result.scheduleId} queued. Watch it with: ranite schedule log ${result.scheduleId}`);
+    ui.success(`Schedule ${result.scheduleId} queued. Watch it with: openbutler schedule log ${result.scheduleId}`);
     return;
   }
   if (action === 'remove') {
@@ -1142,7 +1142,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
   if (!token) {
     if (!process.stdin.isTTY)
       throw new Error(
-        `Set ${tokenEnv} in the environment, then re-run \`ranite telegram setup --token-env=${tokenEnv}\`. The value is never stored in the settings file.`,
+        `Set ${tokenEnv} in the environment, then re-run \`openbutler telegram setup --token-env=${tokenEnv}\`. The value is never stored in the settings file.`,
       );
     const { confirm, password } = await import('@inquirer/prompts');
     ui.info('Open Telegram, message @BotFather, send /newbot, and copy the token it returns.');
@@ -1159,7 +1159,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
       const { location } = await persistTokenEnv(tokenEnv, token);
       ui.success(`Token saved (${location}).`);
     } else {
-      ui.info(`Set ${tokenEnv} in the login environment before starting the host, then run \`ranite telegram pair\`.`);
+      ui.info(`Set ${tokenEnv} in the login environment before starting the host, then run \`openbutler telegram pair\`.`);
       return;
     }
     process.env[tokenEnv] = token;
@@ -1226,7 +1226,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
       });
     }
     if (!restart) {
-      ui.info('Run `ranite restart`, then `ranite telegram pair`.');
+      ui.info('Run `openbutler restart`, then `openbutler telegram pair`.');
       return;
     }
     if (process.stdin.isTTY !== true) ui.warn('Restarting the background host so it picks up the token; active runs stop.');
@@ -1234,7 +1234,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
     tg = await settledTelegramState();
   }
   if (tg?.error) throw new Error(`Telegram failed to start: ${tg.error}`);
-  if (!tg || tg.state !== 'polling') throw new Error('Telegram is not polling yet. Check `ranite telegram status` and try again.');
+  if (!tg || tg.state !== 'polling') throw new Error('Telegram is not polling yet. Check `openbutler telegram status` and try again.');
   ui.success(`Connected as @${tg.username ?? 'the bot'}.`);
 
   if (tg.paired) {
@@ -1259,7 +1259,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
         },
       });
       if (outcome === 'expired') {
-        ui.warn('The pairing code expired. Run `ranite telegram pair` for a fresh one.');
+        ui.warn('The pairing code expired. Run `openbutler telegram pair` for a fresh one.');
         return;
       }
       ui.success('Owner chat paired.');
@@ -1274,7 +1274,7 @@ async function runTelegramSetup(parsed: Parsed): Promise<void> {
       ui.success('Test message delivered to the owner chat.');
     } catch (error) {
       ui.warn(`Paired, but the test message failed: ${error instanceof Error ? error.message : String(error)}`);
-      ui.warn('If you rotated the bot token, run `ranite telegram reset` and set up again.');
+      ui.warn('If you rotated the bot token, run `openbutler telegram reset` and set up again.');
     }
   }
   ui.info('Done. Message the bot any time; it shares one thread with this terminal.');
@@ -1371,11 +1371,11 @@ async function runTelegram(parsed: Parsed): Promise<void> {
       }
     }
     if (await getDaemonStatus()) await requestHost('settings.reload');
-    ui.success('Telegram channel removed. Reconnect any time with `ranite telegram setup`.');
+    ui.success('Telegram channel removed. Reconnect any time with `openbutler telegram setup`.');
     return;
   }
   if (action === 'pair') {
-    if (!loadSettings().telegram?.enabled) throw new Error('Configure Telegram first: ranite telegram setup');
+    if (!loadSettings().telegram?.enabled) throw new Error('Configure Telegram first: openbutler telegram setup');
     await requireBackgroundHost();
     await requestHost('settings.reload');
     const result = (await requestHost('telegram.pair')) as { code: string; expiresAt: string; username: string | null };
@@ -1398,7 +1398,7 @@ async function runTelegram(parsed: Parsed): Promise<void> {
     return;
   }
   throw new Error(
-    'Usage: ranite telegram [setup|pair|status|disable|unpair|reset] [--token-env=NAME] [--workspace=PATH] [--no-wait] [--skip-test] [--remove-env]',
+    'Usage: openbutler telegram [setup|pair|status|disable|unpair|reset] [--token-env=NAME] [--workspace=PATH] [--no-wait] [--skip-test] [--remove-env]',
   );
 }
 
@@ -1407,9 +1407,10 @@ async function runSessionsCommand(parsed: Parsed): Promise<void> {
     await runSessionsIndex(parsed);
     return;
   }
-  if (parsed.words[0] !== 'prune') throw new Error('Usage: ranite sessions [index [--rebuild] | prune --older-than <duration> [--yes]]');
+  if (parsed.words[0] !== 'prune')
+    throw new Error('Usage: openbutler sessions [index [--rebuild] | prune --older-than <duration> [--yes]]');
   const olderThan = parsed.flags.get('older-than');
-  if (!olderThan) throw new Error('Usage: ranite sessions prune --older-than <duration> [--yes]');
+  if (!olderThan) throw new Error('Usage: openbutler sessions prune --older-than <duration> [--yes]');
   const cutoff = Date.now() - parseRetentionDuration(olderThan);
   const { listSessionFiles, removeSavedSession } = await import('./session-store.js');
   const files = selectFilesToPrune(listSessionFiles(), cutoff);
@@ -1468,7 +1469,7 @@ async function runSessionsIndex(parsed: Parsed): Promise<void> {
     ui.kv('Embeddings', String(counts.embeddings));
     if (counts.pendingEmbeddings > 0) {
       ui.warn(
-        `${counts.pendingEmbeddings} entry/entries still await embeddings. Prepare the local model with \`ranite setup\`, then run this again.`,
+        `${counts.pendingEmbeddings} entry/entries still await embeddings. Prepare the local model with \`openbutler setup\`, then run this again.`,
       );
     } else {
       ui.success('Session search index is up to date.');
@@ -1480,9 +1481,9 @@ async function runSessionsIndex(parsed: Parsed): Promise<void> {
 
 async function runLedgerPrune(kind: 'events' | 'actions', parsed: Parsed): Promise<void> {
   const olderThan = parsed.flags.get('older-than');
-  if (!olderThan) throw new Error(`Usage: ranite ${kind} prune --older-than <duration> [--yes]`);
+  if (!olderThan) throw new Error(`Usage: openbutler ${kind} prune --older-than <duration> [--yes]`);
   if (await getDaemonStatus()) {
-    throw new Error('Stop the background host first (`ranite daemon stop`) so the ledger is not in use while pruning.');
+    throw new Error('Stop the background host first (`openbutler daemon stop`) so the ledger is not in use while pruning.');
   }
   const path = getDataPath('state.db');
   if (!existsSync(path)) {
@@ -1545,7 +1546,7 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
       return;
     }
     ui.success(installAutostart());
-    ui.info('Ranite will start at your next user login. Remove it with `ranite daemon autostart off`.');
+    ui.info('OpenButler will start at your next user login. Remove it with `openbutler daemon autostart off`.');
     return;
   }
   if (action === 'uninstall') {
@@ -1563,28 +1564,28 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
     if (mode === 'on') {
       if (isAutostartInstalled()) ui.info(`Automatic startup is already installed: ${autostartDescription()}.`);
       else ui.success(installAutostart());
-      ui.info('Ranite will start at your next user login. Remove it with `ranite daemon autostart off`.');
+      ui.info('OpenButler will start at your next user login. Remove it with `openbutler daemon autostart off`.');
       return;
     }
     if (mode === 'off') {
       ui.info(uninstallAutostart());
       return;
     }
-    throw new Error('Usage: ranite daemon autostart [on|off|status]');
+    throw new Error('Usage: openbutler daemon autostart [on|off|status]');
   }
   if (action === 'autostart-status') {
     ui.info(isAutostartInstalled() ? `Automatic startup is installed: ${autostartDescription()}.` : 'Automatic startup is not installed.');
     return;
   }
   if (action === 'start') {
-    if (!(await defaultModelReady())) throw new Error('Configure a default model first: ranite setup');
+    if (!(await defaultModelReady())) throw new Error('Configure a default model first: openbutler setup');
     let status = await startDaemon();
     ui.info('The machine custodian and its workspace runtime initialize when a TUI or Telegram turn arrives.');
     status = (await getDaemonStatus()) ?? status;
     ui.success(`Background host running (pid ${status.pid}).`);
     ui.kv('Workspaces', String(status.workspaceCount));
     if (status.entry) ui.kv('Host entry', `${status.entry} (${hostVintage(status.entry)})`);
-    ui.info('It stays alive after this terminal closes. Stop it with `ranite daemon stop`.');
+    ui.info('It stays alive after this terminal closes. Stop it with `openbutler daemon stop`.');
     const wantsWeb = parsed?.booleans.has('web') === true || parsed?.flags.get('web') === 'true';
     if (wantsWeb && parsed) {
       const { DEFAULT_WEB_HOST } = await import('./web/server.js');
@@ -1604,11 +1605,13 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
   if (action === 'status') {
     const status = await getDaemonStatus();
     if (!status) {
-      ui.info('Background host is not running. Start it with `ranite daemon start`.');
+      ui.info('Background host is not running. Start it with `openbutler daemon start`.');
       return;
     }
     if (status.unresponsive) {
-      ui.warn(`Background host process ${status.pid} is alive but does not answer IPC health checks. Recover it with \`ranite restart\`.`);
+      ui.warn(
+        `Background host process ${status.pid} is alive but does not answer IPC health checks. Recover it with \`openbutler restart\`.`,
+      );
       ui.kv('Started', status.startedAt);
       return;
     }
@@ -1621,7 +1624,7 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
     if (webStatus) ui.kv('Web server', `pid ${webStatus.pid} (port ${webStatus.port})`);
     ui.kv('Schedules', String(status.schedules ?? 0));
     if (status.telegram) ui.kv('Telegram', `${status.telegram.state}${status.telegram.paired ? ' / paired' : ''}`);
-    if (status.legacy) ui.warn('This host uses an older protocol. Stop it before attaching with this Ranite version.');
+    if (status.legacy) ui.warn('This host uses an older protocol. Stop it before attaching with this OpenButler version.');
     ui.kv('Automatic startup', isAutostartInstalled() ? 'installed' : 'not installed');
     return;
   }
@@ -1633,14 +1636,14 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
     return;
   }
   throw new Error(
-    'Usage: ranite daemon [start [--web [--port N]]|status|stop|install|uninstall|autostart [on|off|status]|autostart-status]',
+    'Usage: openbutler daemon [start [--web [--port N]]|status|stop|install|uninstall|autostart [on|off|status]|autostart-status]',
   );
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   // A leading session option has no command before it, so shift it into the
-  // parser's regular flag list while keeping bare `ranite` unchanged.
+  // parser's regular flag list while keeping bare `openbutler` unchanged.
   const parsed = args[0] === '--workspace' || args[0]?.startsWith('--workspace=') ? parseArgs(['', ...args]) : parseArgs(args);
   if (parsed.booleans.has('workspace')) throw new Error('--workspace requires a directory path.');
 
@@ -1649,10 +1652,10 @@ async function main(): Promise<void> {
     return;
   }
   if (parsed.command === '--version' || parsed.command === '-v' || parsed.command === 'version') {
-    process.stdout.write(`${getRaniteVersion()}\n`);
+    process.stdout.write(`${getOpenButlerVersion()}\n`);
     return;
   }
-  /* A bare `ranite` has no terminal to prompt in, so showing usage is more
+  /* A bare `openbutler` has no terminal to prompt in, so showing usage is more
      useful than failing with a TTY complaint. */
   if (parsed.bare && !process.stdin.isTTY) {
     usage();
@@ -1721,7 +1724,7 @@ async function main(): Promise<void> {
       return;
     }
     case 'restart': {
-      if (parsed.words.length > 0) throw new Error('Usage: ranite restart');
+      if (parsed.words.length > 0) throw new Error('Usage: openbutler restart');
 
       ui.info('Stopping active runs and saving sessions…');
       const { status, web, webFailure } = await restartDaemon();

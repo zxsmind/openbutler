@@ -148,7 +148,7 @@ const MAX_STORED_JSON_CHARS = 32_000;
 
 /** Table and index definitions shared by the writer and the in-memory reader. */
 const LEDGER_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS ranite_events (
+  CREATE TABLE IF NOT EXISTS openbutler_events (
     event_id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -162,8 +162,8 @@ const LEDGER_SCHEMA = `
     error TEXT,
     updated_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS ranite_events_status_received_idx ON ranite_events(status, received_at);
-  CREATE TABLE IF NOT EXISTS ranite_actions (
+  CREATE INDEX IF NOT EXISTS openbutler_events_status_received_idx ON openbutler_events(status, received_at);
+  CREATE TABLE IF NOT EXISTS openbutler_actions (
     request_id TEXT PRIMARY KEY,
     workspace_root TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -181,18 +181,18 @@ const LEDGER_SCHEMA = `
     updated_at TEXT NOT NULL,
     completed_at TEXT
   );
-  CREATE INDEX IF NOT EXISTS ranite_actions_session_created_idx ON ranite_actions(session_id, created_at);
-  CREATE INDEX IF NOT EXISTS ranite_actions_state_updated_idx ON ranite_actions(state, updated_at);
-  CREATE TABLE IF NOT EXISTS ranite_action_transitions (
+  CREATE INDEX IF NOT EXISTS openbutler_actions_session_created_idx ON openbutler_actions(session_id, created_at);
+  CREATE INDEX IF NOT EXISTS openbutler_actions_state_updated_idx ON openbutler_actions(state, updated_at);
+  CREATE TABLE IF NOT EXISTS openbutler_action_transitions (
     id INTEGER PRIMARY KEY,
     request_id TEXT NOT NULL,
     state TEXT NOT NULL,
     detail_json TEXT,
     created_at TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS ranite_action_transitions_request_idx ON ranite_action_transitions(request_id, id);
-  CREATE TABLE IF NOT EXISTS ranite_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS ranite_usage (
+  CREATE INDEX IF NOT EXISTS openbutler_action_transitions_request_idx ON openbutler_action_transitions(request_id, id);
+  CREATE TABLE IF NOT EXISTS openbutler_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS openbutler_usage (
     id TEXT PRIMARY KEY,
     at_ms INTEGER NOT NULL,
     ended_ms INTEGER,
@@ -228,9 +228,9 @@ const LEDGER_SCHEMA = `
     upstream_provider TEXT,
     generation_id TEXT
   );
-  CREATE INDEX IF NOT EXISTS ranite_usage_at_idx ON ranite_usage(at_ms);
-  CREATE INDEX IF NOT EXISTS ranite_usage_session_at_idx ON ranite_usage(session_id, at_ms);
-  CREATE INDEX IF NOT EXISTS ranite_usage_model_at_idx ON ranite_usage(provider_id, model_id, at_ms);
+  CREATE INDEX IF NOT EXISTS openbutler_usage_at_idx ON openbutler_usage(at_ms);
+  CREATE INDEX IF NOT EXISTS openbutler_usage_session_at_idx ON openbutler_usage(session_id, at_ms);
+  CREATE INDEX IF NOT EXISTS openbutler_usage_model_at_idx ON openbutler_usage(provider_id, model_id, at_ms);
 `;
 
 /**
@@ -280,18 +280,18 @@ export class ActivityLedger {
       PRAGMA synchronous = FULL;
       ${LEDGER_SCHEMA}
     `);
-    const actionColumns = this.database.prepare('PRAGMA table_info(ranite_actions)').all() as unknown as Array<{ name: string }>;
+    const actionColumns = this.database.prepare('PRAGMA table_info(openbutler_actions)').all() as unknown as Array<{ name: string }>;
     if (!actionColumns.some((column) => column.name === 'event_id'))
-      this.database.exec('ALTER TABLE ranite_actions ADD COLUMN event_id TEXT');
+      this.database.exec('ALTER TABLE openbutler_actions ADD COLUMN event_id TEXT');
     if (!actionColumns.some((column) => column.name === 'skill')) {
-      this.database.exec('ALTER TABLE ranite_actions ADD COLUMN skill TEXT');
+      this.database.exec('ALTER TABLE openbutler_actions ADD COLUMN skill TEXT');
       // One-time backfill: existing history counts for skills too, derived from
       // the stored input path exactly like new rows.
-      const recorded = this.database.prepare('SELECT request_id, input_json FROM ranite_actions').all() as unknown as Array<{
+      const recorded = this.database.prepare('SELECT request_id, input_json FROM openbutler_actions').all() as unknown as Array<{
         request_id: string;
         input_json: string;
       }>;
-      const claim = this.database.prepare('UPDATE ranite_actions SET skill = ? WHERE request_id = ?');
+      const claim = this.database.prepare('UPDATE openbutler_actions SET skill = ? WHERE request_id = ?');
       for (const row of recorded) {
         let path: unknown;
         try {
@@ -324,7 +324,7 @@ export class ActivityLedger {
         const inserted = this.database
           .prepare(
             `
-        INSERT INTO ranite_actions (
+        INSERT INTO openbutler_actions (
           request_id, workspace_root, session_id, event_id, provider_id, tool_name, skill, state,
           effect_json, input_json, input_sha256, result_json, error,
           created_at, updated_at, completed_at
@@ -358,7 +358,7 @@ export class ActivityLedger {
         const updated = this.database
           .prepare(
             `
-          UPDATE ranite_actions
+          UPDATE openbutler_actions
           SET state = ?, result_json = COALESCE(?, result_json), error = ?, updated_at = ?, completed_at = COALESCE(?, completed_at)
           WHERE request_id = ?
         `,
@@ -374,7 +374,7 @@ export class ActivityLedger {
         if (Number(updated.changes) === 0) throw new Error('An action must be recorded before execution.');
       }
       this.database
-        .prepare('INSERT INTO ranite_action_transitions (request_id, state, detail_json, created_at) VALUES (?, ?, ?, ?)')
+        .prepare('INSERT INTO openbutler_action_transitions (request_id, state, detail_json, created_at) VALUES (?, ?, ?, ?)')
         .run(action.requestId, action.state, safeResult ?? (action.error === undefined ? null : safeJson({ error: action.error })), now);
       this.database.exec('COMMIT');
     } catch (error) {
@@ -395,7 +395,7 @@ export class ActivityLedger {
     const result = this.database
       .prepare(
         `
-      INSERT INTO ranite_events (
+      INSERT INTO openbutler_events (
         event_id, source, kind, dedupe_key, workspace_root, occurred_at, received_at,
         status, attempts, payload_json, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
@@ -404,7 +404,7 @@ export class ActivityLedger {
       )
       .run(id, event.source, event.kind, event.dedupeKey, event.workspaceRoot ?? null, occurredAt, now, payload, now);
     if (Number(result.changes) > 0) return { id, inserted: true };
-    const existing = this.database.prepare('SELECT event_id FROM ranite_events WHERE dedupe_key = ?').get(event.dedupeKey) as
+    const existing = this.database.prepare('SELECT event_id FROM openbutler_events WHERE dedupe_key = ?').get(event.dedupeKey) as
       { event_id: string } | undefined;
     return { id: existing?.event_id ?? id, inserted: false };
   }
@@ -426,7 +426,7 @@ export class ActivityLedger {
   stateEntries(prefix: string): Array<{ key: string; value: string }> {
     this.assertOpen();
     return this.database
-      .prepare('SELECT key, value FROM ranite_state WHERE substr(key, 1, ?) = ?')
+      .prepare('SELECT key, value FROM openbutler_state WHERE substr(key, 1, ?) = ?')
       .all(prefix.length, prefix) as unknown as Array<{ key: string; value: string }>;
   }
 
@@ -434,7 +434,7 @@ export class ActivityLedger {
     this.assertOpen();
     const now = new Date().toISOString();
     const transaction = this.database.prepare(`
-      UPDATE ranite_events
+      UPDATE openbutler_events
       SET status = 'processing', attempts = attempts + 1, updated_at = ?, error = NULL
       WHERE event_id = ? AND status = 'pending'
     `);
@@ -449,7 +449,7 @@ export class ActivityLedger {
     const result = this.database
       .prepare(
         `
-      UPDATE ranite_events SET
+      UPDATE openbutler_events SET
         status = CASE WHEN source IN ('notification','owner-inbox','worker') OR (source = 'telegram' AND kind LIKE 'inbox.%') THEN 'pending' ELSE 'interrupted' END,
         error = CASE WHEN source = 'owner-inbox' THEN 'Owner message is available for retry after host restart.' ELSE 'Host stopped while this event was being processed.' END,
         updated_at = ?
@@ -475,11 +475,13 @@ export class ActivityLedger {
     try {
       this.database
         .prepare(
-          `INSERT INTO ranite_action_transitions (request_id, state, detail_json, created_at) SELECT request_id, 'failed', ?, ? FROM ranite_actions WHERE state IN (${unresolved})`,
+          `INSERT INTO openbutler_action_transitions (request_id, state, detail_json, created_at) SELECT request_id, 'failed', ?, ? FROM openbutler_actions WHERE state IN (${unresolved})`,
         )
         .run(JSON.stringify({ error }), now);
       const result = this.database
-        .prepare(`UPDATE ranite_actions SET state = 'failed', error = ?, updated_at = ?, completed_at = ? WHERE state IN (${unresolved})`)
+        .prepare(
+          `UPDATE openbutler_actions SET state = 'failed', error = ?, updated_at = ?, completed_at = ? WHERE state IN (${unresolved})`,
+        )
         .run(error, now, now);
       this.database.exec('COMMIT');
       return Number(result.changes);
@@ -492,7 +494,7 @@ export class ActivityLedger {
   setEventState(id: string, state: ObservedEventState, error?: string): void {
     this.assertOpen();
     this.database
-      .prepare('UPDATE ranite_events SET status = ?, error = ?, updated_at = ? WHERE event_id = ?')
+      .prepare('UPDATE openbutler_events SET status = ?, error = ?, updated_at = ? WHERE event_id = ?')
       .run(state, error === undefined ? null : redactSensitiveText(error), new Date().toISOString(), id);
   }
 
@@ -501,7 +503,7 @@ export class ActivityLedger {
     const result = this.database
       .prepare(
         `
-      UPDATE ranite_events SET status = 'pending', error = NULL, updated_at = ?
+      UPDATE openbutler_events SET status = 'pending', error = NULL, updated_at = ?
       WHERE event_id = ? AND status IN ('failed','interrupted')
     `,
       )
@@ -511,16 +513,16 @@ export class ActivityLedger {
 
   getEvent(id: string): ObservedEventRow | null {
     this.assertOpen();
-    const row = this.database.prepare('SELECT * FROM ranite_events WHERE event_id = ?').get(id) as EventDbRow | undefined;
+    const row = this.database.prepare('SELECT * FROM openbutler_events WHERE event_id = ?').get(id) as EventDbRow | undefined;
     return row ? eventFromRow(row) : null;
   }
 
   listEvents(limit = 30): ObservedEventRow[] {
     this.assertOpen();
-    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ranite_events'").get()) return [];
+    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'openbutler_events'").get()) return [];
     const bounded = Math.max(1, Math.min(200, Math.trunc(limit)));
     const rows = this.database
-      .prepare('SELECT * FROM ranite_events ORDER BY received_at DESC LIMIT ?')
+      .prepare('SELECT * FROM openbutler_events ORDER BY received_at DESC LIMIT ?')
       .all(bounded) as unknown as EventDbRow[];
     return rows.map(eventFromRow);
   }
@@ -529,7 +531,7 @@ export class ActivityLedger {
     this.assertOpen();
     const rows = this.database
       .prepare(
-        "SELECT * FROM ranite_events WHERE status = 'pending' AND source != 'owner-inbox' ORDER BY CASE source WHEN 'telegram' THEN 0 WHEN 'notification' THEN 1 ELSE 2 END, received_at, rowid LIMIT ?",
+        "SELECT * FROM openbutler_events WHERE status = 'pending' AND source != 'owner-inbox' ORDER BY CASE source WHEN 'telegram' THEN 0 WHEN 'notification' THEN 1 ELSE 2 END, received_at, rowid LIMIT ?",
       )
       .all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);
@@ -556,7 +558,7 @@ export class ActivityLedger {
       where.push('model_id = ?');
       args.push(filter.modelId);
     }
-    const sql = `SELECT * FROM ranite_usage${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY at_ms`;
+    const sql = `SELECT * FROM openbutler_usage${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY at_ms`;
     const rows = this.database.prepare(sql).all(...args) as unknown as Array<Record<string, unknown>>;
     return rows.map(usageFromRow);
   }
@@ -570,7 +572,7 @@ export class ActivityLedger {
     this.assertOpen();
     this.database
       .prepare(
-        `INSERT OR IGNORE INTO ranite_usage (
+        `INSERT OR IGNORE INTO openbutler_usage (
           id, at_ms, ended_ms, duration_ms, tz_offset_min, session_id, turn_id, event_id, run_kind, workspace_root,
           provider_id, model_id, attempt, status, input_tokens, no_cache_tokens, cache_read_tokens, cache_write_tokens,
           output_tokens, text_tokens, reasoning_tokens, total_tokens, usage_source, context_tokens,
@@ -622,7 +624,7 @@ export class ActivityLedger {
     return (
       this.database
         .prepare(
-          "SELECT * FROM ranite_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || e.event_id OR key = 'owner-inbox:read:' || e.event_id) ORDER BY received_at, rowid",
+          "SELECT * FROM openbutler_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') AND NOT EXISTS (SELECT 1 FROM openbutler_state WHERE key = 'owner-inbox:reply:' || e.event_id OR key = 'owner-inbox:read:' || e.event_id) ORDER BY received_at, rowid",
         )
         .all() as unknown as EventDbRow[]
     ).map(eventFromRow);
@@ -632,7 +634,7 @@ export class ActivityLedger {
     this.assertOpen();
     const rows = this.database
       .prepare(
-        "SELECT * FROM ranite_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') AND NOT EXISTS (SELECT 1 FROM ranite_state WHERE key = 'owner-inbox:reply:' || e.event_id OR key = 'owner-inbox:read:' || e.event_id) ORDER BY received_at, rowid LIMIT ?",
+        "SELECT * FROM openbutler_events e WHERE source = 'owner-inbox' AND status IN ('pending','failed','interrupted') AND NOT EXISTS (SELECT 1 FROM openbutler_state WHERE key = 'owner-inbox:reply:' || e.event_id OR key = 'owner-inbox:read:' || e.event_id) ORDER BY received_at, rowid LIMIT ?",
       )
       .all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);
@@ -643,7 +645,7 @@ export class ActivityLedger {
     this.assertOpen();
     const rows = this.database
       .prepare(
-        "SELECT * FROM ranite_events WHERE COALESCE(json_extract(payload_json, '$.scheduleId'), json_extract(payload_json, '$.taskId')) = ? ORDER BY received_at DESC, rowid DESC LIMIT ?",
+        "SELECT * FROM openbutler_events WHERE COALESCE(json_extract(payload_json, '$.scheduleId'), json_extract(payload_json, '$.taskId')) = ? ORDER BY received_at DESC, rowid DESC LIMIT ?",
       )
       .all(scheduleId, Math.max(1, Math.min(200, Math.trunc(limit)))) as unknown as EventDbRow[];
     return rows.map(eventFromRow);
@@ -651,23 +653,23 @@ export class ActivityLedger {
 
   getState(key: string): string | null {
     this.assertOpen();
-    const row = this.database.prepare('SELECT value FROM ranite_state WHERE key = ?').get(key) as { value: string } | undefined;
+    const row = this.database.prepare('SELECT value FROM openbutler_state WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;
   }
 
   setState(key: string, value: string): void {
     this.assertOpen();
     this.database
-      .prepare('INSERT INTO ranite_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .prepare('INSERT INTO openbutler_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(key, value);
   }
 
   listActions(limit = 30): ToolActionRow[] {
     this.assertOpen();
-    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ranite_actions'").get()) return [];
+    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'openbutler_actions'").get()) return [];
     const bounded = Math.max(1, Math.min(200, Math.trunc(limit)));
     const rows = this.database
-      .prepare('SELECT * FROM ranite_actions ORDER BY created_at DESC LIMIT ?')
+      .prepare('SELECT * FROM openbutler_actions ORDER BY created_at DESC LIMIT ?')
       .all(bounded) as unknown as ActionDbRow[];
     return rows.map(actionFromRow);
   }
@@ -675,7 +677,7 @@ export class ActivityLedger {
   actionTransitions(requestId: string): Array<{ state: ToolActionState; detail: unknown; createdAt: string }> {
     this.assertOpen();
     const rows = this.database
-      .prepare('SELECT state, detail_json, created_at FROM ranite_action_transitions WHERE request_id = ? ORDER BY id')
+      .prepare('SELECT state, detail_json, created_at FROM openbutler_action_transitions WHERE request_id = ? ORDER BY id')
       .all(requestId) as unknown as Array<{ state: ToolActionState; detail_json: string | null; created_at: string }>;
     return rows.map((row) => ({
       state: row.state,
@@ -693,12 +695,12 @@ export class ActivityLedger {
   autoReviewSummary(limit = 5_000): AutoReviewSummary {
     this.assertOpen();
     const summary: AutoReviewSummary = { reviewed: 0, allow: 0, deny: 0, escalate: 0, unavailable: 0, unavailableByCode: {} };
-    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ranite_action_transitions'").get())
+    if (!this.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'openbutler_action_transitions'").get())
       return summary;
     const bounded = Math.max(1, Math.min(50_000, Math.trunc(limit)));
     const rows = this.database
       .prepare(
-        `SELECT state, detail_json FROM ranite_action_transitions
+        `SELECT state, detail_json FROM openbutler_action_transitions
          WHERE state IN ('reviewed', 'review_unavailable') ORDER BY id DESC LIMIT ?`,
       )
       .all(bounded) as unknown as Array<{ state: ToolActionState; detail_json: string | null }>;
@@ -722,13 +724,17 @@ export class ActivityLedger {
   previewPruneBefore(cutoffIso: string, target: LedgerPruneTarget): LedgerPruneCounts {
     this.assertOpen();
     return target === 'events'
-      ? { events: this.count('SELECT COUNT(*) AS count FROM ranite_events WHERE received_at < ?', cutoffIso), actions: 0, transitions: 0 }
+      ? {
+          events: this.count('SELECT COUNT(*) AS count FROM openbutler_events WHERE received_at < ?', cutoffIso),
+          actions: 0,
+          transitions: 0,
+        }
       : {
           events: 0,
-          actions: this.count('SELECT COUNT(*) AS count FROM ranite_actions WHERE created_at < ?', cutoffIso),
+          actions: this.count('SELECT COUNT(*) AS count FROM openbutler_actions WHERE created_at < ?', cutoffIso),
           transitions: this.count(
-            `SELECT COUNT(*) AS count FROM ranite_action_transitions
-             WHERE created_at < ? OR request_id IN (SELECT request_id FROM ranite_actions WHERE created_at < ?)`,
+            `SELECT COUNT(*) AS count FROM openbutler_action_transitions
+             WHERE created_at < ? OR request_id IN (SELECT request_id FROM openbutler_actions WHERE created_at < ?)`,
             cutoffIso,
             cutoffIso,
           ),
@@ -739,15 +745,15 @@ export class ActivityLedger {
   pruneBefore(cutoffIso: string, target: LedgerPruneTarget): LedgerPruneCounts {
     this.assertOpen();
     if (target === 'events') {
-      return { events: this.remove('DELETE FROM ranite_events WHERE received_at < ?', cutoffIso), actions: 0, transitions: 0 };
+      return { events: this.remove('DELETE FROM openbutler_events WHERE received_at < ?', cutoffIso), actions: 0, transitions: 0 };
     }
     const transitions = this.remove(
-      `DELETE FROM ranite_action_transitions
-       WHERE created_at < ? OR request_id IN (SELECT request_id FROM ranite_actions WHERE created_at < ?)`,
+      `DELETE FROM openbutler_action_transitions
+       WHERE created_at < ? OR request_id IN (SELECT request_id FROM openbutler_actions WHERE created_at < ?)`,
       cutoffIso,
       cutoffIso,
     );
-    const actions = this.remove('DELETE FROM ranite_actions WHERE created_at < ?', cutoffIso);
+    const actions = this.remove('DELETE FROM openbutler_actions WHERE created_at < ?', cutoffIso);
     return { events: 0, actions, transitions };
   }
 
@@ -767,7 +773,7 @@ export class ActivityLedger {
   }
 
   private assertOpen(): void {
-    if (this.closed) throw new Error('The Ranite activity ledger is closed.');
+    if (this.closed) throw new Error('The OpenButler activity ledger is closed.');
   }
 }
 

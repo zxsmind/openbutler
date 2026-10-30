@@ -1,4 +1,4 @@
-# Ranite integration and bundled helpers
+# OpenButler integration and bundled helpers
 
 ## Native surfaces
 
@@ -8,19 +8,19 @@ material input. Ordinary host permission behavior remains in force. A skill is
 not a new tool grant. `subagent` and its foreground/background options are
 optional; worker modes/capabilities must match the task.
 
-Global Ranite-specific scope is `<data-root>/skills/<name>`, discovered via
-`ranite about`; workspace scope is `<workspace>/.agents/skills/<name>`. Discovery
+Global OpenButler-specific scope is `<data-root>/skills/<name>`, discovered via
+`openbutler about`; workspace scope is `<workspace>/.agents/skills/<name>`. Discovery
 also includes bundled skills, home Claude/Agents/Codex roots and workspace
-Claude/Agents roots in override order. `ranite skills --workspace <directory>`
-shows the winning path. The `ranite` operating manual has the full root map when
+Claude/Agents roots in override order. `openbutler skills --workspace <directory>`
+shows the winning path. The `openbutler` operating manual has the full root map when
 available; this package does not require that skill to create a valid package.
 
 ## init-skill.mjs
 
 Commands below use `node` as the Node executable placeholder. Release installations
 include a runtime but may not put a separate `node` command on PATH. Use an
-available Node or inspect the resolved Ranite launcher (`Get-Command ranite` on
-PowerShell, `command -v ranite` on POSIX) to locate its bundled executable. Do not
+available Node or inspect the resolved OpenButler launcher (`Get-Command openbutler` on
+PowerShell, `command -v openbutler` on POSIX) to locate its bundled executable. Do not
 install a new system runtime merely to run an optional helper. Resolve `<creator>`
 from the actual discovered package path, not from a maintainer's home directory.
 
@@ -46,7 +46,7 @@ balance and local Markdown links outside examples. Local links must resolve
 inside the package. It does not validate remote URLs, execute scripts, inspect
 every external dependency, measure selection, or prove semantic task quality.
 
-This helper uses Node plus `js-yaml`, already a Ranite application dependency;
+This helper uses Node plus `js-yaml`, already a OpenButler application dependency;
 bundled placement resolves it through the application installation. If this
 creator is separately copied outside that dependency tree and resolution fails,
 report the missing dependency and use the installed entrypoint/discovery path or
@@ -76,7 +76,7 @@ package. An installed release may not contain a source checkout.
 
 For global/workspace delivery, copy the whole intended package using the
 installation workflow, preserve licenses and verify its winning discovery path.
-An optional zip is a transport artifact; Ranite discovers the extracted directory,
+An optional zip is a transport artifact; OpenButler discovers the extracted directory,
 not a `.skill` filename by itself. Skill discovery's short cache and a session's
 frozen model context are separate. Do not automatically restart a busy host after
 every edit or claim an active model already loaded a newly listed description.

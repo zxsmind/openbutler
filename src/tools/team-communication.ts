@@ -37,7 +37,7 @@ export function createTeamDeliveryTool(delivery: (input: Record<string, unknown>
 
 /**
  * The team surface for the agent: post to the shared group or direct-message a
- * peer, and read the direct messages addressed to this ranite. Group traffic is
+ * peer, and read the direct messages addressed to this openbutler. Group traffic is
  * ambient (read when convenient); a direct message is what wakes this session.
  */
 export function createTeamSendTool(send: TeamSend): ToolDefinition {
@@ -78,8 +78,8 @@ export function createTeamSendTool(send: TeamSend): ToolDefinition {
 
 /**
  * The shared group channel: read the messages the team posted since this
- * ranite last looked. Group traffic is ambient and never wakes a session, so
- * this is how a ranite catches up on the group on its own terms.
+ * openbutler last looked. Group traffic is ambient and never wakes a session, so
+ * this is how a openbutler catches up on the group on its own terms.
  */
 export function createTeamGroupTool(group: TeamGroup): ToolDefinition {
   return {
@@ -136,7 +136,7 @@ export function createTeamStatusTool(status: TeamStatus): ToolDefinition {
 /**
  * Persistent history: page older group messages or a direct-message
  * conversation at any time. This is a read-only view of the hub's log; it never
- * changes what is unread, so a ranite can look back without consuming anything.
+ * changes what is unread, so a openbutler can look back without consuming anything.
  */
 export function createTeamHistoryTool(history: TeamHistory): ToolDefinition {
   return {
@@ -214,7 +214,7 @@ export function createTeamReceiveFileTool(receive: TeamReceiveFile): ToolDefinit
     name: 'team_receive_file',
     maxInputChars: 1024,
     description:
-      'Download a shared team file to this machine. Pass the file id from the notification or from team_files. Omit to to write it to the default team inbox (appdata/ranite/team-inbox/<team>/<name>); pass an absolute path to choose the destination. The download is verified by sha256. This writes a local file, so it follows the active permission mode.',
+      'Download a shared team file to this machine. Pass the file id from the notification or from team_files. Omit to to write it to the default team inbox (appdata/openbutler/team-inbox/<team>/<name>); pass an absolute path to choose the destination. The download is verified by sha256. This writes a local file, so it follows the active permission mode.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

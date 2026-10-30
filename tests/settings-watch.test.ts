@@ -7,7 +7,7 @@ import { watchSettingsFiles } from '../src/settings-watch.js';
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'ranite-settings-watch-'));
+  dir = mkdtempSync(join(tmpdir(), 'openbutler-settings-watch-'));
 });
 
 afterEach(() => {

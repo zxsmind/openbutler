@@ -7,10 +7,10 @@ import type { ModelMessage } from 'ai';
 import { COMPACTION_CONTINUE_MESSAGE, COMPACTION_SUMMARY_MARKER, TOOL_REFERENCE_MARKER } from '../src/conversation.js';
 
 it('restores legacy queue ordering and checkpoint projection while keeping every raw archive message', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ranite-session-migration-'));
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-migration-'))
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-session-migration-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-session-migration-'))
     throw new Error('Unsafe migration fixture path.');
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   try {
     const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
@@ -28,7 +28,7 @@ it('restores legacy queue ordering and checkpoint projection while keeping every
     const queued: ModelMessage = {
       role: 'user',
       content: [{ type: 'text', text: 'Queued correction' }],
-      providerOptions: { ranite: { queuedMessageId: 'correction' } },
+      providerOptions: { openbutler: { queuedMessageId: 'correction' } },
     };
     const result: ModelMessage = {
       role: 'tool',
@@ -38,7 +38,7 @@ it('restores legacy queue ordering and checkpoint projection while keeping every
       {
         role: 'assistant',
         content: COMPACTION_SUMMARY_MARKER + 'Successful checkpoint',
-        providerOptions: { ranite: { compactionCheckpoint: true } },
+        providerOptions: { openbutler: { compactionCheckpoint: true } },
       },
       user,
       preview('old'),
@@ -73,10 +73,10 @@ it('restores legacy queue ordering and checkpoint projection while keeping every
 });
 
 it('saves and reloads a session carrying every user-entry source, including team', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ranite-session-sources-'));
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-sources-'))
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-session-sources-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-session-sources-'))
     throw new Error('Unsafe fixture path.');
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   try {
     const { createSession, saveSession, loadSavedSession, USER_ENTRY_SOURCES } = await import('../src/session-store.js');
@@ -98,8 +98,8 @@ it('saves and reloads a session carrying every user-entry source, including team
 it('keeps a compaction row through save and load', async () => {
   // A new entry kind that the validator does not know makes the whole session
   // file unreadable, which is worse than the row itself going missing.
-  const root = mkdtempSync(join(tmpdir(), 'ranite-session-compaction-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-session-compaction-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   try {
     const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
@@ -119,8 +119,8 @@ it('keeps a compaction row through save and load', async () => {
 it('keeps a divider row through save and load', async () => {
   // Dividers are backend-written transcript facts; a validator that drops them
   // would silently erase settings changes and day boundaries on reload.
-  const root = mkdtempSync(join(tmpdir(), 'ranite-session-divider-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-session-divider-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   try {
     const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
@@ -143,8 +143,8 @@ it('keeps a divider row through save and load', async () => {
 it('keeps the compaction marker through save and load', async () => {
   // The marker decides whether the reader sees the checkpoint prose, so dropping
   // it on reload would put the whole summary back into the conversation.
-  const root = mkdtempSync(join(tmpdir(), 'ranite-session-internal-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-session-internal-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   try {
     const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');
@@ -162,10 +162,10 @@ it('keeps the compaction marker through save and load', async () => {
 });
 
 it('persists full tool input once and still loads legacy command entries', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ranite-tool-input-'));
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-tool-input-'))
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-tool-input-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-tool-input-'))
     throw new Error('Unsafe fixture path.');
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   try {
     const { createSession, saveSession, loadSavedSession } = await import('../src/session-store.js');

@@ -18,12 +18,12 @@ import {
 
 let dataDir: string;
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-compaction-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', dataDir);
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-compaction-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', dataDir);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
-  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('ranite-compaction-check-'))
+  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('openbutler-compaction-check-'))
     throw new Error('Unsafe fixture cleanup path.');
   rmSync(dataDir, { recursive: true, force: true });
 });
@@ -133,7 +133,7 @@ describe('full-context LLM compaction', () => {
       {
         role: 'assistant',
         content: COMPACTION_SUMMARY_MARKER + 'Earlier checkpoint',
-        providerOptions: { ranite: { compactionCheckpoint: true } },
+        providerOptions: { openbutler: { compactionCheckpoint: true } },
       },
       user,
       assistant,
@@ -256,7 +256,7 @@ describe('full-context LLM compaction', () => {
 
   it('adds the archive location to the completed checkpoint without changing the summary request', async () => {
     const model = new MockLanguageModelV3({ doStream: async () => textStream('Complete checkpoint.') });
-    const archivePath = 'C:/data/ranite/sessions/fixture.json';
+    const archivePath = 'C:/data/openbutler/sessions/fixture.json';
     const result = await compactConversation({
       system: 'Permanent policy',
       messages: [{ role: 'user', content: 'Original task' }],
@@ -423,8 +423,8 @@ describe('full-context LLM compaction', () => {
     });
     expect(second!.messages).toContainEqual(messages[0]);
     expect(second!.messages).toContainEqual(messages[1]);
-    expect(second!.messages.filter((message) => message.providerOptions?.ranite?.compactionControl === true)).toHaveLength(1);
-    expect(second!.messages.filter((message) => message.providerOptions?.ranite?.compactionCheckpoint === true)).toHaveLength(1);
+    expect(second!.messages.filter((message) => message.providerOptions?.openbutler?.compactionControl === true)).toHaveLength(1);
+    expect(second!.messages.filter((message) => message.providerOptions?.openbutler?.compactionCheckpoint === true)).toHaveLength(1);
   });
 
   it('retains exact visible dialogue and paired raw tool previews, without replaying old reasoning or large arguments', async () => {

@@ -7,23 +7,23 @@ input behavior and diagnosis. Related: [environment](environment.md),
 ## Start web
 
 ```text
-ranite web
-ranite web --port 45278 --hostname 127.0.0.1 --dir <existing-directory>
-ranite web --port 45278 --hostname 0.0.0.0 --dir <existing-directory>
+openbutler web
+openbutler web --port 45278 --hostname 127.0.0.1 --dir <existing-directory>
+openbutler web --port 45278 --hostname 0.0.0.0 --dir <existing-directory>
 ```
 
 Defaults are port 45278, loopback host 127.0.0.1 and the launch directory for web's
 workspace. `--dir` is web scope, not a substitute for installing the application.
-Plain `ranite web` starts/attaches the background host, launches the web server as
+Plain `openbutler web` starts/attaches the background host, launches the web server as
 a tracked background process and returns. A loopback bind prints a hint that
 another device needs `--hostname 0.0.0.0`; a wildcard bind prints the network
-warning instead. Pairing is explicit: `ranite web --pair` runs a pairing session
+warning instead. Pairing is explicit: `openbutler web --pair` runs a pairing session
 in that terminal and prints a one-time pairing URL. Enter produces a fresh URL;
 Ctrl+C stops that session. If a tracked server already runs, `--pair` stops it
 first to take over the same port, so an already-paired browser keeps its cookie
-while a new device pairs. `ranite restart` recycles the tracked web server
+while a new device pairs. `openbutler restart` recycles the tracked web server
 together with the host, preserving its port, hostname and workspace;
-`ranite stop` stops both.
+`openbutler stop` stops both.
 
 Open the printed URL in the intended browser. Pair tokens expire after five
 minutes and are consumed on use. Pairing establishes an HttpOnly session cookie.
@@ -47,13 +47,13 @@ Keep the intended port/path/query when changing only the link's hostname.
 
 Binding beyond loopback makes the service network-reachable. Public exposure,
 TLS termination and reverse-proxy/tailnet configuration are separate host/network
-operations; `ranite web` itself is not an HTTPS certificate manager. A reverse
+operations; `openbutler web` itself is not an HTTPS certificate manager. A reverse
 proxy must support long-lived SSE and the intended request Host/Origin/cookie
 behavior. Microphone/dictation can require a browser-supported secure context;
 a working HTTP chat page does not prove microphone availability.
 
 On a server, run web under the intended process/service supervisor with an
-explicit workspace, hostname and port. Registering Ranite daemon autostart alone
+explicit workspace, hostname and port. Registering OpenButler daemon autostart alone
 does not create a persistent web-server process. Environment variables and data
 root must match the intended host instance.
 
@@ -110,8 +110,8 @@ selected. Closing the last application tab closes its dock and returns to the
 normal chat layout; a chat-only dock must not keep the pinned tab bar visible.
 
 Each tab has back/forward history, reload, an address field and a Tools-home menu.
-Addresses currently resolve registered workspace tools (`ranite://tools` and
-`ranite://terminal`); this is not a web browser. Returning home and moving forward
+Addresses currently resolve registered workspace tools (`openbutler://tools` and
+`openbutler://terminal`); this is not a web browser. Returning home and moving forward
 retains the tool instance. Reloading Terminal explicitly creates a fresh shell.
 
 Collapsing a panel or selecting another tab keeps its terminal running. Closing

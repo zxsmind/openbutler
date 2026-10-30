@@ -29,7 +29,7 @@ let marker: string;
 let command: string;
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), 'ranite-tree-'));
+  dir = mkdtempSync(join(tmpdir(), 'openbutler-tree-'));
   marker = join(dir, 'grandchild.marker');
   const seconds = CHILD_WRITE_MS / 1000;
   if (process.platform === 'win32') {

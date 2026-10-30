@@ -84,18 +84,18 @@ let previousDataDir: string | undefined;
 let session: AgentSessionController | undefined;
 
 beforeEach(() => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-steer-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-team-steer-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   vi.resetModules();
 });
 
 afterEach(async () => {
   await session?.close();
   session = undefined;
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
-  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('ranite-team-steer-')) {
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
+  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('openbutler-team-steer-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(dataDir, { recursive: true, force: true });

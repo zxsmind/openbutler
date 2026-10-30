@@ -6,7 +6,7 @@ export function SidebarHeader({ onSearch, searchLabel, onClose }: { onSearch: ()
   return (
     <div className="sidebar-heading">
       <Brand />
-      <span className="sidebar-brand">Ranite</span>
+      <span className="sidebar-brand">OpenButler</span>
       <span className="spacer" />
       <IconButton icon="search" label={searchLabel} onClick={onSearch} />
       {onClose ? <IconButton icon="x" label="Close sidebar" className="mobile-only" onClick={onClose} /> : null}

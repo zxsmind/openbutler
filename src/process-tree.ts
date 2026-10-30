@@ -25,7 +25,7 @@ export function treeKillCommand(pid: number): KillPlan | null {
 }
 
 /**
- * A live command line belongs to this server only when it still names the command Ranite
+ * A live command line belongs to this server only when it still names the command OpenButler
  * spawned and that spawn's first argument: a recycled pid must never be killed, so an
  * unreadable or foreign command line refuses the kill instead of guessing.
  */

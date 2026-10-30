@@ -62,9 +62,9 @@ let execute: Mock<(input: Record<string, unknown>, signal?: AbortSignal, context
 let controller: AgentSessionController | undefined;
 
 beforeEach(() => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  root = mkdtempSync(join(tmpdir(), 'ranite-auto-review-'));
-  process.env.RANITE_DATA_DIR = root;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  root = mkdtempSync(join(tmpdir(), 'openbutler-auto-review-'));
+  process.env.OPENBUTLER_DATA_DIR = root;
   vi.resetModules();
   ledger = new ActivityLedger(join(root, 'state.db'));
   execute = vi.fn<(input: Record<string, unknown>, signal?: AbortSignal, context?: ToolExecutionContext) => Promise<unknown>>(async () => ({
@@ -93,9 +93,9 @@ afterEach(async () => {
   await controller?.close();
   controller = undefined;
   ledger.close();
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-auto-review-')) {
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-auto-review-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(root, { recursive: true, force: true });

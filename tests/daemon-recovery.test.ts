@@ -23,8 +23,8 @@ function alive(pid: number): boolean {
 }
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-recovery-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-recovery-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   daemon = await import('../src/daemon.js');
   child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore', cwd: root });
@@ -55,7 +55,7 @@ afterEach(async () => {
   if (alive(child.pid!)) child.kill();
   await vi.waitFor(() => expect(alive(child.pid!)).toBe(false), { timeout: 3_000, interval: 25 });
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-recovery-check-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-recovery-check-'))
     throw new Error('Unsafe recovery fixture cleanup path.');
   await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
@@ -70,7 +70,7 @@ function expireShutdownGrace() {
 it('reports an alive but unresponsive host and does not spawn a competing host', async () => {
   expect(await daemon.getDaemonStatus()).toMatchObject({ pid: child.pid, unresponsive: true });
   const before = readFileSync(join(root, 'daemon.pid'), 'utf8');
-  await expect(daemon.startDaemon(root)).rejects.toThrow('Recover it with `ranite restart`');
+  await expect(daemon.startDaemon(root)).rejects.toThrow('Recover it with `openbutler restart`');
   expect(readFileSync(join(root, 'daemon.pid'), 'utf8')).toBe(before);
   expect(alive(child.pid!)).toBe(true);
 });

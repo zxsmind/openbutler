@@ -1,19 +1,19 @@
 import type { ModelMessage } from 'ai';
 
-export const COMPACTION_SUMMARY_MARKER = 'Ranite conversation summary (context only):\n';
-export const TOOL_REFERENCE_MARKER = 'Ranite tool exchange (raw context preview):\n';
+export const COMPACTION_SUMMARY_MARKER = 'OpenButler conversation summary (context only):\n';
+export const TOOL_REFERENCE_MARKER = 'OpenButler tool exchange (raw context preview):\n';
 export const COMPACTION_CONTINUE_MESSAGE: ModelMessage = {
   role: 'user',
   content:
     'Continue the unfinished user request from the compacted history. Use the summary to recover the current goal, constraints, completed work, and next action.',
-  providerOptions: { ranite: { compactionControl: true } },
+  providerOptions: { openbutler: { compactionControl: true } },
 };
 
 const TOOL_PREVIEW_FIELD_CHARS = 8_192;
 const TOOL_PREVIEW_BATCH_CHARS = 32_768;
 
 export function appendTranscriptArchiveReference(content: string, archivePath: string): string {
-  const reference = `\n\nRanite transcript archive (original messages and tool results): ${archivePath}`;
+  const reference = `\n\nOpenButler transcript archive (original messages and tool results): ${archivePath}`;
   return content.includes(reference) ? content : content + reference;
 }
 
@@ -73,7 +73,7 @@ export function retireCoveredToolPreviews(messages: ModelMessage[]): ModelMessag
     (message) =>
       message.role === 'user' &&
       message.content === COMPACTION_CONTINUE_MESSAGE.content &&
-      message.providerOptions?.ranite?.compactionControl === true,
+      message.providerOptions?.openbutler?.compactionControl === true,
   );
   if (
     boundary < 0 ||
@@ -84,7 +84,7 @@ export function retireCoveredToolPreviews(messages: ModelMessage[]): ModelMessag
           message.role === 'assistant' &&
           typeof message.content === 'string' &&
           message.content.startsWith(COMPACTION_SUMMARY_MARKER) &&
-          (message.providerOptions?.ranite?.compactionCheckpoint === true || index === 0),
+          (message.providerOptions?.openbutler?.compactionCheckpoint === true || index === 0),
       )
   )
     return messages;
@@ -118,7 +118,7 @@ export function repairQueuedMessageOrder(messages: ModelMessage[]): ModelMessage
       for (const part of message.content) {
         if (part.type === 'tool-result') pending.delete(part.toolCallId);
       }
-    if (message.role === 'user' && typeof message.providerOptions?.ranite?.queuedMessageId === 'string' && pending.size > 0) {
+    if (message.role === 'user' && typeof message.providerOptions?.openbutler?.queuedMessageId === 'string' && pending.size > 0) {
       const group = moves.get(boundary) ?? [];
       group.push(message);
       moves.set(boundary, group);

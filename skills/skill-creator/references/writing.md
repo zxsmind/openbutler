@@ -27,7 +27,7 @@ description: "Produce the requested example artifact. Use when the user asks to 
 ---
 ```
 
-Ranite requires name to match the directory, lowercase letters/digits with single
+OpenButler requires name to match the directory, lowercase letters/digits with single
 hyphens, at most 64 characters. Description is nonempty, at most 1024 characters.
 Quote colon-bearing YAML values. Metadata is read from a bounded frontmatter
 prefix; a beautiful Markdown body cannot repair an invalid header. Optional

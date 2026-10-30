@@ -20,7 +20,7 @@ vi.mock('@huggingface/transformers', () => ({
 }));
 
 beforeEach(() => {
-  vi.stubEnv('RANITE_DATA_DIR', mkdtempSync(join(tmpdir(), 'ranite-memory-model-')));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', mkdtempSync(join(tmpdir(), 'openbutler-memory-model-')));
   model.tokenizer.mockResolvedValue({});
   model.load.mockResolvedValue({});
   model.dispose.mockResolvedValue(undefined);
@@ -43,7 +43,7 @@ describe('setup memory model readiness', () => {
         revision: MEMORY_EMBEDDING_REVISION,
         device: 'cpu',
         dtype: 'q8',
-        cache_dir: join(process.env.RANITE_DATA_DIR!, 'models'),
+        cache_dir: join(process.env.OPENBUTLER_DATA_DIR!, 'models'),
       }),
     );
     expect(model.extract).toHaveBeenCalledWith(['Local memory search readiness check.'], { pooling: 'mean', normalize: true });
@@ -51,7 +51,7 @@ describe('setup memory model readiness', () => {
   });
 
   it('loads a complete pinned cache by its absolute path for offline operation', async () => {
-    const cachedDirectory = join(process.env.RANITE_DATA_DIR!, 'models', MEMORY_EMBEDDING_MODEL, MEMORY_EMBEDDING_REVISION);
+    const cachedDirectory = join(process.env.OPENBUTLER_DATA_DIR!, 'models', MEMORY_EMBEDDING_MODEL, MEMORY_EMBEDDING_REVISION);
     mkdirSync(join(cachedDirectory, 'onnx'), { recursive: true });
     for (const file of ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'onnx/model_quantized.onnx']) {
       writeFileSync(join(cachedDirectory, file), 'cached fixture');

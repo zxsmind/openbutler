@@ -72,7 +72,7 @@ export interface ToolDefinition {
   assess?: (input: Record<string, unknown>, target?: string) => ToolEffect;
   autoApprove?: (input: Record<string, unknown>, target?: string) => boolean;
   /**
-   * Host authority: true when this call touches only Ranite-owned paths
+   * Host authority: true when this call touches only OpenButler-owned paths
    * (scratch, memory, settings — see host-owned-paths.ts). Unlike
    * `autoApprove`, which is the tool's own judgment and is switched off in
    * unattended runs, this is a host fact and stays on in background sessions.
@@ -297,7 +297,7 @@ export class ToolRegistry {
         const result = {
           status: 'denied',
           error:
-            "Ranite's secret store is not visible to the agent: it cannot be read, written, edited, or searched. Provider keys are configured with `ranite setup` or environment variables, never through this session. Name the provider you need; do not retry this path.",
+            "OpenButler's secret store is not visible to the agent: it cannot be read, written, edited, or searched. Provider keys are configured with `openbutler setup` or environment variables, never through this session. Name the provider you need; do not retry this path.",
         };
         try {
           await options.onAction?.(request, 'denied', { result });
@@ -606,14 +606,14 @@ export function withToolTiming(result: unknown, startedAt: number, finishedAt: n
   if (typeof result === 'string') return `${result}\n(${line})`;
   // The field goes on the same object rather than a copy: the review-note channel
   // is keyed by identity, and a copy would silently lose a note attached to it.
-  if (result && typeof result === 'object' && !Array.isArray(result)) (result as Record<string, unknown>).raniteTiming = line;
+  if (result && typeof result === 'object' && !Array.isArray(result)) (result as Record<string, unknown>).openbutlerTiming = line;
   return result;
 }
 
 /** The stored stamp, or null when a result carries none. */
 export function toolTiming(output: unknown): string | null {
   if (!output || typeof output !== 'object' || Array.isArray(output)) return null;
-  const line = (output as Record<string, unknown>).raniteTiming;
+  const line = (output as Record<string, unknown>).openbutlerTiming;
   return typeof line === 'string' ? line : null;
 }
 

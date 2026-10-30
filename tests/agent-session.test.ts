@@ -81,18 +81,18 @@ let previousDataDir: string | undefined;
 let session: AgentSessionController | undefined;
 
 beforeEach(() => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-session-stream-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-session-stream-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   vi.resetModules();
 });
 
 afterEach(async () => {
   await session?.close();
   session = undefined;
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
-  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('ranite-session-stream-')) {
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
+  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('openbutler-session-stream-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(dataDir, { recursive: true, force: true });
@@ -1497,7 +1497,7 @@ describe('session compaction persistence and continuation', () => {
           requested = true;
           // Changing the scope mid-run would move the active turn, so this
           // request may only run once the run has finished.
-          await session!.compact(preferences, false, join(tmpdir(), 'ranite-other-scope'));
+          await session!.compact(preferences, false, join(tmpdir(), 'openbutler-other-scope'));
         }
         return { status: 'completed', detail: 'Fixture result' };
       },

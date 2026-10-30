@@ -10,7 +10,7 @@ export { defaultModelIsUsable } from '../provider/registry.js';
 export { removeProvider, upsertProvider } from '../settings.js';
 
 /**
- * Mutations for the interactive `ranite config` command.
+ * Mutations for the interactive `openbutler config` command.
  *
  * Every function edits the in-memory store and writes it straight back, so the
  * management surface is repeatable: nothing here depends on a wizard having run
@@ -98,7 +98,7 @@ export function readiness(settings: SettingsStore): ReadinessReport {
   const providers = readyProviderIds(settings);
   if (providers.length === 0) {
     problems.push('No LLM provider is enabled with an API key.');
-    hints.push('Configure a provider and key: ranite setup');
+    hints.push('Configure a provider and key: openbutler setup');
     return { ready: false, problems, hints };
   }
 
@@ -108,12 +108,12 @@ export function readiness(settings: SettingsStore): ReadinessReport {
   });
   if (!isCatalogLoaded() && !customConfigured) {
     problems.push('The model catalog has not been loaded, so no model can be verified.');
-    hints.push('Load it: ranite config  (needs network or a warm cache)');
+    hints.push('Load it: openbutler config  (needs network or a warm cache)');
   }
 
   const defaultChoice = resolveDefaultModel(settings);
   if (!defaultChoice) {
-    hints.push('No default model is selected, so ranite --c will not run.');
+    hints.push('No default model is selected, so openbutler --c will not run.');
   } else if (defaultChoice.source === 'usage') {
     hints.push(`Default model comes from usage: ${defaultChoice.providerId} / ${defaultChoice.modelId}.`);
   }

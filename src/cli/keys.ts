@@ -9,7 +9,7 @@ export { addProviderKeys };
 export type KeysTarget = { kind: 'provider' } | { kind: 'unknown-provider'; id: string } | { kind: 'mcp-server'; id: string };
 
 /**
- * Decides what a `ranite keys` target refers to. A provider is anything the
+ * Decides what a `openbutler keys` target refers to. A provider is anything the
  * catalog knows or anything already configured; an MCP server id is a
  * different credential home and must never land in the key store.
  */
@@ -81,14 +81,14 @@ async function loadCatalogIds(): Promise<Set<string>> {
   }
 }
 
-/** Usage: ranite keys [add <provider>|list|remove <provider>] */
+/** Usage: openbutler keys [add <provider>|list|remove <provider>] */
 export async function runKeysCommand(action: string, target: string): Promise<void> {
   const settings = loadSettings();
   if (action === 'list' || action === '') {
     const rows = describeProviderKeys(settings);
     if (rows.length === 0) {
       ui.info('No provider is configured.');
-      ui.info('Add one with: ranite keys add <provider>');
+      ui.info('Add one with: openbutler keys add <provider>');
       return;
     }
     ui.table(
@@ -97,18 +97,20 @@ export async function runKeysCommand(action: string, target: string): Promise<vo
     );
     return;
   }
-  if (action !== 'add' && action !== 'remove') throw new Error('Usage: ranite keys [add <provider>|list|remove <provider>]');
-  if (!target) throw new Error(`Usage: ranite keys ${action} <provider>`);
+  if (action !== 'add' && action !== 'remove') throw new Error('Usage: openbutler keys [add <provider>|list|remove <provider>]');
+  if (!target) throw new Error(`Usage: openbutler keys ${action} <provider>`);
   if (!process.stdin.isTTY)
-    throw new Error(`ranite keys ${action} needs an interactive terminal. Keys are entered through a masked prompt, never as arguments.`);
+    throw new Error(
+      `openbutler keys ${action} needs an interactive terminal. Keys are entered through a masked prompt, never as arguments.`,
+    );
   const classification = classifyKeysTarget(settings, target, await loadCatalogIds());
   if (classification.kind === 'mcp-server') {
     throw new Error(
-      `"${target}" is an MCP server, not a model provider. MCP credentials live in host environment variables referenced by name in the server definition; manage them with ranite mcp. This store holds model provider API keys only.`,
+      `"${target}" is an MCP server, not a model provider. MCP credentials live in host environment variables referenced by name in the server definition; manage them with openbutler mcp. This store holds model provider API keys only.`,
     );
   }
   if (classification.kind === 'unknown-provider') {
-    throw new Error(`Unknown provider "${target}". Configure it first with ranite setup.`);
+    throw new Error(`Unknown provider "${target}". Configure it first with openbutler setup.`);
   }
   if (action === 'add') {
     const added = addProviderKeys(settings, target, await askKeys(target));

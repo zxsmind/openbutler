@@ -117,7 +117,7 @@ export function attachmentReferences(attachments: readonly FileAttachment[]): st
 export function materializeIncomingAttachments(messages: ModelMessage[], sessionId?: string): ModelMessage[] {
   let changed = false;
   const result = messages.map((message): ModelMessage => {
-    if (message.role !== 'user' || !Array.isArray(message.content) || message.providerOptions?.ranite?.explicitToolMedia === true)
+    if (message.role !== 'user' || !Array.isArray(message.content) || message.providerOptions?.openbutler?.explicitToolMedia === true)
       return message;
     let images = 0;
     let files = 0;

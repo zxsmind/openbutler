@@ -7,7 +7,7 @@ export const BRAND_FAVICON_PNG_URL = '/favicon-32x32.png';
 export const BRAND_APPLE_TOUCH_ICON_URL = '/apple-touch-icon.png';
 
 const brandAssets = new Map<string, { filename: string; contentType: string }>([
-  [BRAND_LOGO_URL, { filename: 'ranite.svg', contentType: 'image/svg+xml; charset=utf-8' }],
+  [BRAND_LOGO_URL, { filename: 'openbutler.svg', contentType: 'image/svg+xml; charset=utf-8' }],
   [BRAND_FAVICON_SVG_URL, { filename: 'favicon.svg', contentType: 'image/svg+xml; charset=utf-8' }],
   [BRAND_FAVICON_ICO_URL, { filename: 'favicon.ico', contentType: 'image/x-icon' }],
   [BRAND_FAVICON_PNG_URL, { filename: 'favicon-32.png', contentType: 'image/png' }],
@@ -25,5 +25,5 @@ export function getBrandAsset(pathname: string): { data: Promise<Buffer>; conten
 }
 
 export function readBrandLogo(): Promise<Buffer> {
-  return readFile(new URL('./assets/branding/ranite.svg', import.meta.url));
+  return readFile(new URL('./assets/branding/openbutler.svg', import.meta.url));
 }

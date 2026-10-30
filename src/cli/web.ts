@@ -23,8 +23,8 @@ export function readPort(parsed: Parsed): number {
   return port;
 }
 
-const PAIR_HINT = 'Pair another device with `ranite web --pair`; paired browsers reconnect on their own.';
-const LOCAL_ONLY_HINT = 'Local only on this computer. For phone or LAN access, run `ranite web --hostname 0.0.0.0`.';
+const PAIR_HINT = 'Pair another device with `openbutler web --pair`; paired browsers reconnect on their own.';
+const LOCAL_ONLY_HINT = 'Local only on this computer. For phone or LAN access, run `openbutler web --hostname 0.0.0.0`.';
 const isLoopback = (host: string): boolean => host === '127.0.0.1' || host === '::1';
 
 /**
@@ -32,7 +32,7 @@ const isLoopback = (host: string): boolean => host === '127.0.0.1' || host === '
  * files and pushes session snapshots; rendering happens in the browser, so the
  * host process stays where it is.
  *
- * Plain `ranite web` starts the server as a tracked background service and
+ * Plain `openbutler web` starts the server as a tracked background service and
  * returns. `--pair` is the explicit pairing session: it runs the server in
  * this terminal with a one-time link. `--serve` is the detached child's own
  * marker (see `webSpawnArgs`) and never prints a link, so no credential lands
@@ -54,7 +54,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
       ui.info(PAIR_HINT);
       return;
     }
-    ui.section('Ranite web');
+    ui.section('OpenButler web');
     ui.kv('Workspace', `${workspaceRoot} (from ${scope.source})`);
     try {
       // The browser server attaches to a running host; only daemon verbs start one.
@@ -86,7 +86,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
     }
   }
 
-  ui.section('Ranite web');
+  ui.section('OpenButler web');
   ui.kv('Workspace', `${workspaceRoot} (from ${scope.source})`);
   if (host !== DEFAULT_WEB_HOST) {
     ui.warn('This server is reachable from the network. Keep the pairing link private.');
@@ -104,8 +104,8 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
     return;
   }
 
-  // This process now owns the port; register it so `ranite stop` and
-  // `ranite restart` reach a pairing session the same way they reach the
+  // This process now owns the port; register it so `openbutler stop` and
+  // `openbutler restart` reach a pairing session the same way they reach the
   // detached background server.
   trackWebProcess({ pid: process.pid, startedAt: new Date().toISOString(), port, host, dir: workspaceRoot });
 
@@ -117,7 +117,7 @@ export async function runWebCommand(parsed: Parsed): Promise<void> {
   }
 
   const pairUrl = server.pairUrl;
-  const pairFile = process.env.RANITE_WEB_PAIR_FILE;
+  const pairFile = process.env.OPENBUTLER_WEB_PAIR_FILE;
   if (pairFile) {
     // Automation hook: a supervisor or a test can read the one-time link without
     // scraping the terminal output.

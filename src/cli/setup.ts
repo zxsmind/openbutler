@@ -18,7 +18,7 @@ import * as ui from './ui.js';
  * number of back-and-forward moves changes nothing on disk until then.
  *
  * Difference from athena's wizard: the model list is filtered to models the
- * catalog says can call tools. Ranite is an agent, so a model that cannot call
+ * catalog says can call tools. OpenButler is an agent, so a model that cannot call
  * a tool is not a worse choice, it is not a choice.
  */
 
@@ -222,7 +222,7 @@ async function askDefaultModel(settings: SettingsStore): Promise<void> {
   if (ids.length === 0) return;
 
   const provider = await select({
-    message: 'Which provider should ranite use?',
+    message: 'Which provider should openbutler use?',
     choices: ids.map((id) => ({ value: id, name: getProvider(id)?.name ?? id })),
     ...(settings.defaultProvider && ids.includes(settings.defaultProvider) ? { default: settings.defaultProvider } : {}),
   });
@@ -280,7 +280,7 @@ export async function prepareLocalMemoryModel(): Promise<boolean> {
     } catch (error) {
       active.fail('Local memory model is not ready.');
       ui.warn(error instanceof Error ? error.message : String(error));
-      ui.info('Your settings are kept. Rerun ranite setup and choose the local memory model to retry.');
+      ui.info('Your settings are kept. Rerun openbutler setup and choose the local memory model to retry.');
       if (error instanceof Error && ['ExitPromptError', 'AbortPromptError'].includes(error.name)) {
         process.exitCode = 1;
         return false;
@@ -383,9 +383,9 @@ export async function runSetup(): Promise<boolean> {
   }
   if (!defaultModelIsUsable(settings)) {
     ui.warn('The default model is unset or its provider is not ready.');
-    ui.info('Fix it: ranite setup');
+    ui.info('Fix it: openbutler setup');
     return false;
   }
-  ui.info('Try: ranite --c "is docker installed?"');
+  ui.info('Try: openbutler --c "is docker installed?"');
   return true;
 }

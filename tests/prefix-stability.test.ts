@@ -22,9 +22,9 @@ let dataDir: string;
 let workspace: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-prefix-data-'));
-  workspace = mkdtempSync(join(tmpdir(), 'ranite-prefix-ws-'));
-  vi.stubEnv('RANITE_DATA_DIR', dataDir);
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-prefix-data-'));
+  workspace = mkdtempSync(join(tmpdir(), 'openbutler-prefix-ws-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', dataDir);
   vi.resetModules();
 });
 

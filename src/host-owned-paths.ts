@@ -7,7 +7,7 @@ import { getConfigPath, getSettingsPath } from './settings.js';
 import { classifyTrustedPath, samePhysicalPath } from './workspace-scope.js';
 
 /**
- * The Ranite-owned paths the agent may touch without a permission prompt,
+ * The OpenButler-owned paths the agent may touch without a permission prompt,
  * and the one file it may never touch at all.
  *
  * This module is the single source of truth for both lists. The scope
@@ -15,9 +15,9 @@ import { classifyTrustedPath, samePhysicalPath } from './workspace-scope.js';
  * the registry gate all derive from here, so a path cannot be pre-authorized
  * in one place and gated in another, and the secret store cannot be reachable
  * through a tool the ban forgot. The pre-authorized set is deliberately
- * narrow: the agent's scratch tree, its memory documents, and Ranite's own
+ * narrow: the agent's scratch tree, its memory documents, and OpenButler's own
  * settings file. Tool output the host spilled for the agent is readable for
- * the same reason: Ranite wrote it, and re-reading it must never cost a prompt.
+ * the same reason: OpenButler wrote it, and re-reading it must never cost a prompt.
  * Everything else in the data directory (sessions, keys, allowlists) still
  * goes through the normal approval policy.
  */
@@ -27,7 +27,7 @@ export type HostOwnedKind = 'scratch' | 'memory' | 'settings' | 'tool-output';
  * Classifies a file tool source against the host-owned set. Accepts the same
  * raw sources the file tools do (absolute, workspace-relative, `~`-prefixed)
  * and resolves them the same way, so the check and the execution agree on
- * the target. Returns null for anything Ranite does not own. Never throws:
+ * the target. Returns null for anything OpenButler does not own. Never throws:
  * an unresolvable source is simply not host-owned.
  */
 export function classifyHostOwnedPath(source: string, workspaceRoot: string): HostOwnedKind | null {
@@ -75,7 +75,7 @@ export function ensureHostOwnedRoots(): void {
 }
 
 /**
- * True when a resolved absolute target is Ranite's secret store. The agent
+ * True when a resolved absolute target is OpenButler's secret store. The agent
  * may never read, write, edit, or search it — no approval mode, whitelist,
  * or pre-authorization overrides this. The host reads the file directly in
  * code, never through a tool, so nothing legitimate needs the tool path.

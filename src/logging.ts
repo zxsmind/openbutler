@@ -4,7 +4,7 @@
  * Records are JSON lines: a timestamp, a level, an event name and whatever fields
  * the call site knows. Structured first, because a log is read by a program far
  * more often than by a person; the human rendering lives in `formatLogLine` and is
- * used by `ranite logs`.
+ * used by `openbutler logs`.
  *
  * Three rules hold everywhere:
  * - stdout belongs to command output, so logs go to stderr or to a file.
@@ -43,7 +43,7 @@ const SECRET_KEY = /(key|token|secret|password|passwd|authorization|cookie|crede
 const SECRET_VALUE = [
   /\b(sk|pk|rk)-[A-Za-z0-9_-]{8,}/g,
   /\bBearer\s+[A-Za-z0-9._-]{8,}/gi,
-  /\branite_web=[^;\s]+/g,
+  /\bopenbutler_web=[^;\s]+/g,
   /\b[A-Za-z0-9_-]{32,}\b/g,
 ];
 
@@ -80,7 +80,7 @@ export interface LoggerOptions {
 }
 
 function envLevel(): LogLevel {
-  const raw = (process.env.RANITE_LOG_LEVEL ?? '').toLowerCase();
+  const raw = (process.env.OPENBUTLER_LOG_LEVEL ?? '').toLowerCase();
   return raw === 'error' || raw === 'warn' || raw === 'info' || raw === 'debug' ? (raw as LogLevel) : 'info';
 }
 
@@ -121,7 +121,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 
 /** A file sink that rotates by size and keeps a bounded number of files. */
 export function fileSink(
-  path = getDataPath(join('logs', 'ranite.log')),
+  path = getDataPath(join('logs', 'openbutler.log')),
   { maxBytes = 5 * 1024 * 1024, keep = 3 }: { maxBytes?: number; keep?: number } = {},
 ): LogSink {
   mkdirSync(dirname(path), { recursive: true });

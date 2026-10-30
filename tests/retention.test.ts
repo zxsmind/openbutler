@@ -8,11 +8,11 @@ import { parseRetentionDuration, selectFilesToPrune } from '../src/retention.js'
 
 let root: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-retention-'));
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-retention-')) {
+  root = mkdtempSync(join(tmpdir(), 'openbutler-retention-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-retention-')) {
     throw new Error('Unsafe retention fixture path.');
   }
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -59,7 +59,7 @@ it('prunes only events older than the cutoff', () => {
   writer.insertEvent({ source: 'observer', kind: 'tick', dedupeKey: 'new-event', payload: {} });
   writer.close();
   const raw = new DatabaseSync(path);
-  raw.prepare("UPDATE ranite_events SET received_at = '2020-01-01T00:00:00.000Z' WHERE dedupe_key = 'old-event'").run();
+  raw.prepare("UPDATE openbutler_events SET received_at = '2020-01-01T00:00:00.000Z' WHERE dedupe_key = 'old-event'").run();
   raw.close();
 
   const ledger = new ActivityLedger(path);
@@ -84,7 +84,7 @@ it('prunes an old action and its transitions but keeps newer actions', () => {
   }
   writer.close();
   const raw = new DatabaseSync(path);
-  raw.prepare("UPDATE ranite_actions SET created_at = '2020-01-01T00:00:00.000Z' WHERE request_id = 'action-old'").run();
+  raw.prepare("UPDATE openbutler_actions SET created_at = '2020-01-01T00:00:00.000Z' WHERE request_id = 'action-old'").run();
   raw.close();
 
   const ledger = new ActivityLedger(path);

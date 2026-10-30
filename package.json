@@ -1,5 +1,5 @@
 {
-  "name": "ranite",
+  "name": "openbutler",
   "version": "0.6.0",
   "type": "module",
   "description": "An agent that knows your machine.",
@@ -15,7 +15,7 @@
     "node": ">=22.13.0"
   },
   "bin": {
-    "ranite": "./dist/cli.js"
+    "openbutler": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc && node scripts/copy-brand-assets.mjs && node scripts/copy-builtin-skills.mjs && node scripts/copy-terminal-host.mjs",

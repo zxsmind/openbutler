@@ -3,7 +3,7 @@
 Read when selection is too broad, too narrow, or an explicitly requested
 description optimization needs evidence. This is separate from body quality.
 
-Ranite exposes skill name/description/path in its index, then the model decides
+OpenButler exposes skill name/description/path in its index, then the model decides
 whether to read its instructions. The effective index also depends on valid
 metadata, winning-root precedence, index budget and frozen context. Diagnose
 those first: rewriting a description cannot fix invalid YAML or a hidden copy.
@@ -31,7 +31,7 @@ mark selection as unobserved; semantic review of a description is not a measured
 trigger rate. Repeated model runs can cost tokens and need justified scope.
 
 No included helper calls `claude -p`, assumes the author's current model id is
-available, or provides a universal Ranite selection-test endpoint. Use the
+available, or provides a universal OpenButler selection-test endpoint. Use the
 actual supported execution/trace surface and document its limitations.
 
 ## Revise and compare

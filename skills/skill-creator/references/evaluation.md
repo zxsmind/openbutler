@@ -57,14 +57,14 @@ fixtures, selected model, reasoning/settings and comparable tools. Allocate a
 separate output directory for each variant/repeat so they cannot overwrite or
 learn from one another's artifacts.
 
-Ranite `subagent` is optional. Supply task, skill path, fixtures, output location,
+OpenButler `subagent` is optional. Supply task, skill path, fixtures, output location,
 mode and background explicitly; workers do not inherit this conversation. Explorer
 is read-only, executor can write/run core tools, neither has MCP. A task requiring
 browser/office/MCP capabilities cannot silently be evaluated with an incapable
 worker. Foreground waits obey host tool deadlines. Respect owner holds/stops and
 available worker caps; evaluation is not permission for unlimited delegation.
 
-`ranite --c` is another available isolated request shape, but it still has its own
+`openbutler --c` is another available isolated request shape, but it still has its own
 normal discovery, permissions, provider costs and tool execution. A baseline
 instruction saying "do not load the target skill" is weaker than an environment
 that actually excludes it. Record whether the target body was accessible/read.

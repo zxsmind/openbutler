@@ -31,8 +31,8 @@ let readTool: ToolDefinition;
 let searchTool: ToolDefinition;
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-session-tools-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-session-tools-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   store = await import('../../src/session-store.js');
   registry = await import('../../src/session-registry.js');
@@ -49,7 +49,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllEnvs();
   uuidQueue.length = 0;
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-session-tools-')) {
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-session-tools-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(root, { recursive: true, force: true });

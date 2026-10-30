@@ -11,7 +11,7 @@ export function useSession() {
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
   const [selectedId, setSelectedId] = useState<string | undefined>(() => {
     try {
-      const id = sessionStorage.getItem('ranite:web-session');
+      const id = sessionStorage.getItem('openbutler:web-session');
       return id && /^[a-zA-Z0-9_-]{1,64}$/.test(id) ? id : undefined;
     } catch {
       return undefined;
@@ -60,7 +60,7 @@ export function useSession() {
     setLoadingOlder(false);
     setSelectedId(id);
     try {
-      sessionStorage.setItem('ranite:web-session', id);
+      sessionStorage.setItem('openbutler:web-session', id);
     } catch {
       /* Storage may be disabled. */
     }

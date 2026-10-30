@@ -6,7 +6,7 @@ Related: [environment](environment.md), [sessions](terminal-sessions.md), [confi
 ## Four different locations
 
 The installed application contains executable code; the data directory contains
-Ranite state; the active workspace supplies a turn's command/memory/permission
+OpenButler state; the active workspace supplies a turn's command/memory/permission
 scope; a named project is a stored selection of source folders. These need not
 be the same directory. A path in natural-language text does not itself switch
 the host's selected scope.
@@ -14,10 +14,10 @@ the host's selected scope.
 ## Select workspace from a client
 
 ```text
-ranite --workspace <existing-directory>
-ranite workspace default
-ranite workspace default <existing-directory>
-ranite web --dir <existing-directory>
+openbutler --workspace <existing-directory>
+openbutler workspace default
+openbutler workspace default <existing-directory>
+openbutler web --dir <existing-directory>
 ```
 
 Without an explicit path, a bare terminal launch uses its configured default,
@@ -66,7 +66,7 @@ claim a different project binding by adding a `projectId` field to its body.
    supported project UI and establish a valid binding; changing text in a prompt
    is not a replacement for that operation.
 
-There is no reviewed `ranite project` CLI or native `project_create` agent tool.
+There is no reviewed `openbutler project` CLI or native `project_create` agent tool.
 Project catalog management is a web surface. An agent can use an available browser
 capability or direct the user to the exact selector; it should not invent such a
 CLI command. Workspace CLI selection remains available independently.

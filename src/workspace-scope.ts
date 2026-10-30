@@ -18,7 +18,7 @@ export function classifyWorkspacePath(path: string, workspaceRoot: string): Work
 
 /**
  * Classifies against every root the owner has already trusted for this turn:
- * the directory Ranite was launched in (or an explicit `--workspace`) and the
+ * the directory OpenButler was launched in (or an explicit `--workspace`) and the
  * agent's own scratch area. Any single match keeps the operation inside the
  * approved boundary.
  *

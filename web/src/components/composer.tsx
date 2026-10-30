@@ -157,7 +157,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
             if (typeof forwardedRef === 'function') forwardedRef(node);
             else if (forwardedRef) forwardedRef.current = node;
           }}
-          aria-label="Message Ranite"
+          aria-label="Message OpenButler"
           placeholder="Tell me what to do"
           value={props.draft}
           disabled={props.disabled}

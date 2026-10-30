@@ -26,7 +26,7 @@ import { listSessionFiles, loadSavedSession, samePath, type SessionFileInfo } fr
  *
  * Search is lexical first (SQLite FTS5 with bm25 ordering) and gets a semantic
  * rerank whenever vectors are already stored. Vector population is exclusive to
- * the explicit `ranite sessions index` command, never to a search: measured on a
+ * the explicit `openbutler sessions index` command, never to a search: measured on a
  * live corpus, one user message embeds in ~20 ms while one long assistant reply
  * costs ~120 ms (batches pad to their longest member), so embedding the whole
  * corpus inside an interactive search is not affordable. User and notice
@@ -128,7 +128,7 @@ export class SessionIndex {
    * files lose their rows, changed files are re-read, unchanged files are left
    * alone (mtime and size decide), and a damaged file never leaves stale rows
    * behind. Vector population is deliberately not part of this path; the
-   * `ranite sessions index` command drains the backlog.
+   * `openbutler sessions index` command drains the backlog.
    */
   async ensureIndexed(): Promise<void> {
     const files = listSessionFiles();

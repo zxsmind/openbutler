@@ -8,16 +8,16 @@ let workspace: string;
 let previousDataDir: string | undefined;
 
 beforeEach(() => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-spill-data-'));
-  workspace = mkdtempSync(join(tmpdir(), 'ranite-spill-work-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-spill-data-'));
+  workspace = mkdtempSync(join(tmpdir(), 'openbutler-spill-work-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
   rmSync(dataDir, { recursive: true, force: true });
   rmSync(workspace, { recursive: true, force: true });
 });

@@ -1,5 +1,5 @@
 ﻿/**
- * `ranite usage`: what the machine spent, read from the recorded rows.
+ * `openbutler usage`: what the machine spent, read from the recorded rows.
  *
  * The rows are the record; this command is one view of them. It reads the same
  * SQLite file the host writes, read-only, so asking costs nothing and changes

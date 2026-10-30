@@ -1,18 +1,18 @@
 ---
-name: ranite
-description: "Understand and operate the Ranite environment: installation, host and web setup, configuration, models, skills, MCP, sessions, projects, scheduled tasks, workers, teams, channels, memory, diagnostics, and maintenance. Use for questions or changes about Ranite itself."
+name: openbutler
+description: "Understand and operate the OpenButler environment: installation, host and web setup, configuration, models, skills, MCP, sessions, projects, scheduled tasks, workers, teams, channels, memory, diagnostics, and maintenance. Use for questions or changes about OpenButler itself."
 metadata:
   product_version: "0.6.0"
   reviewed: "2026-10-30"
 ---
 
-# Ranite operating manual
+# OpenButler operating manual
 
 This is the operating manual for the environment the agent runs inside: its
 components, files, interfaces, capabilities and procedures. It is product
 documentation, not a replacement system prompt or a personality definition.
 
-Ranite has one machine-wide background host and custodian conversation. Terminal,
+OpenButler has one machine-wide background host and custodian conversation. Terminal,
 web and Telegram are interfaces to it. The host runs model calls and tools; a
 browser does not move execution onto the browser's machine. A workspace supplies
 the turn's file scope, command directory and workspace memory. A skill supplies
@@ -52,10 +52,10 @@ configured integrations and the tools actually usable in a session can differ.
 Use the smallest relevant inspection:
 
 ```text
-ranite about
-ranite config
-ranite daemon status
-ranite skills --workspace <directory>
+openbutler about
+openbutler config
+openbutler daemon status
+openbutler skills --workspace <directory>
 ```
 
 `about` identifies version/runtime and configuration paths. `config` shows

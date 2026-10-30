@@ -13,14 +13,14 @@ import { getAgentContext } from '../src/agent.js';
 let root: string;
 let workspace: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-memory-contract-test-'));
+  root = mkdtempSync(join(tmpdir(), 'openbutler-memory-contract-test-'));
   workspace = join(root, 'workspace');
   mkdirSync(workspace);
-  vi.stubEnv('RANITE_DATA_DIR', join(root, 'data'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', join(root, 'data'));
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-memory-contract-test-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-memory-contract-test-'))
     throw new Error('Unsafe memory fixture cleanup path.');
   await rm(root, { recursive: true, force: true });
 });

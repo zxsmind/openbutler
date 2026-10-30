@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureHostOwnedRoots } from '../../src/host-owned-paths.js';
 import { getScratchRoot } from '../../src/paths.js';
@@ -15,15 +15,25 @@ const effect = { change: 'modify', data: 'local', network: 'none', reversible: '
 
 let workspace: string;
 let probe: string;
+let suppliedSettings: boolean;
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), 'ranite-host-owned-reg-'));
+  workspace = mkdtempSync(join(tmpdir(), 'openbutler-host-owned-reg-'));
   probe = join(getScratchRoot(), 'host-owned-probe.txt');
+  // The read under test targets the real settings file. A machine that has never
+  // run the app has no file there and would report an error instead of completed,
+  // so the test supplies one and takes it back afterwards.
+  suppliedSettings = !existsSync(getSettingsPath());
+  if (suppliedSettings) {
+    mkdirSync(dirname(getSettingsPath()), { recursive: true });
+    writeFileSync(getSettingsPath(), '{}\n');
+  }
 });
 
 afterEach(() => {
   rmSync(workspace, { recursive: true, force: true });
   rmSync(probe, { force: true });
+  if (suppliedSettings) rmSync(getSettingsPath(), { force: true });
 });
 
 describe('hostPreAuthorized channel', () => {

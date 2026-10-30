@@ -68,7 +68,7 @@ function subsetViolations(value: unknown, path: string): string[] {
 }
 
 it("holds every built-in tool schema to Google's function schema subset", async () => {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-schema-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'openbutler-schema-'));
   const memoryIndex = new MemoryIndex(workspaceRoot);
   try {
     const catalogue = createToolCatalogue({

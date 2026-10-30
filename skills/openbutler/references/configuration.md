@@ -5,7 +5,7 @@ Related: [providers](providers.md), [MCP](mcp.md), [maintenance](maintenance.md)
 
 ## Stores and management surfaces
 
-`ranite about` prints this installation's paths.
+`openbutler about` prints this installation's paths.
 
 | Store | Contents | Supported management |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ Related: [providers](providers.md), [MCP](mcp.md), [maintenance](maintenance.md)
 
 Host policy denies ordinary agent access to the secret store, including full
 access. Public application provider objects can be merged with keys internally;
-raw internal objects are not a public redaction interface. Use `ranite config`,
+raw internal objects are not a public redaction interface. Use `openbutler config`,
 `keys list` and settings views for intended public inspection.
 
 MCP `env`/`headers` map server names to existing **host environment-variable names**,
@@ -41,7 +41,7 @@ invalid or disabled provider configuration rather than using removed credentials
 Defaults apply to new runtimes; an existing chat keeps its selected provider/model.
 Changing environment variables in another process still cannot change the host's
 inherited environment. This reload mechanism must be loaded once by restarting an
-older host after updating Ranite itself.
+older host after updating OpenButler itself.
 
 ## Complete general settings map
 
@@ -97,7 +97,7 @@ separate secret ticket. Schedule fields are detailed in their own reference.
 ## Save versus apply
 
 The specific UI/CLI/tool surface validates inputs and invokes its relevant
-refresh. For direct YAML edits, preserve unrelated fields and inspect `ranite
+refresh. For direct YAML edits, preserve unrelated fields and inspect `openbutler
 config` afterward. The host watches settings files with a debounced reload;
 saved configuration, applied runtime and model-visible context remain distinct.
 
@@ -119,16 +119,16 @@ stale state, compare file, runtime, process identity and next step before restar
 ## Approval modes and controls
 
 ```text
-ranite permissions
-ranite permissions workspace
-ranite permissions auto-review
-ranite permissions full-access
-ranite permissions --review-timeout 30
-ranite permissions --approval-timeout 120
-ranite permissions --review-model <provider>/<model>
-ranite permissions --review-model none
-ranite approve
-ranite approve <number>
+openbutler permissions
+openbutler permissions workspace
+openbutler permissions auto-review
+openbutler permissions full-access
+openbutler permissions --review-timeout 30
+openbutler permissions --approval-timeout 120
+openbutler permissions --review-model <provider>/<model>
+openbutler permissions --review-model none
+openbutler approve
+openbutler approve <number>
 ```
 
 Workspace mode pre-authorizes the workspace, dated scratch and specific host-owned
@@ -139,7 +139,7 @@ prompts, not secret-store denial or domain validity checks.
 
 Reviewer outcomes are allow, deny and escalate for a particular action. Three
 consecutive denials or ten in the recent fifty pause automatic review. Expiring a
-manual prompt denies that action. `ranite approve` lists recent denials; choosing
+manual prompt denies that action. `openbutler approve` lists recent denials; choosing
 a number permits one retry of that recorded action, still through review.
 
 Workspace path inspection is a permission policy, not an OS sandbox. A program

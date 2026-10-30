@@ -8,7 +8,7 @@
 | Reviewed | Instructions/resources/scripts/licenses and dependencies inspected |
 | Copied | Actual destination manifest matches selected staged source |
 | Structurally valid | Valid YAML/name/description and resource/link/path checks |
-| Discoverable | `ranite skills --workspace <directory>` returns the intended winning path |
+| Discoverable | `openbutler skills --workspace <directory>` returns the intended winning path |
 | Dependency-ready | Needed executables, libraries and integrations are actually available |
 | Behaviorally verified | An appropriate real task/artifact check succeeded |
 
@@ -16,7 +16,7 @@ Use passed/failed/blocked per check. Missing evidence is not a pass, and an
 observed wrong outcome is not merely an unrun check. Installing a package does
 not establish model selection, an active MCP integration or release readiness.
 
-## Ranite discovery checks
+## OpenButler discovery checks
 
 Required entrypoint is SKILL.md in a valid directory. Folder and `name` match,
 lowercase letters/digits separated by single hyphens, at most 64 characters.
@@ -25,7 +25,7 @@ colon-bearing values. The metadata prefix is bounded. A loose Markdown file or
 symlinked entrypoint is not equivalent to a valid package.
 
 Inspect the selected workspace explicitly. Roots are bundled skills, home Claude,
-home Agents, CODEX_HOME/default Codex, Ranite data skills, workspace Claude and
+home Agents, CODEX_HOME/default Codex, OpenButler data skills, workspace Claude and
 workspace Agents, with later copies overriding earlier ones. The winning path
 must resolve to the intended destination; a listing in another root is not proof
 of this install. Built-in source edits must be copied into bundled distribution.
@@ -42,11 +42,11 @@ Validate every actual relative link outside illustrative code fences. Referenced
 files remain inside the package, exist at the installed location and retain
 required licenses. A creator validation helper can assist when discovered;
 otherwise use an available YAML parser, file inspection and the native discovery
-check. A validator from another product is not a substitute for Ranite's own
+check. A validator from another product is not a substitute for OpenButler's own
 folder/description constraints.
 
 Read imported agent-platform metadata instead of deleting it indiscriminately.
-Ranite may ignore unsupported fields; do not advertise them as implemented
+OpenButler may ignore unsupported fields; do not advertise them as implemented
 policies. Missing Python/Node libraries, a foreign SDK or an absent browser/API
 tool can leave a discoverable package dependency-blocked. A license or source
 record does not make an executable safe; inspect it separately.
@@ -68,7 +68,7 @@ record does not make an executable safe; inspect it separately.
 | Listed from another root | Inspect precedence and actual intended workspace |
 | Listed but not invoked | Separate frozen index/description choice from filesystem validity |
 | Partial apply | Inspect reported new partial path and recovery copy; no blanket recursive cleanup |
-| SDK/Tessl tool absent | Foreign integration, not a mandatory Ranite install gate |
+| SDK/Tessl tool absent | Foreign integration, not a mandatory OpenButler install gate |
 
 For source updates to the installer/creator themselves, preserve their provenance
 and validate their resources as well. Do not edit provider-managed Codex or Claude

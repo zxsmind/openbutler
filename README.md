@@ -1,29 +1,29 @@
-# Ranite
+# OpenButler
 
-Ranite is a general-purpose AI agent for the terminal. It runs as one background host on your machine and answers from a terminal UI, from Telegram, or from a browser client. It uses local tools, MCP servers, Agent Skills, and durable memory.
+OpenButler is a general-purpose AI agent for the terminal. It runs as one background host on your machine and answers from a terminal UI, from Telegram, or from a browser client. It uses local tools, MCP servers, Agent Skills, and durable memory.
 
 ## Install
 
 Pick the installer for your system. It downloads a self-contained package
 with its own Node.js runtime — no Node.js, npm, or admin rights needed — and
-sets up the `ranite` command:
+sets up the `openbutler` command:
 
 Linux (x64/arm64) and macOS (bash, zsh, fish; Windows users in Git Bash too):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zxsmind/ranite/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zxsmind/openbutler/main/install.sh | bash
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/zxsmind/ranite/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/zxsmind/openbutler/main/install.ps1 | iex
 ```
 
 A specific release: `bash -s -- --version 0.6.0` for the shell installer, or
 download `install.ps1` first and run `.\install.ps1 -Version 0.6.0`.
 `--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
-Both installers verify the result with `ranite --version`; restart the
+Both installers verify the result with `openbutler --version`; restart the
 terminal afterwards so the updated PATH takes effect.
 
 Published builds: Windows x64, Linux x64 and Linux arm64 in the same release;
@@ -32,7 +32,7 @@ macOS follows in a later release.
 Configure a provider and model once:
 
 ```sh
-ranite setup
+openbutler setup
 ```
 
 The wizard asks for a provider, its API key, and one model, then downloads the
@@ -42,7 +42,7 @@ configured it also offers to prepare the memory model on its own.
 
 ## How it runs
 
-`ranite` starts the background host if it is not already running and attaches
+`openbutler` starts the background host if it is not already running and attaches
 this terminal to it. The host keeps running after the terminal closes, which is
 what lets schedules, Telegram turns, and long runs continue unattended. The TUI
 only renders; every turn executes in the host.
@@ -52,35 +52,35 @@ client reach its current session; the paired Telegram chat stays bound to the
 one session it started from until `/clear` rebinds it, so Telegram routing never
 shifts when the terminal switches chats. Each turn carries the
 workspace it was sent from, so the scope of a turn never depends on which client
-typed it. Bare `ranite` uses the directory you launched it in as the workspace,
+typed it. Bare `openbutler` uses the directory you launched it in as the workspace,
 so work there runs without permission prompts and nothing is asked at startup.
 To attach a client to a different workspace for its turns:
 
 ```sh
-ranite --workspace path/to/project
+openbutler --workspace path/to/project
 ```
 
 Pin a stable default for bare launches with:
 
 ```sh
-ranite workspace default path/to/project
+openbutler workspace default path/to/project
 ```
 
 `--workspace` accepts an absolute or current-directory-relative path (including
-`~` on macOS/Linux). Ranite checks that it exists and is a directory. A path
+`~` on macOS/Linux). OpenButler checks that it exists and is a directory. A path
 mentioned in a request does not switch the scope.
 
 Two roots never need a permission prompt: the active workspace and the agent's
-dated scratch directory under the system temp folder (`Temp/ranite/YYYY-MM-DD`).
+dated scratch directory under the system temp folder (`Temp/openbutler/YYYY-MM-DD`).
 The agent writes throwaway scripts, experiments, and intermediate output there;
 the operating system may delete it at any time, so anything worth keeping belongs
-in the workspace or a named project. Ranite's own memory documents, its settings
+in the workspace or a named project. OpenButler's own memory documents, its settings
 file, and the tool output it spilled to disk are also pre-authorized. The secret
 store is never reachable by any tool, under any mode.
 
 ## Permission modes
 
-Run `ranite permissions` or use `/permissions` in the session.
+Run `openbutler permissions` or use `/permissions` in the session.
 
 - Workspace (default): file and command operations inside the active workspace or the scratch directory run without a prompt. Operations outside them ask first.
 - Approve for me: keeps the workspace rule and uses a model to review outside-workspace actions. Unclear or unavailable reviews ask you.
@@ -97,13 +97,13 @@ you instead. Three consecutive denials, or ten in the last fifty reviews, pause
 review and send the next action to you.
 
 A slow or rate-limited provider can time out the review, which falls back to a
-manual prompt. Raise the limit with `ranite permissions --review-timeout
+manual prompt. Raise the limit with `openbutler permissions --review-timeout
 <seconds>` (5–600; default 15). A manual prompt waits `--approval-timeout`
 seconds (5–600; default 60) before it expires; an expired prompt denies that one
-action and the run continues. Run the reviewer on its own model with `ranite
+action and the run continues. Run the reviewer on its own model with `openbutler
 permissions --review-model <provider>/<model>`, and drop it with `none`.
 
-`ranite permissions` also reports the recorded verdicts so you can see how often
+`openbutler permissions` also reports the recorded verdicts so you can see how often
 the mode decided versus needed you:
 
 ```text
@@ -112,14 +112,14 @@ Auto-review history
   Needed you      2 (timeout 1 · invalid-output 1)
 ```
 
-When review denies an exact action, `ranite approve` lists the recent denials and
-`ranite approve <n>` grants one retry. The retry still goes through review.
+When review denies an exact action, `openbutler approve` lists the recent denials and
+`openbutler approve <n>` grants one retry. The retry still goes through review.
 
 The workspace mode checks file paths, command working directories, directory
 changes, and common explicit paths in shell commands. It is a permission prompt
 policy, not an operating-system sandbox; shell scripts and programs can access
 paths that static command inspection cannot identify. The trusted boundary is the
-directory you launched Ranite in, so launching it in a home directory trusts that
+directory you launched OpenButler in, so launching it in a home directory trusts that
 whole tree for writes.
 
 ## Tools
@@ -151,23 +151,23 @@ the transcript, or a notification sees it.
 
 ## Providers and models
 
-Ranite carries no provider list in code. Providers and their models come from the
+OpenButler carries no provider list in code. Providers and their models come from the
 models.dev catalog, cached for twelve hours, and a stale cache is still used when
 the catalog is unreachable. Bundled AI SDK adapters cover the common providers;
 any other provider in the catalog installs its runtime package on first use into
 the data directory. A self-hosted endpoint or a model the catalog does not list is
-configured with `ranite setup` as a custom provider: pick the runtime package,
+configured with `openbutler setup` as a custom provider: pick the runtime package,
 the base URL, and the model id.
 
 Only models the catalog marks as able to call tools are offered. A model that
 cannot call a tool is not a weaker option here; it is not an option.
-`ranite --list-models` prints all catalog models for the configured
+`openbutler --list-models` prints all catalog models for the configured
 providers, with `--filter`, `--limit`, and `--provider`.
 
 In an interactive session, `/provider` adds a provider, its key, and a model, and
 `/models` switches among the models you have configured. Provider API keys live in
 `config.yaml`, separate from `settings.yaml`; the agent can never open that file.
-Manage keys with `ranite keys add|list|remove` (masked prompt, never as
+Manage keys with `openbutler keys add|list|remove` (masked prompt, never as
 arguments). Several keys for one provider are used in turn: a rate limit or a
 rejected key waits through 1s, 2s, 4s, 8s, 16s, 32s and then moves to the next
 key. MCP server credentials are host environment variables referenced by name,
@@ -180,16 +180,16 @@ strongest level the current model offers instead of silently sending nothing.
 ## Agent Skills
 
 A skill is a directory with a `SKILL.md` that carries a name and a description in
-its frontmatter. Ranite loads only that metadata at session start and reads the
+its frontmatter. OpenButler loads only that metadata at session start and reads the
 instructions when a task calls for them. Roots, in override order: the bundled
 skills, `~/.claude/skills`, `~/.agents/skills`, `$CODEX_HOME/skills` (default
 `~/.codex/skills`), the data directory's `skills/`, then `.claude/skills` and
 `.agents/skills` inside the active workspace. A later root overrides an earlier
-skill of the same name. `ranite skills` lists what was found and where.
+skill of the same name. `openbutler skills` lists what was found and where.
 
 ## MCP servers
 
-`ranite mcp` adds, lists, and removes global MCP servers over stdio, streamable
+`openbutler mcp` adds, lists, and removes global MCP servers over stdio, streamable
 HTTP, or SSE. A stdio server starts in the data directory unless it declares its
 own `cwd`; environment values and HTTP headers are host variable names, never
 saved secrets. Tools from a connected server join the catalogue as
@@ -208,17 +208,17 @@ server-local, and an ISO value with an offset is converted when it is saved.
 A firing becomes a durable event, runs in the session that created the schedule
 when that session still exists, and otherwise continues in the schedule's own
 session. Run count, last result, last error, and the closing report are kept, so
-`ranite schedule list` shows the durable state even while the host is down, and
-`ranite schedule log <id>` shows the recent firings. `ranite schedule open <id>`
+`openbutler schedule list` shows the durable state even while the host is down, and
+`openbutler schedule log <id>` shows the recent firings. `openbutler schedule open <id>`
 attaches a terminal to the schedule's session. Missed intervals coalesce into one
 wakeup; a one-shot that was interrupted resumes as late rather than vanishing.
 
 ## Teams
 
-`ranite team` forms a closed group of Ranite machines over a Tailscale tailnet.
+`openbutler team` forms a closed group of OpenButler machines over a Tailscale tailnet.
 The hub binds one tailnet address (default port 47821) and refuses any other
 interface. A member joins with a single-use invite code, the hub owner approves
-the request with `ranite team approve`, and the member receives a bearer ticket
+the request with `openbutler team approve`, and the member receives a bearer ticket
 that is stored in the secret store. Every later request carries that ticket, and
 the hub records only its hash.
 
@@ -253,7 +253,7 @@ One guided command connects a private Telegram chat to the machine-wide
 custodian conversation as one fixed line:
 
 ```sh
-ranite telegram setup
+openbutler telegram setup
 ```
 
 It asks for the environment variable holding the bot token (paste the token from
@@ -261,7 +261,7 @@ It asks for the environment variable holding the bot token (paste the token from
 settings file) and Telegram's default workspace scope, then starts the host, waits
 while you send the one-time pairing command to the bot, and delivers a test
 message to prove the channel works end to end. That setting selects the scope of
-Telegram turns; it does not define Ranite's identity. In the chat, `/approvals`
+Telegram turns; it does not define OpenButler's identity. In the chat, `/approvals`
 re-sends pending approvals, `/stop` stops the current run while preserving queued
 messages, `/stop <schedule-id>` stops a scheduled run, `/clear` starts a new chat
 and rebinds the line, and `/sessions` lists the last 10 chats. A live draft shows current output and a
@@ -283,9 +283,9 @@ Ordinary replies never broadcast to every connected channel. On Windows, a new
 host can read a token already saved in the user environment even when its
 launching shell has an older environment snapshot.
 
-Further commands: `ranite telegram status`, `ranite telegram pair` (fresh pairing
-code), `ranite telegram unpair` (forget the chat, keep the channel polling),
-`ranite telegram disable` (stop the channel, keep the settings), `ranite telegram
+Further commands: `openbutler telegram status`, `openbutler telegram pair` (fresh pairing
+code), `openbutler telegram unpair` (forget the chat, keep the channel polling),
+`openbutler telegram disable` (stop the channel, keep the settings), `openbutler telegram
 reset` (remove the channel, settings, and — with `--remove-env` — the token from
 the user environment).
 
@@ -294,7 +294,7 @@ The bot registers a command menu (`/start`, `/approvals`, `/stop`, `/clear`,
 (falling back to plain text if Telegram rejects the markup), and pins an
 Approvals/Stop reply keyboard that is removed again on unpair, disable, or reset.
 
-Login startup (`ranite daemon autostart on`; `ranite daemon install` also works)
+Login startup (`openbutler daemon autostart on`; `openbutler daemon install` also works)
 carries the token too: on macOS it is embedded in the managed LaunchAgent (written
 0600), on Linux the unit reads an optional 0600 env file, on Windows the user
 environment already covers logon. Rewiring happens automatically during setup;
@@ -305,33 +305,33 @@ On servers, provide the token through the service manager (systemd
 non-interactively:
 
 ```sh
-ranite telegram setup --token-env=TELEGRAM_BOT_TOKEN --workspace=/srv/ranite --no-wait
+openbutler telegram setup --token-env=TELEGRAM_BOT_TOKEN --workspace=/srv/openbutler --no-wait
 ```
 
 ## Browser client
 
-`ranite web` serves a browser client from this machine and pushes the same session
+`openbutler web` serves a browser client from this machine and pushes the same session
 over one server-sent event stream; rendering happens in the browser, so the host
 process stays where it is.
 
 ```sh
-ranite web [--port 45278] [--hostname 127.0.0.1] [--dir path/to/project] [--pair]
+openbutler web [--port 45278] [--hostname 127.0.0.1] [--dir path/to/project] [--pair]
 ```
 
-Plain `ranite web` starts the server in the background and prints its address;
-paired browsers reconnect on their own. Pairing is explicit: `ranite web --pair`
+Plain `openbutler web` starts the server in the background and prints its address;
+paired browsers reconnect on their own. Pairing is explicit: `openbutler web --pair`
 runs a pairing session in this terminal, prints a one-time link that expires in
 five minutes, and sets an HttpOnly session cookie when opened. Press Enter for a
 fresh link; Ctrl+C stops the session. The address binds loopback by default;
 binding another interface prints a warning, because the pairing link is then
-reachable from the network. `ranite restart` recycles the browser server
+reachable from the network. `openbutler restart` recycles the browser server
 together with the background host whenever it is running.
 The client can send messages and images, switch chats and models, stop a run, and
 answer approvals and questions.
 
 ## Durable memory
 
-Markdown is the source of truth. Memory lives in Ranite's data directory; its
+Markdown is the source of truth. Memory lives in OpenButler's data directory; its
 layout is the same on Windows, macOS, and Linux:
 
 ```text
@@ -391,7 +391,7 @@ same directory. A session stores the display transcript, the model conversation,
 and — once a compaction has happened — the complete pre-compaction archive.
 Saving is debounced during a run and flushed on exit.
 
-When the model context approaches its limit, Ranite compacts automatically: one
+When the model context approaches its limit, OpenButler compacts automatically: one
 model request writes a continuation checkpoint covering the whole context, recent
 dialogue and the latest tool results stay verbatim, and older reasoning and large
 tool payloads are covered by the checkpoint while remaining in the archive.
@@ -401,11 +401,11 @@ boundary, after the pending tool batch and before the next model request.
 `session_search` searches every saved transcript on the machine, lexically first
 and with a semantic rerank when vectors exist; `session_read` opens a window of
 one transcript; `session_list` shows recent sessions with their workspace and
-preview. `ranite sessions index` builds or refreshes the derived search index
-(`--rebuild` drops it first), and `ranite sessions prune --older-than 30d`
+preview. `openbutler sessions index` builds or refreshes the derived search index
+(`--rebuild` drops it first), and `openbutler sessions prune --older-than 30d`
 deletes old session files, listing what it would delete until `--yes` is given.
 
-The data directory holds everything Ranite writes:
+The data directory holds everything OpenButler writes:
 
 ```text
 settings.yaml        settings, no key material
@@ -422,59 +422,59 @@ team.db, team-files/ team hub state and shared files
 daemon.log           host log
 ```
 
-Its location is `%LOCALAPPDATA%\ranite` on Windows,
-`~/Library/Application Support/ranite` on macOS, and `$XDG_DATA_HOME/ranite` (or
-`~/.local/share/ranite`) on Linux. `RANITE_DATA_DIR` overrides it. `ranite about`
+Its location is `%LOCALAPPDATA%\openbutler` on Windows,
+`~/Library/Application Support/openbutler` on macOS, and `$XDG_DATA_HOME/openbutler` (or
+`~/.local/share/openbutler`) on Linux. `OPENBUTLER_DATA_DIR` overrides it. `openbutler about`
 prints the version, the runtime, and these paths.
 
 ## CLI
 
 ```text
-ranite                    Open an interactive terminal session
-ranite --workspace <path> Attach the shared custodian with this workspace scope
-ranite --c "<request>"    Run a one-shot request
-ranite setup              First-run wizard: provider, key, model, memory model
-ranite config             Show the current settings and readiness
-ranite keys add|list|remove <provider>   Manage provider API keys
-ranite permissions [workspace|auto-review|full-access]
+openbutler                    Open an interactive terminal session
+openbutler --workspace <path> Attach the shared custodian with this workspace scope
+openbutler --c "<request>"    Run a one-shot request
+openbutler setup              First-run wizard: provider, key, model, memory model
+openbutler config             Show the current settings and readiness
+openbutler keys add|list|remove <provider>   Manage provider API keys
+openbutler permissions [workspace|auto-review|full-access]
                           Choose the approval mode
-ranite permissions --review-timeout 30   Auto-review decision timeout (seconds)
-ranite permissions --approval-timeout 60 Manual approval timeout (seconds)
-ranite permissions --review-model <provider>/<model>|none
+openbutler permissions --review-timeout 30   Auto-review decision timeout (seconds)
+openbutler permissions --approval-timeout 60 Manual approval timeout (seconds)
+openbutler permissions --review-model <provider>/<model>|none
                           Run the reviewer on its own model
-ranite approve [n]        List auto-review denials; retry one exactly once
-ranite mcp [list|add|remove]             Manage global MCP servers
-ranite skills             List global and active-workspace Agent Skills
-ranite --list-models      List catalog models (--filter, --limit, --provider)
-ranite schedule list|log|capabilities|add|update|remove|enable|disable|run|open
-ranite team <subcommand>  init, invite, invites, invite-revoke, join, join-status,
+openbutler approve [n]        List auto-review denials; retry one exactly once
+openbutler mcp [list|add|remove]             Manage global MCP servers
+openbutler skills             List global and active-workspace Agent Skills
+openbutler --list-models      List catalog models (--filter, --limit, --provider)
+openbutler schedule list|log|capabilities|add|update|remove|enable|disable|run|open
+openbutler team <subcommand>  init, invite, invites, invite-revoke, join, join-status,
                           pending, approve, deny, members, leave, remove, status,
                           log, rejoin, say, dm, inbox, read, history, send-file,
                           files, get
-ranite telegram setup|pair|status|disable|unpair|reset
-ranite web                Serve the browser client (--port, --hostname, --dir; --pair)
-ranite daemon start|status|stop|install|uninstall|autostart on|off|status
-ranite stop               Stop the background host
-ranite restart            Restart the host and browser server, reconnect open sessions
-ranite sessions index [--rebuild]        Build the session search index
-ranite sessions prune --older-than 30d [--yes]
+openbutler telegram setup|pair|status|disable|unpair|reset
+openbutler web                Serve the browser client (--port, --hostname, --dir; --pair)
+openbutler daemon start|status|stop|install|uninstall|autostart on|off|status
+openbutler stop               Stop the background host
+openbutler restart            Restart the host and browser server, reconnect open sessions
+openbutler sessions index [--rebuild]        Build the session search index
+openbutler sessions prune --older-than 30d [--yes]
                           Delete old session files
-ranite events [retry <id>]               Inspect the durable event ledger
-ranite events prune --older-than 30d [--yes]
-ranite actions                           Inspect the tool action ledger
-ranite workspace default <path>          Scope for bare Ranite launches
-ranite about              Version, runtime, configuration paths
-ranite uninstall [--purge] [--dry-run] [--force]
+openbutler events [retry <id>]               Inspect the durable event ledger
+openbutler events prune --older-than 30d [--yes]
+openbutler actions                           Inspect the tool action ledger
+openbutler workspace default <path>          Scope for bare OpenButler launches
+openbutler about              Version, runtime, configuration paths
+openbutler uninstall [--purge] [--dry-run] [--force]
                           Remove the program; --purge removes data too
-ranite --help             Show all commands
-ranite --version          Print the installed version
+openbutler --help             Show all commands
+openbutler --version          Print the installed version
 ```
 
-`ranite restart` stops active runs, saves sessions, waits for the previous
+`openbutler restart` stops active runs, saves sessions, waits for the previous
 host to exit before starting the replacement, and recycles a tracked browser
 server with it. Open sessions reconnect and restore
 their history. Closing the TUI only detaches it; use this command after updating
-Ranite to reload the background host. `ranite` narrates the lifecycle on launch
+OpenButler to reload the background host. `openbutler` narrates the lifecycle on launch
 (workspace, host pid, automatic-startup state) and on exit (whether the host keeps
 running).
 

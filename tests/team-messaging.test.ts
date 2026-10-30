@@ -16,11 +16,11 @@ let target: JoinTarget;
 let murphyTicket: string;
 
 beforeEach(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-msg-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-team-msg-'));
   store = new TeamStore(join(dataDir, 'team.db'));
   const now = Date.now();
-  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-  store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-2222', now);
+  store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+  store.createJoinRequest('jr_m', 'Murphy-OpenButler', 'kartal-2222', now);
   murphyTicket = makeTicket();
   store.decideJoin('jr_m', true, murphyTicket, hashTicket(murphyTicket), now);
   store.confirmTicket('jr_m');
@@ -42,7 +42,7 @@ describe('team messaging over the hub', () => {
     expect(second.seq! > first.seq!).toBe(true);
     const group = await fetchGroup(target, murphyTicket, 0);
     expect(group.messages.map((message) => message.body)).toEqual(['hello team', 'second']);
-    expect(group.messages.every((message) => message.sender === 'Murphy-Ranite')).toBe(true);
+    expect(group.messages.every((message) => message.sender === 'Murphy-OpenButler')).toBe(true);
     expect(group.latestSeq).toBe(second.seq);
   });
 
@@ -68,8 +68,8 @@ describe('team messaging over the hub', () => {
   });
 
   it('holds DMs until the recipient acknowledges, and never delivers them to the group', async () => {
-    const hub = localChannel(store, 'Atreus-Ranite');
-    await hub.send('Murphy-Ranite', 'private ping');
+    const hub = localChannel(store, 'Atreus-OpenButler');
+    await hub.send('Murphy-OpenButler', 'private ping');
     const inbox = await fetchInbox(target, murphyTicket);
     expect(inbox.count).toBe(1);
     expect(inbox.messages[0]?.body).toBe('private ping');
@@ -83,7 +83,7 @@ describe('team messaging over the hub', () => {
   });
 
   it('rejects a message to an unknown member and an empty body', async () => {
-    await expect(postMessage(target, murphyTicket, { recipient: 'Nobody-Ranite', body: 'hi' })).rejects.toThrow('No member named');
+    await expect(postMessage(target, murphyTicket, { recipient: 'Nobody-OpenButler', body: 'hi' })).rejects.toThrow('No member named');
     await expect(postMessage(target, murphyTicket, { recipient: 'group', body: '   ' })).rejects.toThrow('cannot be empty');
   });
 
@@ -99,16 +99,16 @@ describe('team messaging over the hub', () => {
 
 describe('persistent history', () => {
   it('pages older group and direct messages without consuming anything', async () => {
-    const hub = localChannel(store, 'Atreus-Ranite');
+    const hub = localChannel(store, 'Atreus-OpenButler');
     await hub.send('group', 'g1');
-    await hub.send('Murphy-Ranite', 'dm1');
+    await hub.send('Murphy-OpenButler', 'dm1');
     await hub.send('group', 'g2');
-    await hub.send('Murphy-Ranite', 'dm2');
+    await hub.send('Murphy-OpenButler', 'dm2');
 
     const group = await fetchHistory(target, murphyTicket, { scope: 'group', limit: 10 });
     expect(group.messages.map((message) => message.body)).toEqual(['g2', 'g1']);
 
-    const dm = await fetchHistory(target, murphyTicket, { scope: 'dm', peer: 'atreus-ranite', limit: 10 });
+    const dm = await fetchHistory(target, murphyTicket, { scope: 'dm', peer: 'atreus-openbutler', limit: 10 });
     expect(dm.messages.map((message) => message.body)).toEqual(['dm2', 'dm1']);
 
     // History is read-only: the messages are still unread for Murphy.
@@ -122,14 +122,14 @@ describe('persistent history', () => {
 
 describe('team channels', () => {
   it('behaves the same locally (hub) and remotely (member)', async () => {
-    const hub = localChannel(store, 'Atreus-Ranite');
-    const member = remoteChannel(target, murphyTicket, 'Murphy-Ranite');
+    const hub = localChannel(store, 'Atreus-OpenButler');
+    const member = remoteChannel(target, murphyTicket, 'Murphy-OpenButler');
 
     await member.send('group', 'from murphy');
     const hubView = await hub.group(0);
     expect(hubView.messages.map((message) => message.body)).toEqual(['from murphy']);
 
-    await hub.send('Murphy-Ranite', 'from hub');
+    await hub.send('Murphy-OpenButler', 'from hub');
     const memberInbox = await member.inbox();
     expect(memberInbox.messages.map((message) => message.body)).toEqual(['from hub']);
     await member.ack(memberInbox.messages.map((message) => message.msgId));

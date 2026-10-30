@@ -11,8 +11,8 @@ const SESSION_ID = '11111111-1111-4111-8111-111111111111';
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6C9sAAAAASUVORK5CYII=';
 let root: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-image-provider-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-image-provider-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
 });
 afterEach(() => {
   vi.unstubAllEnvs();

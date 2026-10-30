@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function tempDb(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'ranite-skill-path-'));
+  const directory = mkdtempSync(join(tmpdir(), 'openbutler-skill-path-'));
   temporary.push(directory);
   return join(directory, 'state.db');
 }
@@ -34,9 +34,9 @@ function update(name: string, input: Record<string, unknown>): ToolActionUpdate 
 
 describe('skillNameFromPath', () => {
   it('names the skill directory a file access runs through', () => {
-    expect(skillNameFromPath('C:\\Users\\x\\AppData\\Local\\ranite\\skills\\skill-creator\\SKILL.md')).toBe('skill-creator');
+    expect(skillNameFromPath('C:\\Users\\x\\AppData\\Local\\openbutler\\skills\\skill-creator\\SKILL.md')).toBe('skill-creator');
     expect(skillNameFromPath('/repo/.agents/skills/bug-reaper/references/cases.md')).toBe('bug-reaper');
-    expect(skillNameFromPath('/repo/skills/ranite/SKILL.md')).toBe('ranite');
+    expect(skillNameFromPath('/repo/skills/openbutler/SKILL.md')).toBe('openbutler');
   });
 
   it('leaves ordinary files and missing paths alone', () => {
@@ -59,7 +59,7 @@ describe('recorded skill column', () => {
     }
     const database = new DatabaseSync(path, { readOnly: true });
     try {
-      const rows = database.prepare('SELECT request_id, skill FROM ranite_actions ORDER BY request_id').all() as Array<{
+      const rows = database.prepare('SELECT request_id, skill FROM openbutler_actions ORDER BY request_id').all() as Array<{
         request_id: string;
         skill: string | null;
       }>;
@@ -76,7 +76,7 @@ describe('recorded skill column', () => {
     const path = tempDb();
     const database = new DatabaseSync(path);
     database.exec(`
-      CREATE TABLE ranite_actions (
+      CREATE TABLE openbutler_actions (
         request_id TEXT PRIMARY KEY,
         workspace_root TEXT NOT NULL,
         session_id TEXT NOT NULL,
@@ -87,7 +87,7 @@ describe('recorded skill column', () => {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      INSERT INTO ranite_actions (request_id, workspace_root, session_id, provider_id, tool_name, state, input_json, created_at, updated_at)
+      INSERT INTO openbutler_actions (request_id, workspace_root, session_id, provider_id, tool_name, state, input_json, created_at, updated_at)
       VALUES
         ('old-skill', 'C:\\repo', 's', 'host', 'file_read', 'completed', '{"path":"C:\\\\repo\\\\skills\\\\legacy\\\\SKILL.md"}', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z'),
         ('old-plain', 'C:\\repo', 's', 'host', 'grep', 'completed', '{"pattern":"x"}', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z');
@@ -96,9 +96,9 @@ describe('recorded skill column', () => {
 
     const ledger = new ActivityLedger(path);
     try {
-      const columns = ledger['database'].prepare('PRAGMA table_info(ranite_actions)').all() as Array<{ name: string }>;
+      const columns = ledger['database'].prepare('PRAGMA table_info(openbutler_actions)').all() as Array<{ name: string }>;
       expect(columns.some((column) => column.name === 'skill')).toBe(true);
-      const rows = ledger['database'].prepare('SELECT request_id, skill FROM ranite_actions ORDER BY request_id').all() as Array<{
+      const rows = ledger['database'].prepare('SELECT request_id, skill FROM openbutler_actions ORDER BY request_id').all() as Array<{
         request_id: string;
         skill: string | null;
       }>;

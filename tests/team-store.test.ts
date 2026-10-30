@@ -46,7 +46,7 @@ describe('tailnet address handling', () => {
 
 describe('member names', () => {
   it('accepts safe names and refuses the rest', () => {
-    expect(validateMemberName('Atreus-Ranite')).toBe('Atreus-Ranite');
+    expect(validateMemberName('Atreus-OpenButler')).toBe('Atreus-OpenButler');
     expect(validateMemberName('  Murphy_2  ')).toBe('Murphy_2');
     expect(() => validateMemberName('a b')).toThrow();
     expect(() => validateMemberName('-lead')).toThrow();
@@ -74,10 +74,10 @@ describe('team secrets', () => {
 
 let dataDir: string;
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-team-store-'));
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-team-store-'));
 });
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 describe('TeamStore', () => {
@@ -85,14 +85,14 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 1_000;
-    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
     expect(store.isInitialized()).toBe(true);
     expect(() => store.initHub('other', 'team-2', 'X', 'Y', now)).toThrow('already initialized');
-    expect(store.nameTaken('atreus-ranite')).toBe(true);
+    expect(store.nameTaken('atreus-openbutler')).toBe(true);
 
     store.createInvite('kartal-1234', 60_000, now);
     expect(store.getInvite('kartal-1234', now)?.code).toBe('kartal-1234');
-    expect(store.consumeInvite('kartal-1234', 'Murphy-Ranite', now)).toBe(true);
+    expect(store.consumeInvite('kartal-1234', 'Murphy-OpenButler', now)).toBe(true);
     expect(store.consumeInvite('kartal-1234', 'Someone', now)).toBe(false);
     expect(store.getInvite('kartal-1234', now)).toBeNull();
 
@@ -106,8 +106,8 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 5_000;
-    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-    store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+    store.createJoinRequest('jr_1', 'Murphy-OpenButler', 'kartal-1234', now);
     expect(store.listPendingJoins()).toHaveLength(1);
 
     const ticket = makeTicket();
@@ -119,7 +119,7 @@ describe('TeamStore', () => {
     expect(store.peekTicket('jr_1', now, 60_000)).toBe(ticket);
     store.confirmTicket('jr_1');
     expect(store.peekTicket('jr_1', now, 60_000)).toBeNull();
-    expect(store.findByTicketHash(hashTicket(ticket))?.name).toBe('Murphy-Ranite');
+    expect(store.findByTicketHash(hashTicket(ticket))?.name).toBe('Murphy-OpenButler');
     store.close();
   });
 
@@ -127,8 +127,8 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 1_000;
-    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-    store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+    store.createJoinRequest('jr_1', 'Murphy-OpenButler', 'kartal-1234', now);
     const ticket = makeTicket();
     store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now);
     expect(store.peekTicket('jr_1', now + 60_001, 60_000)).toBeNull();
@@ -139,22 +139,22 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 9_000;
-    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-    store.createJoinRequest('jr_1', 'Murphy-Ranite', 'kartal-1234', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+    store.createJoinRequest('jr_1', 'Murphy-OpenButler', 'kartal-1234', now);
     const ticket = makeTicket();
     store.decideJoin('jr_1', true, ticket, hashTicket(ticket), now);
     store.confirmTicket('jr_1');
 
     // A second Murphy cannot slip in even if a request exists.
-    store.createJoinRequest('jr_2', 'murphy-ranite', 'kartal-5678', now);
+    store.createJoinRequest('jr_2', 'murphy-openbutler', 'kartal-5678', now);
     expect(store.decideJoin('jr_2', true, makeTicket(), hashTicket('x'), now)).toBe(false);
 
-    expect(store.removeMember('Murphy-Ranite', now)).toBe('removed');
+    expect(store.removeMember('Murphy-OpenButler', now)).toBe('removed');
     expect(store.findByTicketHash(hashTicket(ticket))).toBeNull();
-    expect(store.removeMember('Murphy-Ranite', now)).toBe('missing');
-    expect(store.removeMember('Atreus-Ranite', now)).toBe('hub');
+    expect(store.removeMember('Murphy-OpenButler', now)).toBe('missing');
+    expect(store.removeMember('Atreus-OpenButler', now)).toBe('hub');
     // Removed names stay retired: they cannot be reused.
-    expect(store.nameTaken('murphy-ranite')).toBe(true);
+    expect(store.nameTaken('murphy-openbutler')).toBe(true);
     store.close();
   });
 
@@ -162,19 +162,19 @@ describe('TeamStore', () => {
     const { TeamStore } = await import('../src/team/store.js');
     const store = new TeamStore(join(dataDir, 'team.db'));
     const now = 10_000;
-    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-Ranite', now);
-    store.createJoinRequest('jr_m', 'Murphy-Ranite', 'kartal-1', now);
+    store.initHub('hub-id', 'team-id', 'MyTeam', 'Atreus-OpenButler', now);
+    store.createJoinRequest('jr_m', 'Murphy-OpenButler', 'kartal-1', now);
     const ticket = makeTicket();
     store.decideJoin('jr_m', true, ticket, hashTicket(ticket), now);
     store.confirmTicket('jr_m');
 
-    store.postMessage({ msgId: 'm_1', sender: 'Murphy-Ranite', recipient: 'group', body: 'hi', createdAt: now + 5 });
-    store.appendMemory({ topic: 'decisions', author: 'Murphy-Ranite', body: 'x', createdAt: now + 6 });
-    store.touchMember('Murphy-Ranite', now + 7);
+    store.postMessage({ msgId: 'm_1', sender: 'Murphy-OpenButler', recipient: 'group', body: 'hi', createdAt: now + 5 });
+    store.appendMemory({ topic: 'decisions', author: 'Murphy-OpenButler', body: 'x', createdAt: now + 6 });
+    store.touchMember('Murphy-OpenButler', now + 7);
 
     const summaries = store.memberSummaries(now + 8, 15_000);
-    const murphy = summaries.find((entry) => entry.name === 'Murphy-Ranite')!;
-    const hub = summaries.find((entry) => entry.name === 'Atreus-Ranite')!;
+    const murphy = summaries.find((entry) => entry.name === 'Murphy-OpenButler')!;
+    const hub = summaries.find((entry) => entry.name === 'Atreus-OpenButler')!;
     expect(murphy.online).toBe(true);
     expect(murphy.lastMessageAt).toBe(now + 5);
     expect(murphy.lastMessageTo).toBe('group');
@@ -184,8 +184,8 @@ describe('TeamStore', () => {
     expect(hub.lastMessageAt).toBeNull();
     // Long after the window, a quiet member falls offline but the hub stays online.
     const later = store.memberSummaries(now + 60_000, 15_000);
-    expect(later.find((entry) => entry.name === 'Murphy-Ranite')?.online).toBe(false);
-    expect(later.find((entry) => entry.name === 'Atreus-Ranite')?.online).toBe(true);
+    expect(later.find((entry) => entry.name === 'Murphy-OpenButler')?.online).toBe(false);
+    expect(later.find((entry) => entry.name === 'Atreus-OpenButler')?.online).toBe(true);
     store.close();
   });
 });

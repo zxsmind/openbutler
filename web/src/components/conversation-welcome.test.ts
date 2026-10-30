@@ -10,7 +10,7 @@ describe('conversation welcome', () => {
     expect(html).toContain('aria-label="New conversation"');
     expect(html).toContain('What do you want to do?');
     expect(html).toContain('brand-symbol large');
-    expect(html).toContain('aria-label="Ranite"');
+    expect(html).toContain('aria-label="OpenButler"');
   });
 
   it('shows project-aware greeting', () => {

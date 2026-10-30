@@ -19,7 +19,7 @@ const mcpStub: McpConnectionManager = {
 };
 
 it('keeps each model input modality on its own call when MCP transports are shared', async () => {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-catalog-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'openbutler-catalog-'));
   const memoryIndex = new MemoryIndex(workspaceRoot);
   const execute = vi.fn(async () => ({}));
   const shared: McpConnectionManager = {
@@ -50,7 +50,7 @@ it('keeps each model input modality on its own call when MCP transports are shar
 });
 
 function catalogueNames(options: Record<string, unknown> = {}): string[] {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-catalog-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'openbutler-catalog-'));
   return createToolCatalogue({
     workspaceRoot,
     inputModalities: [],
@@ -99,7 +99,7 @@ describe('tool catalogue', () => {
   });
 
   it('answers unavailable instead of vanishing when a handler is absent', async () => {
-    const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-catalog-'));
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'openbutler-catalog-'));
     const { ToolRegistry } = await import('../../src/tools/registry.js');
     const registry = new ToolRegistry();
     const { createToolCatalogue: build } = await import('../../src/tools/catalog.js');

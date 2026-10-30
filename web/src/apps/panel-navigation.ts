@@ -42,11 +42,14 @@ export function resolvePanelAddress(
   const value = address
     .trim()
     .toLowerCase()
-    .replace(/^ranite:\/\//, '')
+    .replace(/^openbutler:\/\//, '')
     .replace(/\/$/, '');
   if (!value || value === 'tools' || value === 'home') return { ok: true, appId: null };
   const app = apps.find((item) => item.id.toLowerCase() === value || item.title.toLowerCase() === value);
   return app
     ? { ok: true, appId: app.id }
-    : { ok: false, error: 'Enter a workspace tool address, such as ranite://terminal. Web browsing is not available in this panel yet.' };
+    : {
+        ok: false,
+        error: 'Enter a workspace tool address, such as openbutler://terminal. Web browsing is not available in this panel yet.',
+      };
 }

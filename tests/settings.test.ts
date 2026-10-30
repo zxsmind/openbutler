@@ -6,18 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-settings-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-settings-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   mkdirSync(dataDir, { recursive: true });
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 /**
  * The settings path is computed once at module load, so the module has to be
- * re-imported after `RANITE_DATA_DIR` moves; `resetModules` is what makes that
+ * re-imported after `OPENBUTLER_DATA_DIR` moves; `resetModules` is what makes that
  * actually a new instance rather than the cached one.
  */
 async function loadSettingsModule(): Promise<typeof import('../src/settings.js')> {
@@ -137,7 +137,7 @@ describe('team settings', () => {
     'team:',
     '  role: member',
     '  teamName: MyTeam',
-    '  memberName: Murphy-Ranite',
+    '  memberName: Murphy-OpenButler',
     '  hubHost: 100.64.0.1',
     '  hubPort: 47821',
     '',
@@ -149,7 +149,7 @@ describe('team settings', () => {
     expect(settings.loadSettings().team).toEqual({
       role: 'member',
       teamName: 'MyTeam',
-      memberName: 'Murphy-Ranite',
+      memberName: 'Murphy-OpenButler',
       hubHost: '100.64.0.1',
       hubPort: 47821,
     });
@@ -271,13 +271,13 @@ describe('the settings schema is closed', () => {
     writeSettings(['provders:', '  openai: {keys: [k]}', ''].join('\n'));
     const settings = await loadSettingsModule();
     /* A typo that silently fell back to a default surfaces days later. */
-    expect(() => settings.loadSettings()).toThrow(/provders is not a setting ranite knows/);
+    expect(() => settings.loadSettings()).toThrow(/provders is not a setting openbutler knows/);
   });
 
   it('rejects an unknown provider key', async () => {
     writeSettings(['providers:', '  openai:', '    keys: [k]', '    modles: []', ''].join('\n'));
     const settings = await loadSettingsModule();
-    expect(() => settings.loadSettings()).toThrow(/providers\.openai\.modles is not a setting ranite knows/);
+    expect(() => settings.loadSettings()).toThrow(/providers\.openai\.modles is not a setting openbutler knows/);
   });
 
   it('rejects a keys list that is not a list of strings', async () => {
@@ -335,7 +335,7 @@ describe('custom model names', () => {
       ['providers:', '  my-local:', '    keys: [k]', '    modelSpecs:', '      llama-3.3-70b:', '        alias: x', ''].join('\n'),
     );
     const settings = await loadSettingsModule();
-    expect(() => settings.loadSettings()).toThrow(/is not a model spec ranite knows/);
+    expect(() => settings.loadSettings()).toThrow(/is not a model spec openbutler knows/);
   });
 });
 
@@ -503,13 +503,13 @@ describe('settings/config split', () => {
   it('rejects unknown keys in config.yaml rather than ignoring them', async () => {
     writeConfig(['providers:', '  openai:', '    keys: [k]', '    modles: []', ''].join('\n'));
     const settings = await loadSettingsModule();
-    expect(() => settings.loadSettings()).toThrow(/config providers\.openai\.modles is not a secret ranite knows/);
+    expect(() => settings.loadSettings()).toThrow(/config providers\.openai\.modles is not a secret openbutler knows/);
   });
 
   it('rejects an unknown top-level key in config.yaml', async () => {
     writeConfig(['apiKeys: []', ''].join('\n'));
     const settings = await loadSettingsModule();
-    expect(() => settings.loadSettings()).toThrow(/apiKeys is not a secret ranite knows/);
+    expect(() => settings.loadSettings()).toThrow(/apiKeys is not a secret openbutler knows/);
   });
 
   it('exposes the config path next to the settings path', async () => {

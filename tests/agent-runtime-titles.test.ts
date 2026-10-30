@@ -44,8 +44,8 @@ let runtime: import('../src/agent-session.js').AgentEnvironment;
 let settings: typeof import('../src/settings.js');
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), 'ranite-titles-'));
-  vi.stubEnv('RANITE_DATA_DIR', directory);
+  directory = mkdtempSync(join(tmpdir(), 'openbutler-titles-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', directory);
   vi.resetModules();
   vi.doMock('../src/provider/registry.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../src/provider/registry.js')>();

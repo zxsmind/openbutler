@@ -7,12 +7,12 @@ import { addProviderKeys, classifyKeysTarget, describeProviderKeys, removeProvid
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-keys-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-keys-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 async function loadSettingsModule(): Promise<typeof import('../../src/settings.js')> {

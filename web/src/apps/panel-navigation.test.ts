@@ -31,8 +31,8 @@ describe('panel navigation', () => {
   });
   it('resolves only registered workspace routes', () => {
     const apps = [{ id: 'terminal', title: 'Terminal' }];
-    expect(resolvePanelAddress('ranite://tools', apps)).toEqual({ ok: true, appId: null });
-    expect(resolvePanelAddress('ranite://terminal', apps)).toEqual({ ok: true, appId: 'terminal' });
+    expect(resolvePanelAddress('openbutler://tools', apps)).toEqual({ ok: true, appId: null });
+    expect(resolvePanelAddress('openbutler://terminal', apps)).toEqual({ ok: true, appId: 'terminal' });
     expect(resolvePanelAddress(' Terminal ', apps)).toEqual({ ok: true, appId: 'terminal' });
     expect(resolvePanelAddress('https://example.com', apps).ok).toBe(false);
     expect(resolvePanelAddress('terminal; run-something', apps).ok).toBe(false);

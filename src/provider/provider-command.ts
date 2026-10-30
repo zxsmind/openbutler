@@ -175,7 +175,7 @@ async function addProvider(settings: SettingsStore, tokens: string[]): Promise<P
     specBits.length ? `specs: ${specBits.join(', ')}` : null,
     payload ? `payload keys: ${Object.keys(payload).join(', ')} (merged into every request body)` : null,
     known ? undefined : 'The runtime package is not bundled; it installs on first use.',
-    'Keys (if the endpoint wants one) live outside settings: ranite keys add ' + id,
+    'Keys (if the endpoint wants one) live outside settings: openbutler keys add ' + id,
   ].filter(Boolean);
   return { notice: notes.join('\n'), tone: 'info' };
 }
@@ -211,7 +211,7 @@ async function checkProvider(settings: SettingsStore, tokens: string[], ping: bo
     return fail(`${id} has no runtime package and no endpoint, so no model can be built for it.`);
   }
   if (!state.keys.length && Object.keys(state.options ?? {}).length === 0 && !state.npm) {
-    notes.push('No credential yet: ranite keys add ' + id);
+    notes.push('No credential yet: openbutler keys add ' + id);
   }
   const spec = state.modelSpecs?.[modelId];
   const payloadKeys = [...new Set([...Object.keys(state.payload ?? {}), ...Object.keys(spec?.payload ?? {})])];

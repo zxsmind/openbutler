@@ -32,14 +32,14 @@ async function cli(args: string[], timeoutMs = 15_000): Promise<{ code: number |
   return new Promise((resolveChild, rejectChild) => {
     const child = spawn(process.execPath, ['--import', loader, resolve('src/cli.ts'), ...args], {
       cwd: root,
-      env: { ...process.env, RANITE_DATA_DIR: root, NO_COLOR: '1' },
+      env: { ...process.env, OPENBUTLER_DATA_DIR: root, NO_COLOR: '1' },
       windowsHide: true,
     });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill();
-      rejectChild(new Error(`Restart CLI fixture timed out: ranite ${args.join(' ')}`));
+      rejectChild(new Error(`Restart CLI fixture timed out: openbutler ${args.join(' ')}`));
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
@@ -59,8 +59,8 @@ async function cli(args: string[], timeoutMs = 15_000): Promise<{ code: number |
 }
 
 beforeEach(async () => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-restart-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-restart-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   // The web child attaches a real session client, so the fixture needs a configured
   // default provider plus an offline catalog snapshot before any server can start.
@@ -86,7 +86,7 @@ afterEach(async () => {
   // A web child outlives a host that crashed mid-test; the record prunes on the next read.
   await stopWebProcess();
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-restart-check-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-restart-check-'))
     throw new Error('Unsafe restart fixture cleanup path.');
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }, 60_000);

@@ -11,8 +11,8 @@ let workspace: string;
 let otherWorkspace: string;
 
 beforeEach(() => {
-  workspace = mkdtempSync(join(tmpdir(), 'ranite-host-owned-'));
-  otherWorkspace = mkdtempSync(join(tmpdir(), 'ranite-host-owned-other-'));
+  workspace = mkdtempSync(join(tmpdir(), 'openbutler-host-owned-'));
+  otherWorkspace = mkdtempSync(join(tmpdir(), 'openbutler-host-owned-other-'));
 });
 
 afterEach(() => {

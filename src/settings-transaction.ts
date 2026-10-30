@@ -14,7 +14,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getDataPath } from './paths.js';
 
-// Every Ranite writer participates in this process-wide, cross-process lock.
+// Every OpenButler writer participates in this process-wide, cross-process lock.
 // Reads take the same lock so they cannot observe half of a two-file commit.
 const LOCK_FILE = getDataPath('settings.lock');
 const JOURNAL_FILE = getDataPath('settings-transaction.json');

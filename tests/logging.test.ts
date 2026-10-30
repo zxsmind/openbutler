@@ -41,7 +41,7 @@ describe('logging', () => {
   it('never writes a credential, by key name or by shape', () => {
     const { lines, sink } = collect();
     const log = createLogger({ level: 'debug', sink });
-    log.info('provider.call', { apiKey: 'whatever', header: 'Bearer abcdefghijklmnop', note: 'ranite_web=secretvalue' });
+    log.info('provider.call', { apiKey: 'whatever', header: 'Bearer abcdefghijklmnop', note: 'openbutler_web=secretvalue' });
     const line = lines[0]!;
     expect(line).not.toContain('whatever');
     expect(line).not.toContain('abcdefghijklmnop');
@@ -76,9 +76,9 @@ describe('logging', () => {
   });
 
   it('rotates by size and keeps the newest file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ranite-log-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openbutler-log-'));
     try {
-      const path = join(dir, 'ranite.log');
+      const path = join(dir, 'openbutler.log');
       const sink = fileSink(path, { maxBytes: 120, keep: 2 });
       for (let index = 0; index < 6; index += 1) sink(JSON.stringify({ ts: new Date().toISOString(), level: 'info', event: `e${index}` }));
       const current = readLogRecords(path);

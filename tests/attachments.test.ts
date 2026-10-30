@@ -11,8 +11,8 @@ const SECOND = '22222222-2222-4222-8222-222222222222';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6C9sAAAAASUVORK5CYII=', 'base64');
 let root: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-session-attachments-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-session-attachments-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
 });
 afterEach(() => {
   vi.unstubAllEnvs();

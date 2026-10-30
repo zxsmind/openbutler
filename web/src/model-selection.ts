@@ -1,6 +1,6 @@
 import type { ModelChoice, RuntimeInfo } from './types.js';
 
-/** Adapts Ranite's published model capabilities to the MindBox selector view. */
+/** Adapts OpenButler's published model capabilities to the MindBox selector view. */
 export interface ModelSelectionView {
   modelLabel: string;
   providerLabel: string;

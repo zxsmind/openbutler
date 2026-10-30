@@ -9,13 +9,13 @@ let workspace: string;
 let memoryRoot: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), 'ranite-memory-write-'));
+  workspace = await mkdtemp(join(tmpdir(), 'openbutler-memory-write-'));
   memoryRoot = join(workspace, 'MEMORY');
-  process.env.RANITE_DATA_DIR = workspace;
+  process.env.OPENBUTLER_DATA_DIR = workspace;
 });
 
 afterEach(async () => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
   await rm(workspace, { recursive: true, force: true });
 });
 

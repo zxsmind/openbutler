@@ -8,15 +8,15 @@ let dataDir: string;
 let workspace: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-self-scope-'));
-  workspace = mkdtempSync(join(tmpdir(), 'ranite-self-ws-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-self-scope-'));
+  workspace = mkdtempSync(join(tmpdir(), 'openbutler-self-ws-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
 });
 
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
   rmSync(workspace, { recursive: true, force: true });
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 describe('self and team memory scopes', () => {

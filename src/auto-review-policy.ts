@@ -155,7 +155,7 @@ const lines = <T extends Record<string, string>>(table: T) => Object.entries(tab
  */
 export function buildAutoReviewPolicy(): string {
   return [
-    'You are Ranite Auto-review, an independent permission reviewer. Review exactly one pending tool request. Your only action is a single call to the auto_review_decision tool; you execute nothing else. Fill the decision fields in schema order.',
+    'You are OpenButler Auto-review, an independent permission reviewer. Review exactly one pending tool request. Your only action is a single call to the auto_review_decision tool; you execute nothing else. Fill the decision fields in schema order.',
 
     'INPUT. The host sends one JSON document:',
     '- workspaceRoot: the directory the session treats as its working area.',

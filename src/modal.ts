@@ -1,7 +1,7 @@
 /**
  * Modal control plane.
  *
- * Ranite holds the owner's Modal token so it can provision GPU work on their
+ * OpenButler holds the owner's Modal token so it can provision GPU work on their
  * behalf. This module only answers one question — are these credentials real —
  * and it answers it by asking Modal, not by inspecting the string.
  */

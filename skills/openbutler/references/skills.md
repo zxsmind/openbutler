@@ -8,7 +8,7 @@ Related: [maintenance](maintenance.md), [MCP](mcp.md).
 A skill is a directory with a valid `SKILL.md` entrypoint and optional references,
 scripts and assets. It supplies reusable knowledge/procedures. It does not install
 an executable tool, create an MCP connection, schedule a job or alter host
-permissions merely by being present. Ranite indexes metadata and reads the body
+permissions merely by being present. OpenButler indexes metadata and reads the body
 and references when applicable.
 
 ## Discovery roots and precedence
@@ -19,18 +19,18 @@ Later roots override earlier skills with the same name:
 2. `~/.claude/skills`.
 3. `~/.agents/skills`.
 4. `$CODEX_HOME/skills`, otherwise `~/.codex/skills`.
-5. Ranite data directory `skills/`.
+5. OpenButler data directory `skills/`.
 6. Active workspace `.claude/skills`.
 7. Active workspace `.agents/skills`.
 
 ```text
-ranite skills
-ranite skills --workspace <directory>
+openbutler skills
+openbutler skills --workspace <directory>
 ```
 
 Use the listed winning path and scope to identify the actual skill. An explicit
 workspace avoids accidentally checking another workspace's overrides. Global
-roots are not just the Ranite-specific directory. Bundled skills ship under
+roots are not just the OpenButler-specific directory. Bundled skills ship under
 `dist/builtin-skills`; a source layout can use `skills/` as fallback.
 
 ## Valid format
@@ -67,7 +67,7 @@ There is a per-scope discovery cap and an overall prompt-index budget.
 
 The reviewed index cache lasts five seconds. The model's system context can be
 frozen for a workspace/provider/model/session and refreshed on relevant context
-rebuilds or compaction. A new entry in `ranite skills` does not prove an already
+rebuilds or compaction. A new entry in `openbutler skills` does not prove an already
 running turn received a new index. Reading an updated known file is also distinct
 from discovering a previously missing skill description. Use a fresh appropriate
 context after installation rather than restarting useful work merely for a cache.
@@ -82,7 +82,7 @@ Include real inputs, interfaces, result checks and failure cases. An environment
 manual describes the product rather than impersonating a system prompt.
 
 After writing, parse the YAML, read the file back, verify every referenced file
-exists inside the package and run `ranite skills --workspace <directory>`. Check
+exists inside the package and run `openbutler skills --workspace <directory>`. Check
 the listed path, not only that the folder exists. Do not execute a helper script
 merely to discover it; scripts have their own execution semantics.
 
@@ -94,8 +94,8 @@ package, subdirectory and revision. Stage downloads outside the workspace, inspe
 whole selected package into the intended root, preserving relative structure.
 Installation is a file operation, not execution of arbitrary source install hooks.
 
-For global Ranite-only scope, the destination is `<data-root>/skills/<name>`;
-derive data root from `ranite about` rather than a hard-coded home. Existing
+For global OpenButler-only scope, the destination is `<data-root>/skills/<name>`;
+derive data root from `openbutler about` rather than a hard-coded home. Existing
 Claude/Agents/Codex roots can already expose the same skill, so inspect precedence
 before copying another copy. Workspace scope is `<workspace>/.agents/skills/<name>`.
 Report source revision, destination, scope and discovery result.

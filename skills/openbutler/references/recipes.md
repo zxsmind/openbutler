@@ -4,17 +4,17 @@ These are interface recipes, not independent background policies. Substitute the
 actual installation's values and inspect the result of the selected operation.
 Detailed semantics remain in the linked references rather than being duplicated.
 
-## "Tell me what Ranite is using right now"
+## "Tell me what OpenButler is using right now"
 
-Use `ranite about`, `config`, `daemon status`; inspect the current UI's selected
+Use `openbutler about`, `config`, `daemon status`; inspect the current UI's selected
 model/workspace and connection. Report installed version, host PID/start time,
 selected provider/model and relevant paths. This does not need a fresh paid model
 request. [Environment](environment.md), [observability](observability.md).
 
 ## "Open web on this machine"
 
-Choose workspace/port and start `ranite web --dir <directory>`; it returns with
-the server in the background. Pair a new browser with `ranite web --pair` and
+Choose workspace/port and start `openbutler web --dir <directory>`; it returns with
+the server in the background. Pair a new browser with `openbutler web --pair` and
 confirm Connected plus intended chat. If an existing server owns the port,
 identify it before replacing it. [Web](web.md).
 
@@ -45,14 +45,14 @@ plus credentials alone does not prove tool compatibility. [Providers](providers.
 Use `/reasoning`, `/thinking`, `/settings`, `/permissions` or the corresponding
 supported settings fields/UI. Check effective model options and whether the
 change affects TUI appearance or web presentation. For reviewer-only changes use
-`ranite permissions --review-model ...` and deadline flags. [Configuration](configuration.md).
+`openbutler permissions --review-model ...` and deadline flags. [Configuration](configuration.md).
 
 ## "Install this skill" / "make a reusable skill"
 
 Inspect current winning name/path and requested scope. For existing packages,
 stage and inspect the named source/revision; for a new skill, create matching
 folder/name and valid quoted YAML metadata, then references as needed. Discover
-with `ranite skills --workspace <directory>` and inspect the winning path.
+with `openbutler skills --workspace <directory>` and inspect the winning path.
 Refresh packaged built-ins only when editing built-in source. [Skills](skills.md).
 
 ## "Add this MCP server"
@@ -107,7 +107,7 @@ Confirm the first folder/command root and workspace memory scope. [Projects](pro
 ## "Use a helper agent" / "ask another machine"
 
 For a local worker, supply task/context with explicit mode and background shape;
-read its actual report from the result/inbox. For another Ranite machine, inspect
+read its actual report from the result/inbox. For another OpenButler machine, inspect
 team status/profile and use team messages or negotiated work. These are different
 capability and delivery paths. [Workers](workers.md), [teams](teams.md).
 
@@ -132,7 +132,7 @@ queue/approval waiting, or source/build/process/bundle activation. Associate log
 with current process/time/session. A restart is not a universal diagnosis.
 [Observability](observability.md), [providers](providers.md), [maintenance](maintenance.md).
 
-## "Update, move, back up, clean or uninstall Ranite"
+## "Update, move, back up, clean or uninstall OpenButler"
 
 Identify installation/data/OS and active work, inventory durable versus derived
 files, then use the installation or maintenance procedure. Prune previews and

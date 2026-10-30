@@ -20,10 +20,10 @@ import { getDataPath } from '../paths.js';
 /**
  * The provider/model catalog, fetched from models.dev.
  *
- * Ranite never lists a provider in code. The catalog is the list: it carries,
+ * OpenButler never lists a provider in code. The catalog is the list: it carries,
  * per provider, the display name, the API endpoint, the environment variables
  * that hold the key, the npm package that speaks it, and every model's
- * capabilities. A provider ranite has never heard of works the moment it is in
+ * capabilities. A provider openbutler has never heard of works the moment it is in
  * the catalog and its key is set.
  *
  * ## How it is stored
@@ -267,7 +267,7 @@ function catalogDataPath(catalog: CatalogIndex | null): string {
   return catalog?.dataFile ? join(dirname(NDJSON_FILE), catalog.dataFile) : NDJSON_FILE;
 }
 
-/** Keep a grace period for other running Ranite processes still using an older index. */
+/** Keep a grace period for other running OpenButler processes still using an older index. */
 function pruneOldCatalogGenerations(current: string): void {
   try {
     for (const filename of readdirSync(dirname(NDJSON_FILE))) {
@@ -350,7 +350,7 @@ async function readBoundedJson(response: Response, maxBytes: number): Promise<un
  * Ensures the catalog index is in hand, fetching only when the cache is stale.
  *
  * A stale cache beats no catalog: when models.dev is unreachable this returns
- * what it has rather than failing, so `ranite` still works with a stale list.
+ * what it has rather than failing, so `openbutler` still works with a stale list.
  *
  * `ttlMs`, `now` and `fetchImpl` are injectable so tests exercise both the
  * fresh and the unreachable path without depending on the machine they run on —

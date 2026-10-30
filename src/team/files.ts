@@ -109,7 +109,7 @@ export async function hashFile(path: string): Promise<string> {
   return hash.digest('hex');
 }
 
-/** The default landing spot for a received file: appdata/ranite/team-inbox/<team>/<name>. */
+/** The default landing spot for a received file: appdata/openbutler/team-inbox/<team>/<name>. */
 export function defaultInboxPath(teamKey: string, name: string): string {
   return resolve(getDataPath('team-inbox'), teamKey, basename(name));
 }

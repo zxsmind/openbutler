@@ -3,7 +3,7 @@
  *
  * Every step runs against a deadline, an overrun is abandoned and named in the log, and
  * no caller ever awaits a promise that can keep the process alive forever. The emitted
- * lines are the permanent shutdown telemetry: `logs/ranite.log` records which step
+ * lines are the permanent shutdown telemetry: `logs/openbutler.log` records which step
  * completed, which one was abandoned and how long each took, so a stalled shutdown names
  * its own culprit instead of surfacing as a force-kill thirty seconds later.
  */

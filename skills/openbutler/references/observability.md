@@ -7,11 +7,11 @@ Related: [maintenance](maintenance.md), [providers](providers.md), [web](web.md)
 
 | Question | Surface |
 | --- | --- |
-| Which installed executable/runtime? | `ranite about`, `ranite --version` |
-| Which settings are saved/ready? | `ranite config` |
-| Which host process? | `ranite daemon status` and PID/start time |
-| Which skills were actually discovered? | `ranite skills --workspace <path>` |
-| Which models are selectable? | `ranite --list-models` and runtime selection |
+| Which installed executable/runtime? | `openbutler about`, `openbutler --version` |
+| Which settings are saved/ready? | `openbutler config` |
+| Which host process? | `openbutler daemon status` and PID/start time |
+| Which skills were actually discovered? | `openbutler skills --workspace <path>` |
+| Which models are selectable? | `openbutler --list-models` and runtime selection |
 | MCP defined versus connected? | `mcp_manage list`, connection results and host logs |
 | Schedule saved versus running? | `schedule list`, capabilities and log |
 | Owner channel connected? | `telegram status` |
@@ -25,22 +25,22 @@ operation does not prove its eventual result.
 ## Logs
 
 ```text
-ranite logs --lines 100
-ranite logs --level warn --lines 200
-ranite logs --event web.stream --json
-ranite logs --file <log-path> --lines 100
+openbutler logs --lines 100
+openbutler logs --level warn --lines 200
+openbutler logs --event web.stream --json
+openbutler logs --file <log-path> --lines 100
 ```
 
 Defaults: 100 lines and info severity. Lines accepts 1-100000; levels are error,
 warn, info and debug, including more severe records. Event filter is a substring.
-`--json` prints structured records. Default path is data-root `logs/ranite.log`.
+`--json` prints structured records. Default path is data-root `logs/openbutler.log`.
 Web uses `logs/web.log`; daemon startup/lifecycle also writes `daemon.log`.
 A log can be empty or contain older PIDs; compare timestamps, process fields,
 session/event ids and the incident window before attributing an error.
 
 A host that was asked to stop runs every close step against a deadline: an
 overrun is abandoned rather than waited for, and each step records a `[shutdown]`
-line in `logs/ranite.log`. A slow stop therefore names the subsystem that held it
+line in `logs/openbutler.log`. A slow stop therefore names the subsystem that held it
 instead of ending in a force-kill.
 
 Web stream open/close, gaps/resync and client diagnostic reports can explain a
@@ -51,10 +51,10 @@ file or an unflushed model transcript.
 ## Usage and costs
 
 ```text
-ranite usage
-ranite usage --days 7
-ranite usage --session <id> --json
-ranite usage --model <provider>/<model> --days 30
+openbutler usage
+openbutler usage --days 7
+openbutler usage --session <id> --json
+openbutler usage --model <provider>/<model> --days 30
 ```
 
 Default range is 30 days; allowed days are positive up to 3650. Session and model
@@ -71,8 +71,8 @@ generate tokens or wake a paid model are different from passive status reads.
 
 ## Events and actions
 
-`ranite events` shows durable inbound/scheduled events; `ranite actions` shows
-tool-action evidence. `ranite events retry <id>` queues a retained event again.
+`openbutler events` shows durable inbound/scheduled events; `openbutler actions` shows
+tool-action evidence. `openbutler events retry <id>` queues a retained event again.
 The schedule log associates triggered runs with their results. Team delivery has
 its own durable receipts. `pending`, `running`, delivered, failed and cancelled
 mean different stages; check the actual returned schema.

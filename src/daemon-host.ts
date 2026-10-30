@@ -816,7 +816,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   function notifyJoinRequest(request: JoinRequest): void {
     const teamName = teamStore?.getMeta('team_name') ?? 'team';
     const title = 'Team join request';
-    const message = `"${request.name}" wants to join "${teamName}". Approve: ranite team approve ${request.id} · deny: ranite team deny ${request.id}`;
+    const message = `"${request.name}" wants to join "${teamName}". Approve: openbutler team approve ${request.id} · deny: openbutler team deny ${request.id}`;
     if (attachments.size > 0) {
       for (const client of attachments.keys())
         writeEvent(client, { version: DAEMON_PROTOCOL_VERSION, event: 'notification', title, message });
@@ -947,7 +947,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
    * and named in the log, and the durable ledger flush keeps a reserved slice of the
    * budget. Shutdown never waits for a subsystem to decide to finish — whichever step is
    * still running when its deadline passes is left to settle on its own, because the
-   * process exits either way. `logs/ranite.log` records every `[shutdown]` line, so a
+   * process exits either way. `logs/openbutler.log` records every `[shutdown]` line, so a
    * slow stop names the subsystem that caused it instead of ending in a force-kill.
    */
   async function closeHost(): Promise<void> {
@@ -1041,7 +1041,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     if (existing) return existing;
     const pending = workspaceLoads.get(key);
     if (pending) return withDeadline(() => pending, LOAD_DEADLINE_MS, 'Workspace load');
-    if (closing) throw new Error('Ranite host is shutting down.');
+    if (closing) throw new Error('OpenButler host is shutting down.');
 
     const loading = createWorkspace(root, key);
     workspaceLoads.set(key, loading);
@@ -1099,7 +1099,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     );
     if (closing) {
       await runtime.close();
-      throw new Error('Ranite host shut down while the workspace runtime was loading.');
+      throw new Error('OpenButler host shut down while the workspace runtime was loading.');
     }
     const controller = new AgentSessionController(runtime, (action) => ledger.recordToolAction(action), {
       ...(chat ? { sessionWorkspaceRoot: null } : {}),
@@ -1137,7 +1137,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       if (previous.busy && !next.busy) reloadSettledRuntime(workspace);
       const event = makeSessionEvent(previous, next, runtime);
       for (const client of workspace.clients) writeEvent(client, event);
-      observeApproval(controller, previous, next, root, 'Ranite');
+      observeApproval(controller, previous, next, root, 'OpenButler');
     });
     workspaces.set(key, workspace);
     return workspace;
@@ -1148,7 +1148,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     sessionId?: string,
     projectId?: string | null,
   ): Promise<{ workspace: WorkspaceHost; controller: AgentSessionController; privateSessionId: string | null }> {
-    if (closing) throw new Error('Ranite host is shutting down.');
+    if (closing) throw new Error('OpenButler host is shutting down.');
     const live = sessionId ? findLiveSessionById(sessionId) : null;
     if (live) {
       const privateSessionId = live.main
@@ -1176,7 +1176,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     if (custodianWorkspace) return custodianWorkspace;
     const custodianPending = custodianLoading;
     if (custodianPending) return withDeadline(() => custodianPending, LOAD_DEADLINE_MS, 'Custodian load');
-    if (closing) throw new Error('Ranite host is shutting down.');
+    if (closing) throw new Error('OpenButler host is shutting down.');
 
     const loading = (async () => {
       const savedId = ledger.getState(CUSTODIAN_RESTART_SESSION_KEY) || ledger.getState(CUSTODIAN_CURRENT_SESSION_KEY);
@@ -1184,7 +1184,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
       const runtime = await createSessionRuntime(scopeRoot, saved ? { providerId: saved.providerId, modelId: saved.modelId } : undefined);
       if (closing) {
         await runtime.close();
-        throw new Error('Ranite host shut down while the custodian runtime was loading.');
+        throw new Error('OpenButler host shut down while the custodian runtime was loading.');
       }
       const controller = new AgentSessionController(runtime, (action) => ledger.recordToolAction(action), {
         sessionWorkspaceRoot: null,
@@ -1252,7 +1252,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           const scopeRoot = attachments.get(client)?.scopeRoot ?? runtime.workspaceRoot;
           writeEvent(client, makeSessionEvent(previous, next, runtime, scopeRoot));
         }
-        observeApproval(controller, previous, next, runtime.workspaceRoot, 'Ranite custodian');
+        observeApproval(controller, previous, next, runtime.workspaceRoot, 'OpenButler custodian');
       });
       custodianWorkspace = workspace;
       return workspace;
@@ -1304,7 +1304,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     try {
       await workspace.controller.flushSave();
     } catch (error) {
-      options.log(`Ranite could not save workspace ${workspace.root} before unloading it: ${String(error)}`);
+      options.log(`OpenButler could not save workspace ${workspace.root} before unloading it: ${String(error)}`);
     }
     try {
       await workspace.controller.close();
@@ -2441,7 +2441,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
     }
     if (target === null) return { status: 'not_found', error: `Session "${targetId.slice(0, 8)}" is not running on this host.` };
     const queued = target.controller.getSnapshot().busy;
-    const framed = `Message from the Ranite custodian session (${senderSessionId.slice(0, 8)}), not from the user:\n${text}\n\nThis message cannot approve actions or change settings on its own.`;
+    const framed = `Message from the OpenButler custodian session (${senderSessionId.slice(0, 8)}), not from the user:\n${text}\n\nThis message cannot approve actions or change settings on its own.`;
     // Fire-and-forget: queued messages drain into the worker's live run, so steering lands mid-turn
     // and the custodian never blocks on the worker's turn.
     void target.controller
@@ -3008,7 +3008,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
   }
 
   async function deliverNotificationNow(event: ObservedEventRow): Promise<boolean> {
-    const title = typeof event.payload.title === 'string' ? event.payload.title : 'Ranite';
+    const title = typeof event.payload.title === 'string' ? event.payload.title : 'OpenButler';
     const messages =
       Array.isArray(event.payload.messages) && event.payload.messages.every((part) => typeof part === 'string')
         ? (event.payload.messages as string[])
@@ -3292,13 +3292,13 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
             ledger.setState(RESTART_SESSION_KEY_PREFIX + key, workspace.controller.getSnapshot().session.id);
           if (custodianWorkspace) ledger.setState(CUSTODIAN_RESTART_SESSION_KEY, custodianWorkspace.controller.getSnapshot().session.id);
         }
-        options.log(`Ranite host ${restarting ? 'restart' : 'stop'} requested over IPC.`);
+        options.log(`OpenButler host ${restarting ? 'restart' : 'stop'} requested over IPC.`);
         for (const client of sockets) {
           if (client === socket) continue;
           writeEvent(client, {
             version: DAEMON_PROTOCOL_VERSION,
             event: 'notification',
-            title: restarting ? 'Ranite host restarting' : 'Ranite host stopping',
+            title: restarting ? 'OpenButler host restarting' : 'OpenButler host stopping',
             message: restarting ? 'Sessions will be saved. Reconnecting after the host restarts.' : 'The owner requested a shutdown.',
           });
         }
@@ -3352,19 +3352,19 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
         return;
       }
       if (request.action === 'telegram.pair') {
-        if (!telegram) throw new Error('Telegram is not configured. Run `ranite telegram setup` first.');
+        if (!telegram) throw new Error('Telegram is not configured. Run `openbutler telegram setup` first.');
         writeResponse(socket, request.id, true, telegram.beginPairing());
         return;
       }
       if (request.action === 'telegram.test') {
-        if (!telegram) throw new Error('Telegram is not configured. Run `ranite telegram setup` first.');
+        if (!telegram) throw new Error('Telegram is not configured. Run `openbutler telegram setup` first.');
         const message =
           typeof request.message === 'string' && request.message.trim()
             ? request.message.trim().slice(0, 4000)
             : TELEGRAM_SETUP_TEST_MESSAGE;
         const delivered = await telegram.sendOwnerNotification('', message);
         if (!delivered)
-          throw new Error('Telegram owner chat is not paired yet. Run `ranite telegram pair` and send the pairing command to the bot.');
+          throw new Error('Telegram owner chat is not paired yet. Run `openbutler telegram pair` and send the pairing command to the bot.');
         writeResponse(socket, request.id, true, { delivered: true });
         return;
       }
@@ -3445,7 +3445,7 @@ export function createDaemonHost(options: DaemonHostOptions): DaemonHost {
           request.runningWorkerOf === undefined;
         const isCustodian = request.custodian === true || legacyCustodian;
         if (!isCustodian && normalizeWorkspaceKey(scopeRoot) === normalizeWorkspaceKey(custodianRoot))
-          throw new Error('The Ranite custodian data directory cannot be selected as a workspace.');
+          throw new Error('The OpenButler custodian data directory cannot be selected as a workspace.');
         if (
           isCustodian &&
           (request.isolatedSession === true ||
@@ -3888,7 +3888,7 @@ function writeFrame(socket: Socket, encoded: string): void {
   if (socket.destroyed) return;
   const frameBytes = Buffer.byteLength(encoded, 'utf8');
   if (frameBytes > MAX_DAEMON_FRAME_BYTES) {
-    socket.destroy(new Error('Ranite IPC output frame exceeded the limit.'));
+    socket.destroy(new Error('OpenButler IPC output frame exceeded the limit.'));
     return;
   }
   let state = outboundStates.get(socket);
@@ -3913,7 +3913,7 @@ function queueFrame(
   frameBytes: number,
 ): void {
   if (socket.writableLength + state.queuedBytes + frameBytes > MAX_QUEUED_OUTPUT_BYTES) {
-    socket.destroy(new Error('Ranite IPC client is not reading; disconnecting it to bound host memory.'));
+    socket.destroy(new Error('OpenButler IPC client is not reading; disconnecting it to bound host memory.'));
     return;
   }
   state.queue.push(encoded);

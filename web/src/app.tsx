@@ -30,7 +30,7 @@ import {
   resolveSidebarResize,
 } from './panel-resize.js';
 
-const sidebarStorageKey = 'ranite:sidebar-width:v1';
+const sidebarStorageKey = 'openbutler:sidebar-width:v1';
 
 function readSidebarWidth(): number {
   try {
@@ -265,7 +265,7 @@ export function App() {
         error={session.sessionsError}
         disabled={navigationDisabled}
         disabledReason={
-          session.changing ? 'Opening chat…' : !independentChats && busy ? 'Restart Ranite to enable independent chats.' : undefined
+          session.changing ? 'Opening chat…' : !independentChats && busy ? 'Restart OpenButler to enable independent chats.' : undefined
         }
         onSearch={() => setSearchOpen(true)}
         onRetry={session.retrySessions}
@@ -321,7 +321,7 @@ export function App() {
                   aria-expanded={sidebarVisible}
                   onClick={() => setSidebarVisible(!sidebarVisible)}
                 />
-                <span className="session-title">{payload?.session.title || 'Ranite'}</span>
+                <span className="session-title">{payload?.session.title || 'OpenButler'}</span>
                 <span className="spacer" />
                 <span className={`run-status${connected ? ' sr-only' : ''}`} role="status">
                   <span className={`connection-dot ${connected ? 'online' : ''}`} />
@@ -413,7 +413,7 @@ export function App() {
                     onSend={async (text, images, reasoning) => {
                       if (projects.loading || projects.error)
                         throw new Error('Project information is not ready yet. Try again from the project menu.');
-                      if (!projects.supportsSelection) throw new Error('Restart the Ranite server to enable the project scope.');
+                      if (!projects.supportsSelection) throw new Error('Restart the OpenButler server to enable the project scope.');
                       await session.send(text, images, reasoning);
                     }}
                     onStop={() => void session.stop()}

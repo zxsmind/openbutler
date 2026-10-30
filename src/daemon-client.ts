@@ -138,7 +138,7 @@ class DaemonSessionClient implements AgentSessionClient {
   }
 
   getSnapshot = (): AgentSessionSnapshot => {
-    if (!this.snapshot) throw new Error('The Ranite host session has not attached yet.');
+    if (!this.snapshot) throw new Error('The OpenButler host session has not attached yet.');
     return this.snapshot;
   };
 
@@ -148,7 +148,7 @@ class DaemonSessionClient implements AgentSessionClient {
    * addresses entries by index has to read this instead.
    */
   getServerEntries = (): readonly SessionEntry[] => {
-    if (!this.snapshot) throw new Error('The Ranite host session has not attached yet.');
+    if (!this.snapshot) throw new Error('The OpenButler host session has not attached yet.');
     return this.serverEntries;
   };
 
@@ -171,10 +171,10 @@ class DaemonSessionClient implements AgentSessionClient {
       ...(options.workerSessionId ? { workerSessionId: options.workerSessionId } : {}),
       ...(options.runningWorkerOf ? { runningWorkerOf: options.runningWorkerOf } : {}),
     });
-    if (!isAttachResult(result)) throw new Error('The Ranite host returned an invalid session attachment.');
+    if (!isAttachResult(result)) throw new Error('The OpenButler host returned an invalid session attachment.');
     this.hostEntry = typeof result.hostEntry === 'string' && result.hostEntry ? result.hostEntry : null;
     if ((options.chatSessionId || options.newChatSession) && result.sessionAttachments !== true)
-      throw new Error('Restart the Ranite host to enable independent chats. The current run has been kept running.');
+      throw new Error('Restart the OpenButler host to enable independent chats. The current run has been kept running.');
     if (options.chatSessionId || options.newChatSession) {
       if (typeof result.workspaceKey !== 'string') throw new Error('The host did not provide a chat binding.');
       this.workspaceKey = result.workspaceKey;
@@ -186,10 +186,10 @@ class DaemonSessionClient implements AgentSessionClient {
       this.attachOptions = { ...rest, chatSessionId: result.snapshot.session.id };
     }
     if (options.clientKind === 'web' && result.clientKind !== 'web')
-      throw new Error('Restart the Ranite host to identify web messages correctly: ranite restart');
+      throw new Error('Restart the OpenButler host to identify web messages correctly: openbutler restart');
     if (options.custodian && result.custodian !== true)
       throw new Error(
-        'The running Ranite host predates the machine-wide custodian update. Run `ranite restart` to load the installed code.',
+        'The running OpenButler host predates the machine-wide custodian update. Run `openbutler restart` to load the installed code.',
       );
     this.applyRuntime(result.runtime);
     this.savedSessions = result.savedSessions;
@@ -204,7 +204,7 @@ class DaemonSessionClient implements AgentSessionClient {
     socket.on('data', (chunk: Buffer) => {
       if (socket === this.socket) this.consume(chunk);
     });
-    socket.on('close', () => this.handleClose(new Error('Connection to the Ranite host closed.'), socket));
+    socket.on('close', () => this.handleClose(new Error('Connection to the OpenButler host closed.'), socket));
     socket.on('error', (error) => this.handleClose(error, socket));
   }
 
@@ -297,11 +297,11 @@ class DaemonSessionClient implements AgentSessionClient {
       this.localNoticeTimer = null;
     }
     this.socket.end();
-    this.handleClose(new Error('This Ranite client detached from the host.'), this.socket);
+    this.handleClose(new Error('This OpenButler client detached from the host.'), this.socket);
   }
 
   private async request<T = unknown>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
-    if (this.closed || this.socket.destroyed) throw new Error('The Ranite host connection is closed.');
+    if (this.closed || this.socket.destroyed) throw new Error('The OpenButler host connection is closed.');
     const id = randomUUID();
     const request =
       JSON.stringify({
@@ -311,12 +311,13 @@ class DaemonSessionClient implements AgentSessionClient {
         action,
         ...(action === 'attach' ? {} : { workspaceKey: this.workspaceKey }),
       }) + '\n';
-    if (Buffer.byteLength(request, 'utf8') > MAX_DAEMON_FRAME_BYTES) throw new Error('The request exceeded the Ranite host frame limit.');
+    if (Buffer.byteLength(request, 'utf8') > MAX_DAEMON_FRAME_BYTES)
+      throw new Error('The request exceeded the OpenButler host frame limit.');
     return new Promise<T>((resolveRequest, rejectRequest) => {
       const timer = setTimeout(
         () => {
           this.pending.delete(id);
-          rejectRequest(new Error(`Ranite host request timed out: ${action}`));
+          rejectRequest(new Error(`OpenButler host request timed out: ${action}`));
         },
         action === 'attach' ? 90_000 : 30_000,
       );
@@ -357,7 +358,7 @@ class DaemonSessionClient implements AgentSessionClient {
       try {
         parsed = JSON.parse(frame.toString('utf8'));
       } catch {
-        this.socket.destroy(new Error('The Ranite host sent invalid JSON.'));
+        this.socket.destroy(new Error('The OpenButler host sent invalid JSON.'));
         return;
       }
       if (isDaemonEvent(parsed)) {
@@ -365,7 +366,7 @@ class DaemonSessionClient implements AgentSessionClient {
         continue;
       }
       if (!isDaemonResponse(parsed)) {
-        this.socket.destroy(new Error('The Ranite host sent an invalid IPC frame.'));
+        this.socket.destroy(new Error('The OpenButler host sent an invalid IPC frame.'));
         return;
       }
       const pending = this.pending.get(parsed.id);
@@ -384,7 +385,7 @@ class DaemonSessionClient implements AgentSessionClient {
 
   private applyEvent(event: DaemonEvent): void {
     if (event.event === 'notification') {
-      if (event.title === 'Ranite host stopping') this.intentionalShutdown = true;
+      if (event.title === 'OpenButler host stopping') this.intentionalShutdown = true;
       if (!event.title.trim()) {
         // An owner-directed message delivered over the terminal is content, not
         // a status ping: it becomes a session entry so it keeps its place and
@@ -483,8 +484,8 @@ class DaemonSessionClient implements AgentSessionClient {
       this.connectionFailureReported = true;
       this.addLocalNotice(
         this.intentionalShutdown
-          ? 'The Ranite host stopped. Run ranite to connect again.'
-          : 'Lost connection to the Ranite host. Reconnecting…',
+          ? 'The OpenButler host stopped. Run openbutler to connect again.'
+          : 'Lost connection to the OpenButler host. Reconnecting…',
         this.intentionalShutdown ? 'error' : 'warn',
       );
     }
@@ -529,7 +530,7 @@ class DaemonSessionClient implements AgentSessionClient {
 
         this.connectionFailureReported = false;
         this.reconnecting = false;
-        this.addLocalNotice('Reconnected to the Ranite host.', 'info');
+        this.addLocalNotice('Reconnected to the OpenButler host.', 'info');
         return;
       } catch {
         if (socket && !socket.destroyed) socket.destroy();
@@ -579,7 +580,7 @@ function applyEntriesPatch(previous: SessionEntry[], patch: SessionEntriesPatch 
 function connectSocket(): Promise<Socket> {
   return new Promise((resolveSocket, rejectSocket) => {
     const socket = createConnection(getDaemonEndpoint());
-    const timer = setTimeout(() => finish(new Error('Timed out connecting to the Ranite host.')), CLIENT_CONNECT_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(new Error('Timed out connecting to the OpenButler host.')), CLIENT_CONNECT_TIMEOUT_MS);
     let settled = false;
     const finish = (error?: Error) => {
       if (settled) return;

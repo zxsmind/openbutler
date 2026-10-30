@@ -32,7 +32,7 @@ export function createWriteTool(workspaceRoot = process.cwd(), memoryIndex?: Mem
     providerId: 'host',
     name: 'file_write',
     description:
-      'Create or replace a local UTF-8 text file with the supplied content; this replaces the entire file. A successful write returns sha256 for the exact UTF-8 bytes written, the line counts, and added/removed line stats; file_read.sha256 reports the current on-disk file hash. Workspace writes follow the active permission mode. Ranite-owned paths (scratch, memory, settings) are pre-authorized. For memory, use the paths and the flat summary-plus-bullets schema in the system instructions; keep MEMORY.md as one concise index and edit existing scoped notes instead of making duplicate indexes.',
+      'Create or replace a local UTF-8 text file with the supplied content; this replaces the entire file. A successful write returns sha256 for the exact UTF-8 bytes written, the line counts, and added/removed line stats; file_read.sha256 reports the current on-disk file hash. Workspace writes follow the active permission mode. OpenButler-owned paths (scratch, memory, settings) are pre-authorized. For memory, use the paths and the flat summary-plus-bullets schema in the system instructions; keep MEMORY.md as one concise index and edit existing scoped notes instead of making duplicate indexes.',
     maxInputChars: MAX_WRITE_BYTES + 100_000,
     inputSchema: {
       type: 'object',

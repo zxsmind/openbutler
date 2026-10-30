@@ -20,7 +20,7 @@ const mcpStub: McpConnectionManager = {
 };
 
 it("rebuilds every tool schema through the run's sanitizer when one is given", async () => {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'ranite-sanitizer-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'openbutler-sanitizer-'));
   const memoryIndex = new MemoryIndex(workspaceRoot);
   try {
     const registry = new ToolRegistry();

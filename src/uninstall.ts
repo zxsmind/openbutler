@@ -8,7 +8,7 @@ import { getDaemonStatus, stopDaemon } from './daemon.js';
 import { isAutostartInstalled, uninstallAutostart } from './daemon-autostart.js';
 import { getDataDir } from './paths.js';
 
-const INSTALLER_MARKER = '# Added by the ranite installer.';
+const INSTALLER_MARKER = '# Added by the openbutler installer.';
 
 export interface UninstallOptions {
   purge: boolean;
@@ -27,7 +27,7 @@ export interface UninstallTargets {
 
 /**
  * Walks up from the running CLI entry point to the directory the installer
- * created, which holds `app/`, `bin/`, and `node/`. Returns null when Ranite
+ * created, which holds `app/`, `bin/`, and `node/`. Returns null when OpenButler
  * runs from a source checkout instead of an installer layout.
  */
 export function findInstallDir(entry: string): string | null {
@@ -176,7 +176,7 @@ function scheduleDeferredRemoval(directory: string): void {
 }
 
 export async function runUninstall(parsed: Parsed): Promise<void> {
-  if (parsed.words.length > 0) throw new Error('Usage: ranite uninstall [--purge] [--dry-run] [--force]');
+  if (parsed.words.length > 0) throw new Error('Usage: openbutler uninstall [--purge] [--dry-run] [--force]');
   const options: UninstallOptions = {
     purge: parsed.booleans.has('purge'),
     dryRun: parsed.booleans.has('dry-run'),
@@ -187,9 +187,9 @@ export async function runUninstall(parsed: Parsed): Promise<void> {
   const targets = collectUninstallTargets(entry ?? '');
   const hostRunning = (await getDaemonStatus()) !== null;
 
-  ui.section('Uninstall Ranite');
+  ui.section('Uninstall OpenButler');
   if (targets.installDir === null) {
-    ui.warn('This Ranite was not installed by the installer, so there is no program directory to remove.');
+    ui.warn('This OpenButler was not installed by the installer, so there is no program directory to remove.');
   } else {
     ui.kv('Program', targets.installDir);
     if (targets.binDir !== null) ui.kv('PATH entry', targets.binDir);
@@ -254,5 +254,5 @@ export async function runUninstall(parsed: Parsed): Promise<void> {
   }
 
   ui.line();
-  ui.success('Ranite uninstalled. Restart your terminal to clear the PATH entry from this session.');
+  ui.success('OpenButler uninstalled. Restart your terminal to clear the PATH entry from this session.');
 }

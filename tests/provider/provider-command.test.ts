@@ -6,13 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-provider-cmd-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-provider-cmd-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   mkdirSync(dataDir, { recursive: true });
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 /** Settings paths resolve at module load, so every import happens after the data dir moves. */
@@ -49,7 +49,7 @@ describe('/provider add', () => {
 
     expect(outcome.tone).toBe('info');
     expect(outcome.notice).toContain('Added ukisai');
-    expect(outcome.notice).toContain('ranite keys add ukisai');
+    expect(outcome.notice).toContain('openbutler keys add ukisai');
 
     const stored = settings.loadSettings();
     expect(stored.providers.ukisai.enabled).toBe(true);

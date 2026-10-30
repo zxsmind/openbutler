@@ -11,14 +11,14 @@ import type { TeamChannel, TeamConnection } from '../src/team/session.js';
 let root: string;
 let previous: string | undefined;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-delivery-'));
-  previous = process.env.RANITE_DATA_DIR;
-  process.env.RANITE_DATA_DIR = root;
+  root = mkdtempSync(join(tmpdir(), 'openbutler-delivery-'));
+  previous = process.env.OPENBUTLER_DATA_DIR;
+  process.env.OPENBUTLER_DATA_DIR = root;
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  if (previous === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previous;
+  if (previous === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previous;
   rmSync(root, { recursive: true, force: true });
 });
 

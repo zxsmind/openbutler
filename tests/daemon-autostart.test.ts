@@ -13,11 +13,11 @@ let root: string;
 let entry: string;
 let registryValue: string | null;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-autostart-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
-  vi.stubEnv('RANITE_TEST_SECRET', 'must-not-be-in-launcher');
+  root = mkdtempSync(join(tmpdir(), 'openbutler-autostart-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
+  vi.stubEnv('OPENBUTLER_TEST_SECRET', 'must-not-be-in-launcher');
   entry = process.argv[1]!;
-  process.argv[1] = join(root, 'Ranite CLI', 'cli.js');
+  process.argv[1] = join(root, 'OpenButler CLI', 'cli.js');
   registryValue = null;
   vi.resetModules();
   commands.run.mockReset();
@@ -26,7 +26,7 @@ beforeEach(() => {
     if (args[0] === 'query')
       return registryValue === null
         ? { status: 1, stdout: '', stderr: 'Not found' }
-        : { status: 0, stdout: `Ranite REG_SZ ${registryValue}`, stderr: '' };
+        : { status: 0, stdout: `OpenButler REG_SZ ${registryValue}`, stderr: '' };
     if (args[0] === 'add') registryValue = args[args.indexOf('/d') + 1]!;
     if (args[0] === 'delete') registryValue = null;
     return { status: 0, stdout: '', stderr: '' };
@@ -35,7 +35,7 @@ beforeEach(() => {
 afterEach(() => {
   process.argv[1] = entry;
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-autostart-check-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-autostart-check-'))
     throw new Error('Unsafe fixture cleanup path.');
   rmSync(root, { recursive: true, force: true });
 });
@@ -43,24 +43,24 @@ afterEach(() => {
 describe('login startup Telegram wiring (cross-platform builders)', () => {
   it('embeds the token inline in the macOS agent and escapes XML', async () => {
     const service = await import('../src/daemon-autostart.js');
-    const document = service.buildMacosDocument('/bin/ranite', '/app/cli.js', '/data', '/data/daemon.log', {
+    const document = service.buildMacosDocument('/bin/openbutler', '/app/cli.js', '/data', '/data/daemon.log', {
       TELEGRAM_BOT_TOKEN: '123:a&b<c>',
     });
     expect(document).toContain('<key>TELEGRAM_BOT_TOKEN</key><string>123:a&amp;b&lt;c&gt;</string>');
-    expect(document).toContain('<key>RANITE_DATA_DIR</key>');
-    const plain = service.buildMacosDocument('/bin/ranite', '/app/cli.js', '/data', '/data/daemon.log', {});
+    expect(document).toContain('<key>OPENBUTLER_DATA_DIR</key>');
+    const plain = service.buildMacosDocument('/bin/openbutler', '/app/cli.js', '/data', '/data/daemon.log', {});
     expect(plain).not.toContain('TELEGRAM_BOT_TOKEN');
-    expect(plain).toContain('<key>EnvironmentVariables</key><dict><key>RANITE_DATA_DIR</key><string>/data</string></dict>');
+    expect(plain).toContain('<key>EnvironmentVariables</key><dict><key>OPENBUTLER_DATA_DIR</key><string>/data</string></dict>');
   });
 
   it('wires the token through an optional env file on Linux, never inline', async () => {
     const service = await import('../src/daemon-autostart.js');
-    const wired = service.buildLinuxUnit('/bin/ranite', '/app/cli.js', '/data', '/data/telegram.env');
+    const wired = service.buildLinuxUnit('/bin/openbutler', '/app/cli.js', '/data', '/data/telegram.env');
     expect(wired).toContain('EnvironmentFile=-"/data/telegram.env"');
     expect(wired).not.toContain('123:');
-    const plain = service.buildLinuxUnit('/bin/ranite', '/app/cli.js', '/data', null);
+    const plain = service.buildLinuxUnit('/bin/openbutler', '/app/cli.js', '/data', null);
     expect(plain).not.toContain('EnvironmentFile');
-    expect(plain).toContain('Environment="RANITE_DATA_DIR=/data"');
+    expect(plain).toContain('Environment="OPENBUTLER_DATA_DIR=/data"');
   });
 
   it('rejects invalid variable names in builders', async () => {
@@ -73,12 +73,12 @@ describe('login startup Telegram wiring (cross-platform builders)', () => {
     const service = await import('../src/daemon-autostart.js');
     expect(service.currentTelegramEnv()).toBeNull();
     const store = settings.defaultSettings();
-    store.telegram = { enabled: true, tokenEnv: 'RANITE_TEST_TG_TOKEN', workspaceRoot: root };
+    store.telegram = { enabled: true, tokenEnv: 'OPENBUTLER_TEST_TG_TOKEN', workspaceRoot: root };
     settings.saveSettings(store);
-    vi.stubEnv('RANITE_TEST_TG_TOKEN', '123456:valid-token-value-here-ok');
-    expect(service.currentTelegramEnv()).toEqual({ name: 'RANITE_TEST_TG_TOKEN', value: '123456:valid-token-value-here-ok' });
+    vi.stubEnv('OPENBUTLER_TEST_TG_TOKEN', '123456:valid-token-value-here-ok');
+    expect(service.currentTelegramEnv()).toEqual({ name: 'OPENBUTLER_TEST_TG_TOKEN', value: '123456:valid-token-value-here-ok' });
     const disabled = settings.defaultSettings();
-    disabled.telegram = { enabled: false, tokenEnv: 'RANITE_TEST_TG_TOKEN', workspaceRoot: root };
+    disabled.telegram = { enabled: false, tokenEnv: 'OPENBUTLER_TEST_TG_TOKEN', workspaceRoot: root };
     settings.saveSettings(disabled);
     expect(service.currentTelegramEnv()).toBeNull();
   });
@@ -96,9 +96,9 @@ describe.skipIf(process.platform !== 'win32')('user Windows automatic startup ow
     const service = await import('../src/daemon-autostart.js');
     service.installAutostart();
     expect(service.isAutostartInstalled()).toBe(true);
-    const launcher = join(root, 'autostart', 'ranite-logon.vbs');
+    const launcher = join(root, 'autostart', 'openbutler-logon.vbs');
     const content = readFileSync(launcher, 'utf8');
-    expect(content).toContain('RANITE_DATA_DIR');
+    expect(content).toContain('OPENBUTLER_DATA_DIR');
     expect(content).toContain(root);
     expect(content).toContain('""' + process.argv[1] + '"" daemon run');
     expect(content).not.toContain('must-not-be-in-launcher');
@@ -124,7 +124,7 @@ describe.skipIf(process.platform !== 'win32')('user Windows automatic startup ow
       args[0] === 'query' ? { status: 1, stdout: '', stderr: 'Not found' } : { status: 5, stdout: '', stderr: 'Fixture access denied' },
     );
     expect(() => service.installAutostart()).toThrow('code 5');
-    expect(existsSync(join(root, 'autostart', 'ranite-logon.vbs'))).toBe(false);
+    expect(existsSync(join(root, 'autostart', 'openbutler-logon.vbs'))).toBe(false);
     expect(registryValue).toBeNull();
   });
 });

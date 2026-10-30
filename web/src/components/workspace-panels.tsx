@@ -5,7 +5,7 @@ import { useEdgeResize } from '../edge-resize.js';
 import { subscribeFileLink } from '../file-links.js';
 import './workspace-panels.css';
 
-const storageKey = 'ranite:workspace-panels:v1';
+const storageKey = 'openbutler:workspace-panels:v1';
 
 function readWidth(): number {
   try {

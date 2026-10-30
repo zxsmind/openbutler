@@ -14,7 +14,7 @@ export interface MemoryPaths {
   areasDirectory: string;
   workspaceDirectory: string;
   workspaceFile: string;
-  /** Per-agent, never-synced scope: who this ranite is and how it sees its peers. */
+  /** Per-agent, never-synced scope: who this openbutler is and how it sees its peers. */
   selfDirectory: string;
   /** Legacy path retained for locating old data; no longer an active identity or memory document. */
   identityFile: string;
@@ -136,7 +136,7 @@ export function isWithinMemoryRoot(source: string, workspaceRoot = process.cwd()
 }
 
 /**
- * Source notes live only in Ranite's user, self, or active-workspace memory
+ * Source notes live only in OpenButler's user, self, or active-workspace memory
  * scopes. The shared team scope is deliberately excluded: it is a read-only
  * mirror of the hub's log, written only by the daemon, never by a file tool.
  */

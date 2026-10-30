@@ -1,4 +1,4 @@
-const DRAFT_PREFIX = 'ranite:draft:';
+const DRAFT_PREFIX = 'openbutler:draft:';
 
 export function readDrafts(storage: Storage): Record<string, string> {
   const drafts: Record<string, string> = {};

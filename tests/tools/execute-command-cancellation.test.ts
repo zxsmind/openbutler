@@ -16,8 +16,8 @@ function alive(pid: number): boolean {
 }
 
 it('cancels an exited shell even while its background child holds the output pipes open', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ranite-shell-cancel-'));
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-shell-cancel-'))
+  const root = mkdtempSync(join(tmpdir(), 'openbutler-shell-cancel-'));
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-shell-cancel-'))
     throw new Error('Unsafe shell fixture cleanup path.');
   const holderScript = join(root, 'holder.cjs');
   const holderMarker = join(root, 'holder.pid');

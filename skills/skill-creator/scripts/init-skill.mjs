@@ -1,4 +1,4 @@
-// Ranite helper; see LICENSE.txt and NOTICE.txt in this package.
+// OpenButler helper; see LICENSE.txt and NOTICE.txt in this package.
 import process from 'node:process';
 import console from 'node:console';
 import { basename, resolve } from 'node:path';
@@ -43,7 +43,7 @@ try {
       status: 'created_draft',
       name,
       directory: target,
-      next: 'Complete the draft, validate it and inspect Ranite discovery.',
+      next: 'Complete the draft, validate it and inspect OpenButler discovery.',
     }),
   );
 } catch (error) {

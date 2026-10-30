@@ -7,8 +7,8 @@ import type { ToolCallRequest } from '../src/tools/registry.js';
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-permissions-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-permissions-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
 });
 

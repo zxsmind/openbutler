@@ -11,7 +11,7 @@ import { getMemoryPaths } from '../../src/memory-paths.js';
 let workspace: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), 'ranite-tools-'));
+  workspace = await mkdtemp(join(tmpdir(), 'openbutler-tools-'));
 });
 
 afterEach(async () => {
@@ -79,7 +79,7 @@ describe('file_edit', () => {
   });
 
   it('keeps memory index structure validation on edits', async () => {
-    vi.stubEnv('RANITE_DATA_DIR', join(workspace, 'data'));
+    vi.stubEnv('OPENBUTLER_DATA_DIR', join(workspace, 'data'));
     try {
       const indexFile = getMemoryPaths(workspace).indexFile;
       await mkdir(dirname(indexFile), { recursive: true });

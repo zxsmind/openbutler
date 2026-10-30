@@ -114,7 +114,7 @@ export class TelegramAdapter {
         throw new Error('Telegram returned an invalid bot identity.');
       const webhook = await this.call('getWebhookInfo', {});
       if (isRecord(webhook) && typeof webhook.url === 'string' && webhook.url)
-        throw new Error('This bot already has a webhook. Remove that integration before using Ranite long polling.');
+        throw new Error('This bot already has a webhook. Remove that integration before using OpenButler long polling.');
       this.status = { state: 'polling', paired: Boolean(this.settings.chatId && this.settings.userId), username: me.username, error: null };
       this.polling = this.pollLoop();
       await this.refreshCommandMenu();
@@ -249,7 +249,7 @@ export class TelegramAdapter {
 
   /**
    * Title + body notification with HTML formatting. An empty title sends the
-   * body without a heading (used for channel messages that name Ranite
+   * body without a heading (used for channel messages that name OpenButler
    * themselves). Long bodies are chunked on entity-safe boundaries; a markup
    * rejection falls back to plain text so approvals and notices still arrive.
    */
@@ -269,7 +269,7 @@ export class TelegramAdapter {
     if (!this.readyToSend()) return;
     await this.call('sendMessage', {
       chat_id: this.settings!.chatId,
-      text: 'Telegram channel disconnected. Run `ranite telegram pair` in the terminal to reconnect.',
+      text: 'Telegram channel disconnected. Run `openbutler telegram pair` in the terminal to reconnect.',
       link_preview_options: { is_disabled: true },
       reply_markup: { remove_keyboard: true },
     });
@@ -330,7 +330,7 @@ export class TelegramAdapter {
     const input = JSON.stringify(redactSensitive(request.input), null, 2);
     const budget = Math.max(64, 4000 - header.length - 64);
     const parts = splitTelegramText(input, budget);
-    const preview = `<pre>${escapeTelegramHtml(parts[0]!)}</pre>${parts.length > 1 ? '\n… (open this schedule in Ranite for full details)' : ''}`;
+    const preview = `<pre>${escapeTelegramHtml(parts[0]!)}</pre>${parts.length > 1 ? '\n… (open this schedule in OpenButler for full details)' : ''}`;
     try {
       const result = await this.sendHtml(`${header}\n\n${preview}`, {
         inline_keyboard: [
@@ -428,7 +428,7 @@ export class TelegramAdapter {
       if (text === '/start' || text === '/help') {
         await this.sendOwnerNotification(
           '',
-          'Send a request to Ranite. /approvals refreshes pending action buttons. /stop cancels this chat run; /stop <schedule-id> stops a schedule run. /clear starts a new chat; /sessions lists the last 10 chats.',
+          'Send a request to OpenButler. /approvals refreshes pending action buttons. /stop cancels this chat run; /stop <schedule-id> stops a schedule run. /clear starts a new chat; /sessions lists the last 10 chats.',
           OWNER_KEYBOARD,
         );
       } else {
@@ -509,7 +509,7 @@ export class TelegramAdapter {
     this.status.paired = true;
     await this.sendOwnerNotification(
       '',
-      'Ranite is paired with this private chat. You can send requests and approve actions here.',
+      'OpenButler is paired with this private chat. You can send requests and approve actions here.',
       OWNER_KEYBOARD,
     );
     await this.refreshCommandMenu();
@@ -692,7 +692,7 @@ function splitEscapedText(escaped: string, maxLength = 4096): string[] {
 }
 
 function telegramDraftPreview(text: string): string {
-  const source = text.trim() || 'Ranite is working…';
+  const source = text.trim() || 'OpenButler is working…';
   if (source.length <= LIVE_DRAFT_TEXT_LIMIT) return source;
   let start = source.length - (LIVE_DRAFT_TEXT_LIMIT - 2);
   if (/^[\uDC00-\uDFFF]$/.test(source[start] ?? '') && /[\uD800-\uDBFF]/.test(source[start - 1] ?? '')) start += 1;

@@ -8,9 +8,9 @@ import { getDataPath } from '../paths.js';
 /**
  * On-demand installation of provider runtime packages.
  *
- * Ranite bundles a handful of AI SDK provider packages (see `SUPPORTED_PACKAGES`
+ * OpenButler bundles a handful of AI SDK provider packages (see `SUPPORTED_PACKAGES`
  * in registry.ts). Any other provider in the models.dev catalog is installed
- * the first time it is used, into Ranite's own data directory, and imported
+ * the first time it is used, into OpenButler's own data directory, and imported
  * from there. This is what lets a provider the code has never heard of work
  * without a release: the catalog carries its npm package, and this file fetches
  * it.
@@ -21,7 +21,7 @@ import { getDataPath } from '../paths.js';
  *
  * The version matters. The AI SDK publishes a dist-tag `ai-v<N>` (for example
  * `ai-v6`) on every provider package for the version built against `ai@<N>`.
- * Ranite runs one AI SDK line, so it asks for that line's tag. Installing
+ * OpenButler runs one AI SDK line, so it asks for that line's tag. Installing
  * `latest` would pull a package built for a newer model spec version than the
  * runtime understands, which fails at the first call.
  *
@@ -41,7 +41,7 @@ const META_TIMEOUT_MS = 8_000;
 
 const require = createRequire(import.meta.url);
 
-/** The AI SDK major version Ranite is built against, e.g. `6` for `ai@6`. */
+/** The AI SDK major version OpenButler is built against, e.g. `6` for `ai@6`. */
 function aiMajor(): number {
   try {
     return Number((require('ai/package.json') as { version: string }).version.split('.')[0]) || 6;
@@ -50,7 +50,7 @@ function aiMajor(): number {
   }
 }
 
-/** The AI SDK provider-spec major Ranite's adapters target, e.g. `3`.
+/** The AI SDK provider-spec major OpenButler's adapters target, e.g. `3`.
  *
  * Read from what `ai` itself declares, because `ai` is a dependency of this
  * package while `@ai-sdk/provider` is only a transitive one: relying on the
@@ -170,7 +170,7 @@ function ensureInstallRoot(name: string): string {
   mkdirSync(root, { recursive: true });
   const manifestPath = join(root, 'package.json');
   if (!existsSync(manifestPath)) {
-    writeFileSync(manifestPath, JSON.stringify({ name: 'ranite-provider-package', private: true, version: '0.0.0' }, null, 2), 'utf8');
+    writeFileSync(manifestPath, JSON.stringify({ name: 'openbutler-provider-package', private: true, version: '0.0.0' }, null, 2), 'utf8');
   }
   return root;
 }
@@ -245,11 +245,11 @@ export function installedEntry(npm: string): string | null {
 }
 
 /**
- * The npm spec to install for a package on Ranite's AI SDK line.
+ * The npm spec to install for a package on OpenButler's AI SDK line.
  *
  * Prefers the line dist-tag (`ai-v6`). A third-party package may not publish
  * that tag, so it falls back to the newest version whose `@ai-sdk/provider`
- * dependency matches Ranite's spec major. When the registry is unreachable it
+ * dependency matches OpenButler's spec major. When the registry is unreachable it
  * returns the line tag and lets npm report the failure.
  */
 async function installSpec(name: string): Promise<string> {
@@ -370,13 +370,13 @@ const selfEnvCache = new Map<string, boolean>();
  *
  * The AI SDK does this through one helper, so the variable names are literally
  * in the built file: `environmentVariableName: "GROQ_API_KEY"`. Reading them
- * out of the package answers the question Ranite would otherwise have to guess
+ * out of the package answers the question OpenButler would otherwise have to guess
  * — "should I pass an API key, or will this package find its own?" — from the
  * only authority on the matter, the package itself.
  *
  * `@ai-sdk/openai-compatible` declares none, which is why the gateway providers
- * that use it need Ranite to hand them a key; `@ai-sdk/amazon-bedrock` declares
- * `AWS_BEARER_TOKEN_BEDROCK` and signs requests itself, so a key from Ranite
+ * that use it need OpenButler to hand them a key; `@ai-sdk/amazon-bedrock` declares
+ * `AWS_BEARER_TOKEN_BEDROCK` and signs requests itself, so a key from OpenButler
  * would be an intrusion.
  *
  * False when the package is not installed yet, or cannot be read. The caller
@@ -403,7 +403,7 @@ export function packageReadsOwnEnv(npm: string): boolean {
  *
  * Every AI SDK provider package follows one convention: a single exported
  * `create<Name>` function whose result exposes `languageModel(id)`. This is the
- * same convention the bundled adapters use, so a package Ranite has never seen
+ * same convention the bundled adapters use, so a package OpenButler has never seen
  * is driven exactly like a bundled one.
  */
 export async function importProviderFactory(

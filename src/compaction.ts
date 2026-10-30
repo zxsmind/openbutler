@@ -199,7 +199,7 @@ export async function compactConversation(
       : new Error(typeof streamError === 'string' ? streamError : (JSON.stringify(streamError) ?? String(streamError)));
   const finishReason = await result.finishReason;
   const usage = await result.usage;
-  // Same row shape a chat step writes, so `ranite usage` can show what this
+  // Same row shape a chat step writes, so `openbutler usage` can show what this
   // request cost and how much of it the prefix cache served.
   const inputDetails = usage.inputTokenDetails;
   const outputDetails = usage.outputTokenDetails;
@@ -242,7 +242,7 @@ export async function compactConversation(
     content: options.archivePath
       ? appendTranscriptArchiveReference(COMPACTION_SUMMARY_MARKER + summary, options.archivePath)
       : COMPACTION_SUMMARY_MARKER + summary,
-    providerOptions: { ranite: { compactionCheckpoint: true } },
+    providerOptions: { openbutler: { compactionCheckpoint: true } },
   };
   const transcriptSource = options.transcriptMessages ?? options.messages;
   // Middle-part budget (projected dialogue plus latest tool references). System,
@@ -332,7 +332,7 @@ function projectTranscript(messages: ModelMessage[], maxMiddleTokens?: number): 
     first?.role === 'assistant' &&
     typeof first.content === 'string' &&
     first.content.startsWith(COMPACTION_SUMMARY_MARKER) &&
-    first.providerOptions?.ranite?.compactionCheckpoint === undefined;
+    first.providerOptions?.openbutler?.compactionCheckpoint === undefined;
   const calls = new Map<string, { batchId: string; toolName: string; input: string; index: number }>();
   const references: Array<{ index: number; reference: ToolReference; media?: ModelMessage }> = [];
   const resolvedCalls = new Set<string>();
@@ -399,12 +399,12 @@ function projectTranscript(messages: ModelMessage[], maxMiddleTokens?: number): 
   messages.forEach((message, index) => {
     if (
       isContinueMessage(message, legacyCheckpoint) ||
-      message.providerOptions?.ranite?.compactionCheckpoint === true ||
+      message.providerOptions?.openbutler?.compactionCheckpoint === true ||
       (index === 0 && legacyCheckpoint)
     )
       return;
     if (message.role === 'user') {
-      const mediaBatch = message.providerOptions?.ranite?.toolReferenceBatchId;
+      const mediaBatch = message.providerOptions?.openbutler?.toolReferenceBatchId;
       if (mediaBatch === undefined || mediaBatch === latestBatch) projected.push(copyMessage(message));
     } else if (message.role === 'assistant' && !parseToolReference(message)) {
       if (typeof message.content === 'string') projected.push({ role: 'assistant', content: message.content });
@@ -422,7 +422,7 @@ function projectTranscript(messages: ModelMessage[], maxMiddleTokens?: number): 
     for (const { reference, media } of byIndex.get(index) ?? []) {
       projected.push({ role: 'assistant', content: TOOL_REFERENCE_MARKER + JSON.stringify(reference) });
       if (media?.role === 'user')
-        projected.push(copyMessage({ ...media, providerOptions: { ranite: { toolReferenceBatchId: reference.batchId } } }));
+        projected.push(copyMessage({ ...media, providerOptions: { openbutler: { toolReferenceBatchId: reference.batchId } } }));
     }
   });
   const retained = retainLatestToolPreviews(projected);
@@ -447,7 +447,7 @@ function foldOldestDialogue(middle: ModelMessage[], maxMiddleTokens: number): Mo
   let total = sizes.reduce((sum, size) => sum + size, 0);
   if (total <= maxMiddleTokens) return middle;
   const newestUserIndex = middle.findLastIndex(
-    (message) => message.role === 'user' && message.providerOptions?.ranite?.toolReferenceBatchId === undefined,
+    (message) => message.role === 'user' && message.providerOptions?.openbutler?.toolReferenceBatchId === undefined,
   );
   const keep = new Set(middle.map((_, index) => index));
   for (let index = 0; index < middle.length && total > maxMiddleTokens; index++) {
@@ -466,7 +466,7 @@ function isFoldableDialogue(message: ModelMessage): boolean {
   if (typeof message.content === 'string') {
     return !message.content.startsWith(TOOL_REFERENCE_MARKER);
   }
-  if (message.providerOptions?.ranite?.toolReferenceBatchId !== undefined) return false;
+  if (message.providerOptions?.openbutler?.toolReferenceBatchId !== undefined) return false;
   return !message.content.some((part) => part.type === 'image' || part.type === 'file');
 }
 
@@ -490,7 +490,7 @@ function isContinueMessage(message: ModelMessage, legacyCheckpoint: boolean): bo
     message.role === COMPACTION_CONTINUE_MESSAGE.role &&
     typeof message.content === 'string' &&
     message.content === COMPACTION_CONTINUE_MESSAGE.content &&
-    (message.providerOptions?.ranite?.compactionControl === true || legacyCheckpoint)
+    (message.providerOptions?.openbutler?.compactionControl === true || legacyCheckpoint)
   );
 }
 

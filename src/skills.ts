@@ -29,7 +29,7 @@ function builtinSkillDirectory(): string {
   return existsSync(packaged) ? packaged : resolve(moduleDirectory, '../skills');
 }
 
-export function getRaniteSkillDirectory(): string {
+export function getOpenButlerSkillDirectory(): string {
   return getDataPath('skills');
 }
 

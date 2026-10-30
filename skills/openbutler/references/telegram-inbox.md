@@ -6,9 +6,9 @@ Related: [environment](environment.md), [teams](teams.md), [workers](workers.md)
 ## Telegram onboarding
 
 ```text
-ranite telegram setup
-ranite telegram status
-ranite telegram pair
+openbutler telegram setup
+openbutler telegram status
+openbutler telegram pair
 ```
 
 Setup uses a Telegram bot token from BotFather, referenced by a named host
@@ -19,7 +19,7 @@ test message. The actual token is not a general settings-file field.
 For a server with the variable already supplied by its service manager:
 
 ```text
-ranite telegram setup --token-env=TELEGRAM_BOT_TOKEN --workspace=/srv/project --no-wait
+openbutler telegram setup --token-env=TELEGRAM_BOT_TOKEN --workspace=/srv/project --no-wait
 ```
 
 `--no-wait` skips the interactive pairing wait; it does not mean the channel has

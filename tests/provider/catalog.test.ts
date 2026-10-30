@@ -47,13 +47,13 @@ const FIXTURE = {
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-catalog-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-catalog-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   mkdirSync(dataDir, { recursive: true });
 });
 
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 /**
@@ -234,7 +234,7 @@ describe('offline behaviour', () => {
     const index = await catalog.getCatalogIndex({
       fetchImpl: () => Promise.reject(new Error('network is unreachable')),
     });
-    /* A stale catalog still names providers and models, so ranite keeps working
+    /* A stale catalog still names providers and models, so openbutler keeps working
        with an out-of-date list rather than refusing to start. */
     expect(index.fetchedAt).toBe(monthAgo);
     expect(catalog.getProvider('openai')).not.toBeNull();

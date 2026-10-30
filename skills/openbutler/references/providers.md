@@ -6,10 +6,10 @@ Related: [configuration](configuration.md), [web](web.md), [observability](obser
 ## Discover current choices
 
 ```text
-ranite config
-ranite --list-models
-ranite --list-models --provider <id> --filter <text> --limit 50
-ranite keys list
+openbutler config
+openbutler --list-models
+openbutler --list-models --provider <id> --filter <text> --limit 50
+openbutler keys list
 ```
 
 Catalog data comes from models.dev with a twelve-hour cache and stale fallback
@@ -32,7 +32,7 @@ knows the model. A provider shows its catalog display name, else its id.
 
 ## Add or edit a provider
 
-Use `ranite setup`, TUI `/provider` or Settings -> Providers. Setup supports a
+Use `openbutler setup`, TUI `/provider` or Settings -> Providers. Setup supports a
 catalog provider or custom id. A custom endpoint needs its runtime npm package,
 base URL and model id. Runtime protocol matters: an OpenAI-compatible server and
 an Anthropic server are not interchangeable. Preserve a required `/v1` prefix
@@ -56,12 +56,12 @@ defaultModel: example-tool-model
 
 This shape does not establish that the endpoint exists. Establish URL, auth,
 model id and tool/image compatibility first. A remote server is not reachable
-through the Ranite host's loopback address. After setup inspect the selected
+through the OpenButler host's loopback address. After setup inspect the selected
 model; merely adding a provider may not select the desired one.
 
 ## Keys and affinity
 
-`ranite keys add <provider>` uses masked input. `keys list` shows state, count and
+`openbutler keys add <provider>` uses masked input. `keys list` shows state, count and
 redacted suffixes; `keys remove <provider>` removes keys while retaining the public
 provider entry. Web Providers also supplies credential entry. MCP ids are not
 provider ids; their credentials use the MCP environment-reference mechanism.

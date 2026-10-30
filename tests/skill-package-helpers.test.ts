@@ -9,10 +9,10 @@ const creator = resolve('skills/skill-creator/scripts');
 const installer = resolve('skills/skill-installer/scripts/install-local.mjs');
 let root: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-skill-package-'));
+  root = mkdtempSync(join(tmpdir(), 'openbutler-skill-package-'));
 });
 afterEach(() => {
-  if (resolve(dirname(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-skill-package-'))
+  if (resolve(dirname(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-skill-package-'))
     throw new Error('Unsafe fixture cleanup.');
   rmSync(root, { recursive: true, force: true });
 });

@@ -10,7 +10,7 @@ let project: string;
 let other: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'ranite-trusted-'));
+  root = mkdtempSync(join(tmpdir(), 'openbutler-trusted-'));
   project = join(root, 'project');
   other = join(root, 'other');
   mkdirSync(project, { recursive: true });
@@ -40,7 +40,7 @@ describe('trusted path classification', () => {
   });
 
   it('treats a not-yet-created trusted root as inside', () => {
-    const futureScratch = join(tmpdir(), 'ranite', '2099-01-01');
+    const futureScratch = join(tmpdir(), 'openbutler', '2099-01-01');
     expect(classifyTrustedPath(join(futureScratch, 'probe.py'), [project, futureScratch])).toBe('workspace');
   });
 
@@ -52,6 +52,6 @@ describe('trusted path classification', () => {
   it('dates the scratch root by day so each day is discarded on its own', () => {
     const now = new Date();
     const expected = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    expect(getScratchRoot().endsWith(join('ranite', expected))).toBe(true);
+    expect(getScratchRoot().endsWith(join('openbutler', expected))).toBe(true);
   });
 });

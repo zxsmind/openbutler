@@ -7,8 +7,8 @@ const run = promisify(execFile);
 /**
  * `SIGDN_FILESYSPATH`, the only `IShellItem::GetDisplayName` flag that returns a
  * full filesystem path. The other flags answer with a display name (`Desktop`,
- * `ranite-005`) that no caller can treat as a path — that wrong flag is what made
- * every pick fail with "Choose an absolute folder path."
+ * a folder's last path segment) that no caller can treat as a path — that wrong flag
+ * is what made every pick fail with "Choose an absolute folder path."
  */
 const SIGDN_FILESYSPATH = 0x8001c000;
 

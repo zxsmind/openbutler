@@ -15,15 +15,15 @@ describe('memory view', () => {
   let paths: ReturnType<typeof getMemoryPaths>;
 
   beforeEach(() => {
-    previous = process.env.RANITE_DATA_DIR;
-    dataDir = mkdtempSync(join(tmpdir(), 'ranite-memory-view-'));
-    process.env.RANITE_DATA_DIR = dataDir;
+    previous = process.env.OPENBUTLER_DATA_DIR;
+    dataDir = mkdtempSync(join(tmpdir(), 'openbutler-memory-view-'));
+    process.env.OPENBUTLER_DATA_DIR = dataDir;
     paths = getMemoryPaths(process.cwd());
   });
 
   afterEach(() => {
-    if (previous === undefined) delete process.env.RANITE_DATA_DIR;
-    else process.env.RANITE_DATA_DIR = previous;
+    if (previous === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+    else process.env.OPENBUTLER_DATA_DIR = previous;
     rmSync(dataDir, { recursive: true, force: true });
   });
 

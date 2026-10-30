@@ -9,12 +9,12 @@ import { readFileSync } from 'node:fs';
  * still go through the bundler (hashing, inlining rules). */
 const repositoryAssets = fileURLToPath(new URL('../assets', import.meta.url));
 const brandHash = createHash('sha256')
-  .update(readFileSync(new URL('../src/assets/branding/ranite.svg', import.meta.url)))
+  .update(readFileSync(new URL('../src/assets/branding/openbutler.svg', import.meta.url)))
   .digest('hex')
   .slice(0, 12);
 
 /**
- * The client is served by the Ranite web server from `dist/client`, which means
+ * The client is served by the OpenButler web server from `dist/client`, which means
  * every change needs a build. In development Vite serves the client itself and
  * forwards the API to the running server, so editing a component is instant.
  *
@@ -26,8 +26,8 @@ export default defineConfig({
   plugins: [
     react(),
     {
-      name: 'ranite-brand-favicon-revision',
-      transformIndexHtml: (html: string) => html.replaceAll('__RANITE_BRAND_HASH__', brandHash),
+      name: 'openbutler-brand-favicon-revision',
+      transformIndexHtml: (html: string) => html.replaceAll('__OPENBUTLER_BRAND_HASH__', brandHash),
     },
   ],
   base: './',

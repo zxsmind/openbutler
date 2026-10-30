@@ -26,29 +26,29 @@ const JOIN_POLL_TIMEOUT_MS = 10 * 60_000;
 const INVITE_TTL_DEFAULT_MS = 10 * 60_000;
 
 const USAGE = `Usage:
-  ranite team init --as <name> [--name <team>] [--port <n>]
-  ranite team invite [--ttl-minutes <n>]
-  ranite team invites
-  ranite team invite-revoke <code>
-  ranite team join <address> --code <code> --as <name> [--fingerprint <fp>]
-  ranite team join-status <address> <request-id>
-  ranite team pending
-  ranite team approve <request-id>
-  ranite team deny <request-id>
-  ranite team members
-  ranite team leave
-  ranite team remove <name>
-  ranite team status
-  ranite team log [--limit <n>]
-  ranite team rejoin <address>
-  ranite team say <message>
-  ranite team dm <member> <message>
-  ranite team inbox
-  ranite team read [--group] [--from <member>]
-  ranite team history [--group | --with <member>] [--before <seq>] [--limit <n>]
-  ranite team send-file <member|group> <path>
-  ranite team files
-  ranite team get <file-id> [--to <path>]`;
+  openbutler team init --as <name> [--name <team>] [--port <n>]
+  openbutler team invite [--ttl-minutes <n>]
+  openbutler team invites
+  openbutler team invite-revoke <code>
+  openbutler team join <address> --code <code> --as <name> [--fingerprint <fp>]
+  openbutler team join-status <address> <request-id>
+  openbutler team pending
+  openbutler team approve <request-id>
+  openbutler team deny <request-id>
+  openbutler team members
+  openbutler team leave
+  openbutler team remove <name>
+  openbutler team status
+  openbutler team log [--limit <n>]
+  openbutler team rejoin <address>
+  openbutler team say <message>
+  openbutler team dm <member> <message>
+  openbutler team inbox
+  openbutler team read [--group] [--from <member>]
+  openbutler team history [--group | --with <member>] [--before <seq>] [--limit <n>]
+  openbutler team send-file <member|group> <path>
+  openbutler team files
+  openbutler team get <file-id> [--to <path>]`;
 
 function words(parsed: Parsed): string[] {
   return parsed.words;
@@ -71,7 +71,7 @@ function openStore(): TeamStore {
 
 async function runInit(parsed: Parsed): Promise<void> {
   const as = flag(parsed, 'as');
-  if (!as) throw new Error('Usage: ranite team init --as <name> [--name <team>] [--port <n>]');
+  if (!as) throw new Error('Usage: openbutler team init --as <name> [--name <team>] [--port <n>]');
   const memberName = validateMemberName(as);
   const teamName = validateTeamName(flag(parsed, 'name') ?? `${memberName}-team`);
   const portRaw = flag(parsed, 'port');
@@ -92,7 +92,7 @@ async function runInit(parsed: Parsed): Promise<void> {
   saveSettings(settings);
   ui.success(`Team "${teamName}" created. This machine is the hub as ${memberName}.`);
   ui.info(`Hub address: ${address}:${port}`);
-  ui.info('The background host picks this up automatically. Invite members with: ranite team invite');
+  ui.info('The background host picks this up automatically. Invite members with: openbutler team invite');
 }
 
 async function runInvite(parsed: Parsed): Promise<void> {
@@ -109,7 +109,7 @@ async function runInvite(parsed: Parsed): Promise<void> {
     store.appendAudit({ kind: 'invite.created', actor: settings.team.memberName, detail: code, createdAt: Date.now() });
     ui.success(`Invite code: ${code} (single use, expires in ${ttlMinutes}m)`);
     ui.info(`Fingerprint: ${fingerprintOf(hubId)} (the joiner must confirm this)`);
-    ui.info(`Join with: ranite team join ${settings.team.hubHost}:${settings.team.hubPort} --code ${code} --as <name>`);
+    ui.info(`Join with: openbutler team join ${settings.team.hubHost}:${settings.team.hubPort} --code ${code} --as <name>`);
   } finally {
     store.close();
   }
@@ -122,7 +122,7 @@ async function runInvites(): Promise<void> {
   try {
     const invites = store.listInvites(Date.now());
     if (invites.length === 0) {
-      ui.info('No open invites. Create one with: ranite team invite');
+      ui.info('No open invites. Create one with: openbutler team invite');
       return;
     }
     ui.table(
@@ -136,7 +136,7 @@ async function runInvites(): Promise<void> {
 
 async function runInviteRevoke(parsed: Parsed): Promise<void> {
   const code = words(parsed)[1]?.trim();
-  if (!code) throw new Error('Usage: ranite team invite-revoke <code>');
+  if (!code) throw new Error('Usage: openbutler team invite-revoke <code>');
   const settings = loadSettings();
   if (settings.team?.role !== 'hub') throw new Error('Only the hub revokes invites.');
   const store = openStore();
@@ -157,7 +157,7 @@ async function runJoin(parsed: Parsed): Promise<void> {
   const addressRaw = arg[1];
   const code = flag(parsed, 'code');
   const as = flag(parsed, 'as');
-  if (!addressRaw || !code || !as) throw new Error('Usage: ranite team join <address> --code <code> --as <name> [--fingerprint <fp>]');
+  if (!addressRaw || !code || !as) throw new Error('Usage: openbutler team join <address> --code <code> --as <name> [--fingerprint <fp>]');
   const memberName = validateMemberName(as);
   const settings = loadSettings();
   if (settings.team) throw new Error(`Already in team "${settings.team.teamName}". Leave it first.`);
@@ -179,7 +179,7 @@ async function runJoin(parsed: Parsed): Promise<void> {
   ui.info(`Join requested (${requestId}). Waiting for the hub owner to approve…`);
   const approved = await waitForApproval(target, requestId);
   if (approved.status === 'denied') throw new Error('The hub owner denied the join request.');
-  if (approved.status !== 'approved') throw new Error('Join is still pending. Resume later with: ranite team join-status');
+  if (approved.status !== 'approved') throw new Error('Join is still pending. Resume later with: openbutler team join-status');
   const secrets = loadSecrets();
   saveSecrets({ ...secrets, teamTicket: approved.ticket });
   const next = loadSettings();
@@ -212,7 +212,7 @@ async function runJoinStatus(parsed: Parsed): Promise<void> {
   const arg = words(parsed);
   const addressRaw = arg[1];
   const requestId = arg[2];
-  if (!addressRaw || !requestId) throw new Error('Usage: ranite team join-status <address> <request-id>');
+  if (!addressRaw || !requestId) throw new Error('Usage: openbutler team join-status <address> <request-id>');
   const target = parseJoinTarget(addressRaw);
   const result = await pollJoin(target, requestId);
   if (result.status === 'pending') {
@@ -255,7 +255,7 @@ async function runPending(): Promise<void> {
       ['REQUEST', 'NAME', 'CODE', 'WAITING'],
       pending.map((entry) => [entry.id, entry.name, entry.code, `${Math.round((Date.now() - entry.createdAt) / 1000)}s`]),
     );
-    ui.info('Approve with: ranite team approve <request> · deny with: ranite team deny <request>');
+    ui.info('Approve with: openbutler team approve <request> · deny with: openbutler team deny <request>');
   } finally {
     store.close();
   }
@@ -263,7 +263,7 @@ async function runPending(): Promise<void> {
 
 async function runDecide(parsed: Parsed, approve: boolean): Promise<void> {
   const requestId = words(parsed)[1];
-  if (!requestId) throw new Error(`Usage: ranite team ${approve ? 'approve' : 'deny'} <request-id>`);
+  if (!requestId) throw new Error(`Usage: openbutler team ${approve ? 'approve' : 'deny'} <request-id>`);
   const settings = loadSettings();
   if (settings.team?.role !== 'hub') throw new Error('Only the hub decides join requests.');
   const store = openStore();
@@ -347,7 +347,7 @@ async function runLeave(): Promise<void> {
 
 async function runRemove(parsed: Parsed): Promise<void> {
   const name = words(parsed)[1];
-  if (!name) throw new Error('Usage: ranite team remove <name>');
+  if (!name) throw new Error('Usage: openbutler team remove <name>');
   const settings = loadSettings();
   if (settings.team?.role !== 'hub') throw new Error('Only the hub removes members.');
   const store = openStore();
@@ -368,7 +368,7 @@ async function runRemove(parsed: Parsed): Promise<void> {
 async function runStatus(): Promise<void> {
   const settings = loadSettings();
   if (!settings.team) {
-    ui.info('Not in a team. Create one with: ranite team init --as <name>');
+    ui.info('Not in a team. Create one with: openbutler team init --as <name>');
     return;
   }
   const team = settings.team;
@@ -404,7 +404,7 @@ async function runStatus(): Promise<void> {
 function openChannel(): { channel: TeamChannel; close: () => void } {
   const settings = loadSettings();
   const team = settings.team;
-  if (!team) throw new Error('This machine is not in a team. Create one with: ranite team init --as <name>');
+  if (!team) throw new Error('This machine is not in a team. Create one with: openbutler team init --as <name>');
   if (team.role === 'hub') {
     const store = openStore();
     return { channel: localChannel(store, team.memberName), close: () => store.close() };
@@ -424,7 +424,7 @@ function renderMessages(messages: TeamMessage[]): void {
 
 async function runSay(parsed: Parsed): Promise<void> {
   const text = words(parsed).slice(1).join(' ').trim();
-  if (!text) throw new Error('Usage: ranite team say <message>');
+  if (!text) throw new Error('Usage: openbutler team say <message>');
   await startDaemon();
   const result = await requestHost('team.send', { recipient: 'group', text });
   ui.line(JSON.stringify(result));
@@ -434,7 +434,7 @@ async function runDm(parsed: Parsed): Promise<void> {
   const arg = words(parsed);
   const recipient = arg[1];
   const text = arg.slice(2).join(' ').trim();
-  if (!recipient || !text) throw new Error('Usage: ranite team dm <member> <message>');
+  if (!recipient || !text) throw new Error('Usage: openbutler team dm <member> <message>');
   await startDaemon();
   const result = await requestHost('team.send', { recipient, text });
   ui.line(JSON.stringify(result));
@@ -448,9 +448,9 @@ async function runInbox(): Promise<void> {
     ui.info(`${inbox.count} unread DM${inbox.count === 1 ? '' : 's'}, ${newGroup} new group message${newGroup === 1 ? '' : 's'}.`);
     if (inbox.count > 0) {
       renderMessages(inbox.messages);
-      ui.info('Read them with: ranite team read');
+      ui.info('Read them with: openbutler team read');
     }
-    if (newGroup > 0) ui.info('Read the group with: ranite team read --group');
+    if (newGroup > 0) ui.info('Read the group with: openbutler team read --group');
   } finally {
     close();
   }
@@ -516,10 +516,10 @@ async function runLog(parsed: Parsed): Promise<void> {
 
 async function runRejoin(parsed: Parsed): Promise<void> {
   const addressRaw = words(parsed)[1];
-  if (!addressRaw) throw new Error('Usage: ranite team rejoin <address>');
+  if (!addressRaw) throw new Error('Usage: openbutler team rejoin <address>');
   const settings = loadSettings();
   const team = settings.team;
-  if (!team) throw new Error('This machine is not in a team. Join first with: ranite team join');
+  if (!team) throw new Error('This machine is not in a team. Join first with: openbutler team join');
   if (team.role === 'hub') throw new Error('A hub does not rejoin itself.');
   const target = parseJoinTarget(addressRaw);
   const hub = await fetchHubFingerprint(target);
@@ -547,7 +547,7 @@ async function runRejoin(parsed: Parsed): Promise<void> {
 async function runHistory(parsed: Parsed): Promise<void> {
   const group = parsed.booleans.has('group');
   const peer = flag(parsed, 'with')?.trim();
-  if (!group && !peer) throw new Error('Usage: ranite team history [--group | --with <member>] [--before <seq>] [--limit <n>]');
+  if (!group && !peer) throw new Error('Usage: openbutler team history [--group | --with <member>] [--before <seq>] [--limit <n>]');
   const before = Number(flag(parsed, 'before') ?? '0');
   const limit = Number(flag(parsed, 'limit') ?? '50');
   if (!Number.isInteger(before) || before < 0) throw new Error('--before must be a non-negative integer.');
@@ -562,7 +562,7 @@ async function runHistory(parsed: Parsed): Promise<void> {
     // Newest first from the hub; show oldest-first for reading.
     renderMessages([...result.messages].reverse());
     const oldest = result.messages.at(-1);
-    if (oldest) ui.info(`Page back with: ranite team history ${group ? '--group' : `--with ${peer}`} --before ${oldest.seq}`);
+    if (oldest) ui.info(`Page back with: openbutler team history ${group ? '--group' : `--with ${peer}`} --before ${oldest.seq}`);
   } finally {
     close();
   }
@@ -572,7 +572,7 @@ async function runSendFile(parsed: Parsed): Promise<void> {
   const arg = words(parsed);
   const recipient = arg[1];
   const path = arg.slice(2).join(' ').trim();
-  if (!recipient || !path) throw new Error('Usage: ranite team send-file <member|group> <path>');
+  if (!recipient || !path) throw new Error('Usage: openbutler team send-file <member|group> <path>');
   await startDaemon();
   const result = await requestHost('team.send-file', { to: recipient, path: resolve(path) });
   ui.line(JSON.stringify(result));
@@ -597,7 +597,7 @@ async function runFiles(): Promise<void> {
 
 async function runGet(parsed: Parsed): Promise<void> {
   const id = words(parsed)[1];
-  if (!id) throw new Error('Usage: ranite team get <file-id> [--to <path>]');
+  if (!id) throw new Error('Usage: openbutler team get <file-id> [--to <path>]');
   const to = flag(parsed, 'to');
   const { channel, close } = openChannel();
   try {
@@ -617,7 +617,7 @@ async function defaultDestination(channel: TeamChannel, id: string): Promise<str
   return defaultInboxPath(team.teamId || teamSlug(team.teamName), meta.name);
 }
 
-/** Usage: ranite team <subcommand> … (see USAGE). */
+/** Usage: openbutler team <subcommand> … (see USAGE). */
 export async function runTeamCommand(parsed: Parsed): Promise<void> {
   const action = words(parsed)[0] ?? 'status';
   switch (action) {

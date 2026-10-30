@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let directory: string;
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), 'ranite-transaction-'));
-  process.env.RANITE_DATA_DIR = directory;
+  directory = mkdtempSync(join(tmpdir(), 'openbutler-transaction-'));
+  process.env.OPENBUTLER_DATA_DIR = directory;
   vi.resetModules();
 });
 afterEach(() => {
-  delete process.env.RANITE_DATA_DIR;
+  delete process.env.OPENBUTLER_DATA_DIR;
 });
 
 describe('settings transaction durability', () => {

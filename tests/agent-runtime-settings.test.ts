@@ -45,8 +45,8 @@ let directory: string;
 let runtime: import('../src/agent-session.js').AgentEnvironment;
 let settings: typeof import('../src/settings.js');
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), 'ranite-live-settings-'));
-  vi.stubEnv('RANITE_DATA_DIR', directory);
+  directory = mkdtempSync(join(tmpdir(), 'openbutler-live-settings-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', directory);
   vi.resetModules();
   vi.clearAllMocks();
   // Recreate the partial mock with this test's catalog module and data directory.

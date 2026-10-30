@@ -11,7 +11,7 @@ describe('shared sidebar chrome', () => {
     expect(settings).toContain('class="sidebar-heading"');
     expect(settings).toContain('class="sidebar-brand"');
     expect(settings).toContain('class="brand-symbol"');
-    expect(settings).toContain('aria-label="Ranite"');
+    expect(settings).toContain('aria-label="OpenButler"');
     expect(settings).toContain('icon-button');
   });
 

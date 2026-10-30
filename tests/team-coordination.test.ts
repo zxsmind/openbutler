@@ -16,7 +16,7 @@ let peer: TeamChannel;
 let outsider: TeamChannel;
 
 beforeEach(async () => {
-  directory = mkdtempSync(join(tmpdir(), 'ranite-peer-contract-'));
+  directory = mkdtempSync(join(tmpdir(), 'openbutler-peer-contract-'));
   store = new TeamStore(join(directory, 'team.db'));
   store.initHub('hub-id', 'team-id', 'Team', 'Hub', Date.now());
   for (const name of ['Peer', 'Other']) {

@@ -1163,7 +1163,7 @@ export class AgentSessionController implements AgentSessionClient {
       const settleReviewStatus = (text: string, detail: string) => this.replaceEntry(checking, { kind: 'notice', text, detail });
       const decisionDetail = (decision: { confidence: string; risk: string; authority?: string; reason: string }) =>
         `${decision.reason}\nRisk: ${decision.risk} · Confidence: ${decision.confidence}${decision.authority ? ` · Authority: ${decision.authority}` : ''}`;
-      // Read fresh so a `ranite permissions --review-timeout` change applies without a host restart.
+      // Read fresh so a `openbutler permissions --review-timeout` change applies without a host restart.
       const reviewTimeoutSeconds = loadSettings().autoReviewTimeoutSeconds;
       // The review is a classification call: it never inherits the turn's
       // reasoning effort, so a heavy thinking setup cannot slow every
@@ -1262,7 +1262,7 @@ export class AgentSessionController implements AgentSessionClient {
   }
 
   private requestManualApproval(request: ToolCallRequest): Promise<boolean | ToolApprovalOutcome> {
-    // Read fresh so a `ranite permissions --approval-timeout` change applies without a host restart.
+    // Read fresh so a `openbutler permissions --approval-timeout` change applies without a host restart.
     const timeoutSeconds = loadSettings().approvalTimeoutSeconds ?? DEFAULT_APPROVAL_TIMEOUT_SECONDS;
     return new Promise<boolean | ToolApprovalOutcome>((resolve) => {
       let settled = false;
@@ -2732,20 +2732,20 @@ function queuedUserMessageToModelMessage(message: QueuedMessage, steering = fals
       text: [sourceLabel, workspaceLabel, projectLabel, deliveryHint, steeringHint, message.text].filter(Boolean).join('\n'),
     });
   if (message.attachments?.length) content.push({ type: 'text', text: attachmentReferences(message.attachments) });
-  return { role: 'user', content, ...(message.eventId ? { providerOptions: { ranite: { queuedMessageId: message.eventId } } } : {}) };
+  return { role: 'user', content, ...(message.eventId ? { providerOptions: { openbutler: { queuedMessageId: message.eventId } } } : {}) };
 }
 
 function appendUniqueQueuedMessages(target: ModelMessage[], messages: ModelMessage[]): void {
   const existing = new Set(
     target.flatMap((message) =>
-      message.role === 'user' && typeof message.providerOptions?.ranite?.queuedMessageId === 'string'
-        ? [message.providerOptions.ranite.queuedMessageId]
+      message.role === 'user' && typeof message.providerOptions?.openbutler?.queuedMessageId === 'string'
+        ? [message.providerOptions.openbutler.queuedMessageId]
         : [],
     ),
   );
   for (const message of messages) {
-    if (message.role === 'user' && typeof message.providerOptions?.ranite?.queuedMessageId === 'string') {
-      const id = message.providerOptions.ranite.queuedMessageId;
+    if (message.role === 'user' && typeof message.providerOptions?.openbutler?.queuedMessageId === 'string') {
+      const id = message.providerOptions.openbutler.queuedMessageId;
       if (existing.has(id)) continue;
       existing.add(id);
     }

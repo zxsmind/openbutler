@@ -171,8 +171,8 @@ async function createFixtureHost(): Promise<DaemonHost> {
 beforeEach(async () => {
   fixtureSettingsReload = undefined;
   fixtureVision = false;
-  root = mkdtempSync(join(tmpdir(), 'ranite-ipc-check-'));
-  vi.stubEnv('RANITE_DATA_DIR', root);
+  root = mkdtempSync(join(tmpdir(), 'openbutler-ipc-check-'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', root);
   vi.resetModules();
   clients = [];
   daemonStart.run.mockReset();
@@ -202,7 +202,7 @@ afterEach(async () => {
   await host.close();
   await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
   vi.unstubAllEnvs();
-  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('ranite-ipc-check-'))
+  if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('openbutler-ipc-check-'))
     throw new Error('Unsafe fixture cleanup path.');
   rmSync(root, { recursive: true, force: true });
 });
@@ -603,7 +603,7 @@ describe('shared host and session IPC', () => {
         expect(
           web
             .getSnapshot()
-            .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the Ranite host.')),
+            .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the OpenButler host.')),
         ).toBe(true),
       { timeout: 5_000, interval: 25 },
     );
@@ -720,7 +720,9 @@ describe('shared host and session IPC', () => {
     for (const attached of [shared, isolated])
       await vi.waitFor(() =>
         expect(
-          attached.getSnapshot().session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Ranite host restarting')),
+          attached
+            .getSnapshot()
+            .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('OpenButler host restarting')),
         ).toBe(true),
       );
     await replaceFixtureHost();
@@ -730,7 +732,7 @@ describe('shared host and session IPC', () => {
           expect(
             attached
               .getSnapshot()
-              .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the Ranite host.')),
+              .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the OpenButler host.')),
           ).toBe(true),
         { timeout: 5_000, interval: 25 },
       );
@@ -767,13 +769,15 @@ describe('shared host and session IPC', () => {
     await requestHost('stop');
     await vi.waitFor(() =>
       expect(
-        attached.getSnapshot().session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Ranite host stopping')),
+        attached.getSnapshot().session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('OpenButler host stopping')),
       ).toBe(true),
     );
     await host.close();
     await vi.waitFor(() =>
       expect(
-        attached.getSnapshot().session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('The Ranite host stopped.')),
+        attached
+          .getSnapshot()
+          .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('The OpenButler host stopped.')),
       ).toBe(true),
     );
     expect(daemonStart.run).not.toHaveBeenCalled();
@@ -799,7 +803,7 @@ describe('shared host and session IPC', () => {
         expect(
           attached
             .getSnapshot()
-            .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the Ranite host.')),
+            .session.entries.some((entry) => entry.kind === 'notice' && entry.text.includes('Reconnected to the OpenButler host.')),
         ).toBe(true),
       { timeout: 5_000, interval: 25 },
     );
@@ -832,7 +836,7 @@ describe('shared host and session IPC', () => {
       const loader = pathToFileURL(resolve('node_modules/tsx/dist/loader.mjs')).href;
       const child = spawn(process.execPath, ['--import', loader, resolve('src/cli.ts'), '--workspace', root, '--c', 'A fixture request'], {
         cwd: root,
-        env: { ...process.env, RANITE_DATA_DIR: root },
+        env: { ...process.env, OPENBUTLER_DATA_DIR: root },
         windowsHide: true,
       });
       let stdout = '';

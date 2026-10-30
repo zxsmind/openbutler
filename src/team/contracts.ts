@@ -4,7 +4,7 @@ export const TEAM_PRESENCE_WINDOW_MS = 15_000;
 export const TEAM_CAPABILITY_MAX_AGE_MS = 45_000;
 export const TEAM_CAPABILITY_RENEW_MS = 20_000;
 export const MAX_TEAM_MESSAGE_ID_CHARS = 256;
-export const TEAM_PROTOCOL_VERSION = 'ranite-team/2';
+export const TEAM_PROTOCOL_VERSION = 'openbutler-team/2';
 
 /** Wire and persistence DTOs. Adapters preserve these fields instead of redefining them. */
 export interface TeamMessage {

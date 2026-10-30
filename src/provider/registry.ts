@@ -24,7 +24,7 @@ import { hasCredential, type ProviderState, type SettingsStore } from '../settin
  *
  * - Key rotation needs a server that outlives a request. A CLI run has one key.
  * - `inline` tool-call mode means parsing a tool call out of the model's free
- *   text. Ranite's one non-negotiable is that the runtime, not the model,
+ *   text. OpenButler's one non-negotiable is that the runtime, not the model,
  *   decides what executes. Reading instructions out of prose is the opposite of
  *   that. Catalog capability flags are informational and do not block selection.
  */
@@ -42,8 +42,8 @@ export interface ProviderOverride {
    * Raw options handed to the runtime package, applied last.
    *
    * This is the escape hatch for anything the catalog and the environment do not
-   * cover: a region, a project id, extra headers. Ranite does not interpret it,
-   * so a package gains an option without Ranite gaining a line of code.
+   * cover: a region, a project id, extra headers. OpenButler does not interpret it,
+   * so a package gains an option without OpenButler gaining a line of code.
    */
   options?: Record<string, unknown>;
 }
@@ -101,11 +101,11 @@ function firstNonEmptyEnv(names: readonly string[] | undefined): ApiKeySource | 
  * Merges one provider id from the catalog and the settings overlay.
  *
  * A provider is usable when *something* authenticates it: a key in settings, a
- * key-shaped environment variable the catalog names, Ranite's generic key, or
+ * key-shaped environment variable the catalog names, OpenButler's generic key, or
  * options the operator wrote. The last case is how a provider that signs
  * requests with a credential chain (AWS SigV4) or a service account (Google
  * Vertex) works with no key at all — its package reads `AWS_*` and
- * `GOOGLE_*` itself, and Ranite must not stand in its way.
+ * `GOOGLE_*` itself, and OpenButler must not stand in its way.
  */
 export function resolveProvider(providerId: string, override?: ProviderOverride): ProviderResolution {
   const catalog = getProvider(providerId);
@@ -117,7 +117,7 @@ export function resolveProvider(providerId: string, override?: ProviderOverride)
         id: providerId,
         reason:
           `provider "${providerId}" is not in the model catalog and settings declare no runtime package (npm) for it. ` +
-          `Set RANITE_NPM to the AI SDK package that speaks it.`,
+          `Set OPENBUTLER_NPM to the AI SDK package that speaks it.`,
       },
     };
   }
@@ -131,7 +131,7 @@ export function resolveProvider(providerId: string, override?: ProviderOverride)
   const apiKey = settingsKeys[0]
     ? { key: settingsKeys[0], source: 'settings' as const }
     : (firstNonEmptyEnv(catalog?.env) ??
-      firstNonEmptyEnv(['RANITE_API_KEY']) ??
+      firstNonEmptyEnv(['OPENBUTLER_API_KEY']) ??
       firstNonEmptyEnv(override?.npm ? ['OPENAI_API_KEY'] : undefined));
 
   const options = override?.options ?? {};
@@ -144,7 +144,7 @@ export function resolveProvider(providerId: string, override?: ProviderOverride)
         id: providerId,
         reason:
           `provider "${providerId}" has no credential: add one in settings, ` +
-          `set ${names.join(' / ') || 'RANITE_API_KEY'} in the environment, ` +
+          `set ${names.join(' / ') || 'OPENBUTLER_API_KEY'} in the environment, ` +
           `or declare its credentials under providers.${providerId}.options`,
       },
     };
@@ -166,20 +166,20 @@ export function resolveProvider(providerId: string, override?: ProviderOverride)
 }
 
 /**
- * Whether Ranite hands this key to the runtime package, rather than leaving the
+ * Whether OpenButler hands this key to the runtime package, rather than leaving the
  * package to read its own environment.
  *
- * A key from settings or from Ranite's own variable is an explicit choice, so it
+ * A key from settings or from OpenButler's own variable is an explicit choice, so it
  * is always passed. A key found under a catalog-declared variable name is not:
  * that list mixes secrets with resource names, regions, and file paths, and the
  * package is the only thing that knows which of its variables is a credential.
  * So the package decides — unless it cannot be inspected (not installed yet, or
- * unreadable), where passing the key is the behaviour Ranite has always had, and
+ * unreadable), where passing the key is the behaviour OpenButler has always had, and
  * the safe default to fall back to.
  */
 export function passesKeyToPackage(npm: string, key: ApiKeySource): boolean {
   if (key.source === 'settings') return true;
-  if (key.envName === 'RANITE_API_KEY') return true;
+  if (key.envName === 'OPENBUTLER_API_KEY') return true;
   return !packageReadsOwnEnv(npm);
 }
 
@@ -381,7 +381,7 @@ export function listSupportedPackages(): string[] {
 }
 
 /**
- * A factory for a package Ranite does not bundle.
+ * A factory for a package OpenButler does not bundle.
  *
  * The package is installed on first use (see install.ts) and driven through the
  * AI SDK's own convention: a single `create*` export whose result exposes
@@ -394,7 +394,7 @@ function dynamicFactory(npm: string): PackageFactory {
       const create = await importProviderFactory(npm);
       /* A package that reads its own credential is left to do so. Only one that
          cannot — `@ai-sdk/openai-compatible` and its kin — receives the key
-         Ranite found. */
+         OpenButler found. */
       const auth = resolved.apiKey && passesKeyToPackage(npm, resolved.apiKey) ? providerAuth(resolved) : {};
       const provider = create({
         name: resolved.id,
@@ -858,7 +858,7 @@ export function reasoningSummaryTitles(provider: ResolvedProvider): boolean {
  * Why the reasoning picker shows variants or not.
  *
  * `model-unsupported` means the catalog carries no reasoning metadata for
- * this model; `adapter-unmapped` means the metadata exists but Ranite has no
+ * this model; `adapter-unmapped` means the metadata exists but OpenButler has no
  * wire mapping for the runtime package yet. They used to share one message,
  * which made a missing adapter mapping look like a missing model.
  */
@@ -910,7 +910,7 @@ export function canUseTools(providerId: string, modelId: string, override?: Prov
  * This is the question every gate has to ask, and it is deliberately not the
  * same as "does settings hold a key". A provider that signs its own requests
  * (AWS) or reads a service account (Google Vertex) is configured the moment its
- * variables exist, whether or not Ranite was told about it.
+ * variables exist, whether or not OpenButler was told about it.
  */
 export function providerIsConfigured(providerId: string, state: ProviderState | undefined): boolean {
   if (hasCredential(state)) return true;

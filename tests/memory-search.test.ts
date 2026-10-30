@@ -63,7 +63,7 @@ vi.mock('@huggingface/tokenizers', () => ({
 }));
 
 function memoryDataDirectory(): string {
-  return join(process.env.RANITE_DATA_DIR!, 'models', 'Xenova/all-MiniLM-L6-v2', '751bff37182d3f1213fa05d7196b954e230abad9');
+  return join(process.env.OPENBUTLER_DATA_DIR!, 'models', 'Xenova/all-MiniLM-L6-v2', '751bff37182d3f1213fa05d7196b954e230abad9');
 }
 
 function writeModelCache() {
@@ -98,10 +98,10 @@ let workspace: string;
 beforeEach(() => {
   fake.reset();
   fake.session.run.mockClear();
-  root = mkdtempSync(join(tmpdir(), 'ranite-memory-search-test-'));
+  root = mkdtempSync(join(tmpdir(), 'openbutler-memory-search-test-'));
   workspace = join(root, 'workspace');
   mkdirSync(workspace);
-  vi.stubEnv('RANITE_DATA_DIR', join(root, 'data'));
+  vi.stubEnv('OPENBUTLER_DATA_DIR', join(root, 'data'));
   writeModelCache();
 });
 afterEach(() => {
@@ -241,7 +241,7 @@ Rendered audio uses loudness normalization to minus fourteen loudness units.
         await foreign.close();
       }
       const { DatabaseSync } = await import('node:sqlite');
-      const database = new DatabaseSync(join(process.env.RANITE_DATA_DIR!, 'state.db'));
+      const database = new DatabaseSync(join(process.env.OPENBUTLER_DATA_DIR!, 'state.db'));
       try {
         const rows = database.prepare('SELECT path FROM memory_sources WHERE path = ?').all(doomedProfile) as unknown[];
         expect(rows).toEqual([]);

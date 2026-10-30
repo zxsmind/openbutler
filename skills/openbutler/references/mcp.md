@@ -5,7 +5,7 @@ Related: [configuration](configuration.md), [tools](tools.md), [observability](o
 
 ## Configuration surfaces
 
-`ranite mcp` opens global server management; `list`, `add` and `remove` are CLI
+`openbutler mcp` opens global server management; `list`, `add` and `remove` are CLI
 actions. The agent's `mcp_manage` additionally supports `connect` and `disconnect`.
 The bundled `mcp-manager` provides a focused operating workflow. A server id is
 not a provider id or an Agent Skill.
@@ -49,11 +49,11 @@ variable references, not literal tokens and not automatic string templates.
 
 ## Lifecycle
 
-1. Inspect `mcp_manage {"action":"list"}` or `ranite mcp list`.
+1. Inspect `mcp_manage {"action":"list"}` or `openbutler mcp list`.
 2. Establish transport, command/endpoint, arguments, working directory and needed
    variable names. Check that the host/service account sees those variables.
 3. Add through the supported manager. Adding/connecting can launch a process or
-   contact a remote service and runs through Ranite's normal capability-change gate.
+   contact a remote service and runs through OpenButler's normal capability-change gate.
 4. Inspect connection result and offered tools. Names join the catalog as
    `mcp_<server>_<tool>`; normalization can affect raw server/tool names.
 5. Use a relevant bounded operation to verify the actual capability, when needed.

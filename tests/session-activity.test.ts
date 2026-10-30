@@ -50,9 +50,9 @@ let store: Store;
 let controller: AgentSessionController | undefined;
 
 beforeEach(async () => {
-  previousDataDir = process.env.RANITE_DATA_DIR;
-  dataDir = mkdtempSync(join(tmpdir(), 'ranite-session-activity-'));
-  process.env.RANITE_DATA_DIR = dataDir;
+  previousDataDir = process.env.OPENBUTLER_DATA_DIR;
+  dataDir = mkdtempSync(join(tmpdir(), 'openbutler-session-activity-'));
+  process.env.OPENBUTLER_DATA_DIR = dataDir;
   vi.resetModules();
   store = await import('../src/session-store.js');
 });
@@ -60,9 +60,9 @@ beforeEach(async () => {
 afterEach(async () => {
   await controller?.close();
   controller = undefined;
-  if (previousDataDir === undefined) delete process.env.RANITE_DATA_DIR;
-  else process.env.RANITE_DATA_DIR = previousDataDir;
-  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('ranite-session-activity-')) {
+  if (previousDataDir === undefined) delete process.env.OPENBUTLER_DATA_DIR;
+  else process.env.OPENBUTLER_DATA_DIR = previousDataDir;
+  if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('openbutler-session-activity-')) {
     throw new Error('Refusing to remove a directory outside this test fixture.');
   }
   rmSync(dataDir, { recursive: true, force: true });

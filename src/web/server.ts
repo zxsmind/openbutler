@@ -27,7 +27,7 @@ import { getDaemonStatus, hostVintage, hostVintageMismatchWarning } from '../dae
 import type { AgentSessionClient, AgentSessionSnapshot } from '../agent-session.js';
 import { ActivityLedger } from '../activity-ledger.js';
 import { createLogger, fileSink } from '../logging.js';
-import { getRaniteVersion } from '../version.js';
+import { getOpenButlerVersion } from '../version.js';
 import { forgetRememberedPermission, listRememberedPermissions } from '../tool-permissions.js';
 import { bucketUsage, bucketUsageByHour, groupHoursByDay, summarizeUsage } from '../usage/report.js';
 import { readMemorySnapshot } from '../memory-view.js';
@@ -73,7 +73,7 @@ export function browserWebAddress(host: string, port: number): string {
 }
 
 const PAIR_TTL_MS = 5 * 60 * 1000;
-const SESSION_COOKIE = 'ranite_web';
+const SESSION_COOKIE = 'openbutler_web';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HEARTBEAT_MS = 15_000;
 /**
@@ -475,7 +475,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const valid = !pairUsed && Date.now() < pairExpiresAt && constantTimeEquals(supplied, pairToken);
       if (!valid) {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
-        res.end('This pairing link is invalid or has expired. Run `ranite web` again for a fresh link.');
+        res.end('This pairing link is invalid or has expired. Run `openbutler web` again for a fresh link.');
         return;
       }
       pairUsed = true;
@@ -498,11 +498,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
           cookieLength: req.headers.cookie?.length ?? 0,
           host: req.headers.host ?? null,
         });
-        return sendJson(res, 401, { error: 'Pair this browser first: run `ranite web --pair`.' });
+        return sendJson(res, 401, { error: 'Pair this browser first: run `openbutler web --pair`.' });
       }
     }
 
-    const headerSessionId = req.headers['x-ranite-session'];
+    const headerSessionId = req.headers['x-openbutler-session'];
     if (headerSessionId !== undefined && typeof headerSessionId !== 'string') return sendJson(res, 400, { error: 'Invalid chat ID.' });
     const querySessionId = url.searchParams.get('sessionId');
     if (querySessionId && headerSessionId && querySessionId !== headerSessionId)
@@ -560,7 +560,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         return sendJson(res, 409, { error: "This chat's project is fixed. Start a new chat." });
       if (current.busy || current.queuedMessageCount > 0) return sendJson(res, 409, { error: 'Wait for the running task to finish.' });
       if (!client.runtime.supportsProjects || !client.selectProject)
-        return sendJson(res, 409, { error: 'Restart the Ranite server to apply the project scope.' });
+        return sendJson(res, 409, { error: 'Restart the OpenButler server to apply the project scope.' });
       resolveProjectSelection(body.projectId, options.workspaceRoot);
       await client.selectProject(body.projectId as string | null, body.sessionId as string);
       const entries = client.getServerEntries() as Entry[];
@@ -677,10 +677,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
     if (url.pathname === '/api/about' && req.method === 'GET') {
       return sendJson(res, 200, {
-        version: getRaniteVersion(),
+        version: getOpenButlerVersion(),
         workspace: options.workspaceRoot,
         dataDir: getDataPath(),
-        logPath: getDataPath(join('logs', 'ranite.log')),
+        logPath: getDataPath(join('logs', 'openbutler.log')),
         uptimeMs: Date.now() - startedAt,
         buildId: currentBuildId(),
         providerId: client.runtime.providerId,
@@ -696,7 +696,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const event = url.searchParams.get('event');
       const order = { error: 0, warn: 1, info: 2, debug: 3 } as const;
       if (!(level in order)) return sendJson(res, 400, { error: 'level must be error, warn, info, or debug.' });
-      const records = readLogRecords(getDataPath(join('logs', 'ranite.log')))
+      const records = readLogRecords(getDataPath(join('logs', 'openbutler.log')))
         .filter((record) => order[record.level] <= order[level])
         .filter((record) => !event || record.event.includes(event));
       return sendJson(res, 200, { records: records.slice(-Math.min(5000, Math.max(1, Math.floor(lines)))) });
@@ -1203,7 +1203,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       res.end(
         assetsDir === undefined
-          ? 'The browser client bundle is missing. Build it with `npm run build:web`, then restart `ranite web`.'
+          ? 'The browser client bundle is missing. Build it with `npm run build:web`, then restart `openbutler web`.'
           : 'Not found.',
       );
       return;

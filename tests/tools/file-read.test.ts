@@ -7,7 +7,7 @@ import { createReadTool } from '../../src/tools/file-read.js';
 let workspace: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), 'ranite-read-'));
+  workspace = await mkdtemp(join(tmpdir(), 'openbutler-read-'));
 });
 
 afterEach(async () => {

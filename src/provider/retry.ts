@@ -13,7 +13,7 @@ type StreamResult = Awaited<ReturnType<V3LanguageModel['doStream']>>;
 type GenerateResult = Awaited<ReturnType<V3LanguageModel['doGenerate']>>;
 
 /**
- * The backoff Ranite applies to one key before moving to the next.
+ * The backoff OpenButler applies to one key before moving to the next.
  *
  * 1s, 2s, 4s, 8s, 16s, 32s, 32s, 32s, 64s: nine waits, so up to ten attempts on a key. When
  * the sequence is exhausted the request moves to the next configured key; when

@@ -33,7 +33,7 @@ export interface ProviderState {
   /**
    * Raw options handed to the runtime package, applied last.
    *
-   * Ranite does not read these: they are whatever the package accepts, which is
+   * OpenButler does not read these: they are whatever the package accepts, which is
    * how a provider that needs more than a key — an AWS region, a Google project,
    * an Azure resource name — becomes configurable without a code change here.
    */
@@ -46,7 +46,7 @@ export interface ProviderState {
    * across many upstream providers, so the same model can be served by a
    * different backend each turn. These are the gateway's own routing fields
    * (for OpenRouter `order`, `only`, `allow_fallbacks`, `sort`, …; for the
-   * Vercel gateway `order`, `only`, `sort`, …); Ranite does not interpret
+   * Vercel gateway `order`, `only`, `sort`, …); OpenButler does not interpret
    * them, it only places them under the namespace the gateway expects.
    */
   routing?: Record<string, unknown>;
@@ -129,7 +129,7 @@ export interface SettingsStore {
    *
    * A provider used to carry a model list where empty meant "every model the
    * catalog has". That was borrowed from a router, which tries models in turn.
-   * Ranite picks one model and uses it, so the list had no meaning: an empty
+   * OpenButler picks one model and uses it, so the list had no meaning: an empty
    * one read as "I added 44 models" when the operator had added none. One field,
    * one meaning.
    */
@@ -164,7 +164,7 @@ export interface SettingsStore {
   approvalTimeoutSeconds?: number;
   /** Explicit schedules. An empty list starts no observers or scheduled model calls. */
   schedules: ScheduleState[];
-  /** Workspace used by bare Ranite launches; it does not define the machine custodian identity. */
+  /** Workspace used by bare OpenButler launches; it does not define the machine custodian identity. */
   defaultWorkspaceRoot?: string;
   telegram?: TelegramSettings;
   /** Team membership; absent means this machine is not in a team. */
@@ -375,7 +375,7 @@ function stringArray(value: unknown, where: string): string[] {
 /**
  * Validates the raw option bag handed to a provider's runtime package.
  *
- * The values are not Ranite's to interpret, but they are Ranite's to refuse when
+ * The values are not OpenButler's to interpret, but they are OpenButler's to refuse when
  * malformed: a mapping of bounded size, with no prototype keys, because these
  * objects reach `import()` arguments and request headers.
  */
@@ -404,7 +404,7 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
   if (!isRecord(raw)) throw new Error(`providers.${id} must be a mapping`);
   for (const key of Object.keys(raw)) {
     if (!KNOWN_PROVIDER_KEYS.has(key)) {
-      throw new Error(`providers.${id}.${key} is not a setting ranite knows (known: ${[...KNOWN_PROVIDER_KEYS].join(', ')})`);
+      throw new Error(`providers.${id}.${key} is not a setting openbutler knows (known: ${[...KNOWN_PROVIDER_KEYS].join(', ')})`);
     }
   }
   const state: ProviderState = {
@@ -452,7 +452,9 @@ function parseProviderState(raw: unknown, id: string): ProviderState {
       if (!isRecord(rawSpec)) throw new Error(`providers.${id}.modelSpecs.${modelId} must be a mapping`);
       for (const key of Object.keys(rawSpec)) {
         if (!specKeys.includes(key))
-          throw new Error(`providers.${id}.modelSpecs.${modelId}.${key} is not a model spec ranite knows (known: ${specKeys.join(', ')})`);
+          throw new Error(
+            `providers.${id}.modelSpecs.${modelId}.${key} is not a model spec openbutler knows (known: ${specKeys.join(', ')})`,
+          );
       }
       const spec: ProviderModelSpec = {};
       if (rawSpec.name !== undefined) {
@@ -573,7 +575,7 @@ function loadSettingsUnlocked(): SettingsStore {
   if (!isRecord(parsed)) throw new Error(`${SETTINGS_FILE} must be a mapping`);
   for (const key of Object.keys(parsed)) {
     if (!KNOWN_KEYS.has(key)) {
-      throw new Error(`${key} is not a setting ranite knows (known: ${[...KNOWN_KEYS].join(', ')})`);
+      throw new Error(`${key} is not a setting openbutler knows (known: ${[...KNOWN_KEYS].join(', ')})`);
     }
   }
 
@@ -747,7 +749,7 @@ function loadSecretsUnlocked(): SecretsStore {
   if (!isRecord(parsed)) throw new Error(`${CONFIG_FILE} must be a mapping`);
   for (const key of Object.keys(parsed)) {
     if (!KNOWN_SECRET_KEYS.has(key)) {
-      throw new Error(`${key} is not a secret ranite knows (known: ${[...KNOWN_SECRET_KEYS].join(', ')})`);
+      throw new Error(`${key} is not a secret openbutler knows (known: ${[...KNOWN_SECRET_KEYS].join(', ')})`);
     }
   }
   const secrets: SecretsStore = { providers: {} };
@@ -766,7 +768,7 @@ function loadSecretsUnlocked(): SecretsStore {
 function parseModalSecrets(raw: unknown): ModalCredentials {
   if (!isRecord(raw)) throw new Error('config modal must be a mapping');
   for (const key of Object.keys(raw)) {
-    if (key !== 'tokenId' && key !== 'tokenSecret') throw new Error(`config modal.${key} is not a secret ranite knows`);
+    if (key !== 'tokenId' && key !== 'tokenSecret') throw new Error(`config modal.${key} is not a secret openbutler knows`);
   }
   const tokenId = raw.tokenId;
   const tokenSecret = raw.tokenSecret;
@@ -780,7 +782,9 @@ function parseProviderSecrets(raw: unknown, id: string): ProviderSecrets {
   if (!isRecord(raw)) throw new Error(`config providers.${id} must be a mapping`);
   for (const key of Object.keys(raw)) {
     if (!KNOWN_PROVIDER_SECRET_KEYS.has(key)) {
-      throw new Error(`config providers.${id}.${key} is not a secret ranite knows (known: ${[...KNOWN_PROVIDER_SECRET_KEYS].join(', ')})`);
+      throw new Error(
+        `config providers.${id}.${key} is not a secret openbutler knows (known: ${[...KNOWN_PROVIDER_SECRET_KEYS].join(', ')})`,
+      );
     }
   }
   return { keys: stringArray(raw.keys, `config providers.${id}.keys`) };
