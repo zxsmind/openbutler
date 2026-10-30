@@ -31,7 +31,7 @@ outcomes; domain-specific receipts can require later inspection.
 | `file_write` | Required `path`, `content` | Atomic UTF-8 replacement, not an append API |
 | `file_edit` | Required `path`; one editing mode below | Validated targeted edit with stale/ambiguous-match and content checks |
 | `glob` | Required `pattern`; optional `path`, `max_results` | Filename/path matches |
-| `grep` | Required `pattern`; optional `path`, `glob`, `regex`, `max_results` | Content matches within selected files |
+| `grep` | Required `pattern`, a JavaScript regular expression by default; optional `path`, `glob`, `regex: false` for a literal string, `max_results` | Matching lines with file and 1-based line number; case-sensitive in both modes |
 
 `file_read` can read bounded line/directory pages and pattern matches. Follow
 returned `nextOffset` or `nextCharacterOffset`; line offsets are 1-based and

@@ -38,6 +38,11 @@ Web uses `logs/web.log`; daemon startup/lifecycle also writes `daemon.log`.
 A log can be empty or contain older PIDs; compare timestamps, process fields,
 session/event ids and the incident window before attributing an error.
 
+A host that was asked to stop runs every close step against a deadline: an
+overrun is abandoned rather than waited for, and each step records a `[shutdown]`
+line in `logs/ranite.log`. A slow stop therefore names the subsystem that held it
+instead of ending in a force-kill.
+
 Web stream open/close, gaps/resync and client diagnostic reports can explain a
 stalled page. A browser report is observational, not an instruction to modify
 session state. Do not confuse the host log with a particular tool's full output

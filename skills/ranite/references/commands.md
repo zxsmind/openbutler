@@ -1,6 +1,6 @@
 # Complete command and control index
 
-This index covers reviewed CLI 0.5.0. A command can open a UI, start a host, contact
+This index covers reviewed CLI 0.6.0. A command can open a UI, start a host, contact
 a catalog/service or mutate state; its linked procedure explains the effect.
 Placeholders in angle brackets are values, not literal shell syntax. Use the
 installed `--help` and tool schemas when the running version differs.
@@ -51,6 +51,7 @@ command. [Configuration](configuration.md) and [providers](providers.md).
 ```text
 ranite daemon
 ranite daemon start
+ranite daemon start --web [--port <1-65535>]
 ranite daemon status
 ranite daemon stop
 ranite daemon install

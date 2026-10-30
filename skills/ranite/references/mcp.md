@@ -65,6 +65,12 @@ stops the connection while retaining its definition. `remove` removes definition
 and connection. The CLI saves definitions; startup/runtime connection behavior
 and confirmation are separate from that save.
 
+Reconnection is bounded: a server that cannot connect is attempted three times,
+then reported for the operator instead of retrying forever, and closing one
+kills the process tree it spawned so a stdio server's children do not outlive
+it. Recovery reconnects transports only; an interrupted tool call is never
+replayed.
+
 Stdio servers default to a data-directory MCP working area unless `cwd` is set.
 They do not inherit the source checkout as a safe scratch directory. A server's
 own package/runtime dependencies must be available to its executable, not merely

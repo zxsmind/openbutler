@@ -64,7 +64,7 @@ older host after updating Ranite itself.
 | `team` | Team membership; [teams](teams.md) |
 
 Provider state contains `enabled`, optional configured `models`, `url`, `npm`,
-`options`, `routing` and `modelRouting`. Internal types also expose merged `keys`; serialization
+`options`, `routing`, `modelRouting`, `payload` and `modelSpecs`. Internal types also expose merged `keys`; serialization
 keeps credential material separate. An active model list is not the full catalog.
 `options`/`routing` are adapter-specific; unsupported root fields do not become
 features merely by being added to YAML.
@@ -73,6 +73,10 @@ Use `modelRouting` keyed by the exact model ID to pin only that model to an
 upstream. `routing` is an explicit provider-wide default; a model's `modelRouting`
 entry replaces it completely (an empty mapping disables that default for the
 model). These rules also apply to the permission reviewer.
+
+`modelSpecs.<model>` records facts the catalog does not carry: `name`, `context`,
+`output`, `reasoning.efforts` and `payload`. Its `name` is the first choice when
+that model is named anywhere, and `payload` merges into requests for it.
 
 ```yaml
 providers:

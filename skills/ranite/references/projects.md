@@ -22,6 +22,11 @@ ranite web --dir <existing-directory>
 
 Without an explicit path, a bare terminal launch uses its configured default,
 otherwise the invoking directory. Web `--dir` defaults to its launch directory.
+
+"No project" is a scope decision the backend owns: the chat resolves to the
+directory its client attached with (the launch scope), never to a folder the
+owner never chose, and the scratch folder is only the last resort for a caller
+that owns no scope at all.
 Telegram has a configured workspace. Relative paths resolve from the invoking
 shell. Workspace selection validates existence/directory status and canonicalizes
 the path; `~` expansion is supported by the workspace CLI resolver.

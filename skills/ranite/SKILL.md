@@ -3,7 +3,7 @@ name: ranite
 description: "Understand and operate the Ranite environment: installation, host and web setup, configuration, models, skills, MCP, sessions, projects, scheduled tasks, workers, teams, channels, memory, diagnostics, and maintenance. Use for questions or changes about Ranite itself."
 metadata:
   product_version: "0.6.0"
-  reviewed: "2026-10-29"
+  reviewed: "2026-10-30"
 ---
 
 # Ranite operating manual
@@ -47,7 +47,7 @@ Every reference ships inside this skill and works without a source checkout.
 
 ## Establish this installation's state
 
-The references describe reviewed 0.5.0 source. Installed version, running code,
+The references describe reviewed 0.6.0 source. Installed version, running code,
 configured integrations and the tools actually usable in a session can differ.
 Use the smallest relevant inspection:
 

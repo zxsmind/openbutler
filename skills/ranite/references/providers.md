@@ -24,6 +24,12 @@ Default model, configured active models and the full provider catalog are
 different. Web Models manages the active list; selecting one determines a run's
 model. `providerOrder` is not a fallback model chain.
 
+One rule names a model on every surface (terminal, web, CLI): the operator's
+explicit `modelSpecs.<model>.name`, then this provider's catalog name, then the
+untouched model id. The id is never split, and a name recorded under another
+provider is never guessed, so an id that contains a slash keeps it when nothing
+knows the model. A provider shows its catalog display name, else its id.
+
 ## Add or edit a provider
 
 Use `ranite setup`, TUI `/provider` or Settings -> Providers. Setup supports a
