@@ -320,6 +320,11 @@ describe('browser session controls', () => {
     expect(result.status).toBe(403);
     expect(newSession).not.toHaveBeenCalled();
   });
+  it('keeps a browser paired across the ranite -> openbutler cookie rename', async () => {
+    const legacy = cookie.replace(/^openbutler_web=/, 'ranite_web=');
+    expect((await fetch(`${server.url}/api/sessions`, { headers: { cookie: legacy } })).status).toBe(200);
+    expect((await fetch(`${server.url}/api/sessions`, { headers: { cookie: 'ranite_web=wrong' } })).status).toBe(401);
+  });
   it('opens only a listed chat and returns a clean reset even at the same length', async () => {
     const response = await post('/api/session', { action: 'load', sessionId: 'session-b', currentSessionId: 'session-a' });
     expect(response.status).toBe(200);

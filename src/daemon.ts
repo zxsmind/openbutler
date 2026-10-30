@@ -17,6 +17,7 @@ import {
 import { createConnection, createServer, type Server } from 'node:net';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { cliNodeArgs } from './cli-entry.js';
 import { createDaemonHost } from './daemon-host.js';
 import { createLogger, fileSink } from './logging.js';
 import { DAEMON_PROTOCOL_VERSION, MAX_DAEMON_FRAME_BYTES, type DaemonStatus } from './daemon-protocol.js';
@@ -149,7 +150,7 @@ export async function startDaemon(_legacyWorkspaceScope?: string): Promise<Daemo
   const logPath = getDataPath('daemon.log');
   const logFd = openSync(logPath, 'a', 0o600);
   const logOffset = fstatSync(logFd).size;
-  const args = /\.tsx?$/i.test(entry) ? ['--import', import.meta.resolve('tsx'), entry, 'daemon', 'run'] : [entry, 'daemon', 'run'];
+  const args = cliNodeArgs(entry, ['daemon', 'run']);
   let child;
   try {
     child = spawn(process.execPath, args, {
@@ -305,8 +306,7 @@ function readWebPidRecord(): WebPidRecord | null {
  * of spawning again, and `--hostname` keeps the binding the parent chose.
  */
 export function webSpawnArgs(entry: string, port: number, host: string): string[] {
-  const webCommand = [entry, 'web', '--serve', '--port', String(port), '--hostname', host];
-  return /\.tsx?$/i.test(entry) ? ['--import', import.meta.resolve('tsx'), ...webCommand] : webCommand;
+  return cliNodeArgs(entry, ['web', '--serve', '--port', String(port), '--hostname', host]);
 }
 
 /**
@@ -418,21 +418,24 @@ export function untrackWebProcess(pid: number): void {
   }
 }
 
+/** Where a daemon-supervised web server should listen and which workspace it serves. */
+export type WebStartOptions = { port: number; host: string; dir: string };
+
 /** Internal child-process entry point for `openbutler daemon run`. */
-export async function runDaemonProcess(): Promise<void> {
+export async function runDaemonProcess(web?: WebStartOptions): Promise<void> {
   const startLock = await acquireDaemonStartLock();
   try {
     const active = await getDaemonStatus();
     if (active?.legacy)
       throw new Error('An older OpenButler host is still running. Stop it with `openbutler daemon stop`, then start OpenButler again.');
-    if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
-    await runLockedDaemonProcess(startLock.startedAt);
+    if (active) throw new Error(`An OpenButler host is already running (pid ${active.pid}).`);
+    await runLockedDaemonProcess(startLock.startedAt, web);
   } finally {
     releaseDaemonStartLock(startLock);
   }
 }
 
-async function runLockedDaemonProcess(startedAt: string): Promise<void> {
+async function runLockedDaemonProcess(startedAt: string, web?: WebStartOptions): Promise<void> {
   let stopping = false;
   let shutdownReason: string | null = null;
   let resolveStop!: () => void;
@@ -472,6 +475,20 @@ async function runLockedDaemonProcess(startedAt: string): Promise<void> {
     await host.start();
     await writeDaemonPidFile(startedAt);
     console.log(`OpenButler host ready (${process.pid}); ${host.getStatus().workspaceCount} workspace loaded.`);
+    if (web) {
+      try {
+        const record = await startWebProcess(process.argv[1], web.port, web.host, web.dir);
+        logger.info('web.started', { pid: record.pid, host: record.host, port: record.port, dir: web.dir });
+        console.log(`OpenButler web ready (${record.pid}) at http://${record.host}:${record.port}.`);
+      } catch (error) {
+        // A busy port or a deleted workspace must not take the host down with
+        // it: the terminal and Telegram still work, and the next explicit
+        // `openbutler web` can report the problem to the owner.
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn('web.start.failed', { host: web.host, port: web.port, dir: web.dir, error: message });
+        console.error(`OpenButler web failed to start: ${message}`);
+      }
+    }
     await stopRequested;
   } finally {
     process.off('SIGINT', onSigint);
@@ -509,7 +526,7 @@ async function listenDaemonServer(server: Server, endpoint: string): Promise<voi
     if (process.platform === 'win32' || !isAddressInUse(error)) {
       if (isAddressInUse(error)) {
         const active = await getDaemonStatus();
-        if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
+        if (active) throw new Error(`An OpenButler host is already running (pid ${active.pid}).`);
         const recordedPid = readDaemonPid();
         const holder = processIsAlive(recordedPid)
           ? `The recorded host process ${recordedPid} is still alive but did not answer IPC health checks.`
@@ -521,7 +538,7 @@ async function listenDaemonServer(server: Server, endpoint: string): Promise<voi
       throw error;
     }
     const active = await getDaemonStatus();
-    if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
+    if (active) throw new Error(`An OpenButler host is already running (pid ${active.pid}).`);
     const recordedPid = readDaemonPid();
     if (recordedPid === null || processIsAlive(recordedPid)) {
       throw new Error(
@@ -667,7 +684,7 @@ async function acquireDaemonStartLock(): Promise<DaemonStartLock> {
     }
 
     const active = await getDaemonStatus();
-    if (active) throw new Error(`A OpenButler host is already running (pid ${active.pid}).`);
+    if (active) throw new Error(`An OpenButler host is already running (pid ${active.pid}).`);
     const lockOwner = readDaemonStartLockRecord(path);
     const daemonRecord = readDaemonPidRecord();
     if (

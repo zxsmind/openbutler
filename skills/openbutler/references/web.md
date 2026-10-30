@@ -53,9 +53,22 @@ behavior. Microphone/dictation can require a browser-supported secure context;
 a working HTTP chat page does not prove microphone availability.
 
 On a server, run web under the intended process/service supervisor with an
-explicit workspace, hostname and port. Registering OpenButler daemon autostart alone
-does not create a persistent web-server process. Environment variables and data
-root must match the intended host instance.
+explicit workspace, hostname and port. To keep web running after logout or
+reboot, make it part of login startup:
+
+```text
+openbutler daemon install --web --hostname 0.0.0.0 --port 45278 --dir <existing-directory>
+```
+
+The same command works on Windows, macOS and Linux: OpenButler writes that
+platform's own per-user startup entry, and the entry starts the host and then
+the web server with the saved binding. `openbutler daemon status` shows the
+saved `Web at login` address. Re-run `daemon install --web` with new flags to
+change it; plain `daemon install` preserves an existing web entry, and
+`openbutler daemon install --no-web` removes web from login startup. Login
+startup is not a substitute for a system service on a headless server: the
+user session must exist. Environment variables and data root must match the
+intended host instance.
 
 ## Browser controls
 

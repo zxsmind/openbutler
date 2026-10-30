@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,16 +8,46 @@ import { join } from 'node:path';
  * Everything openbutler writes goes through here. Nothing is written inside the
  * checkout: a CLI that scatters caches next to its own source is a CLI that
  * breaks on a read-only install and shows up in the user's git status.
+ *
+ * Before the rename the product kept its state in a sibling directory named
+ * `ranite`. A first run of the new name adopts that directory instead of
+ * starting empty, which would look like every session, key and setting had been
+ * deleted. The move is skipped when the new directory already exists: two
+ * populated directories are resolved in favor of the current one rather than
+ * merged blindly.
  */
 export function getDataDir(): string {
   if (process.env.OPENBUTLER_DATA_DIR) return process.env.OPENBUTLER_DATA_DIR;
+  return migrateLegacyDataDir(defaultDataDir('openbutler'), defaultDataDir('ranite'));
+}
+
+function defaultDataDir(name: string): string {
   if (process.platform === 'win32') {
     const base = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
-    return join(base, 'openbutler');
+    return join(base, name);
   }
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'openbutler');
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', name);
   const base = process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share');
-  return join(base, 'openbutler');
+  return join(base, name);
+}
+
+let resolvedDataDir: string | null = null;
+
+function migrateLegacyDataDir(current: string, legacy: string): string {
+  if (resolvedDataDir !== null) return resolvedDataDir;
+  if (existsSync(current) || !existsSync(legacy)) {
+    resolvedDataDir = current;
+    return current;
+  }
+  try {
+    renameSync(legacy, current);
+    resolvedDataDir = current;
+  } catch {
+    // A locked or read-only directory must not make the CLI unusable; keep
+    // reading the old location until the move can succeed on a later run.
+    resolvedDataDir = legacy;
+  }
+  return resolvedDataDir;
 }
 
 /** A path inside the data directory, or the data directory itself. */

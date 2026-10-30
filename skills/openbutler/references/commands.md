@@ -51,10 +51,10 @@ command. [Configuration](configuration.md) and [providers](providers.md).
 ```text
 openbutler daemon
 openbutler daemon start
-openbutler daemon start --web [--port <1-65535>]
+openbutler daemon start --web [--port <1-65535>] [--hostname <address>] [--dir <directory>]
 openbutler daemon status
 openbutler daemon stop
-openbutler daemon install
+openbutler daemon install [--web [--port <1-65535>] [--hostname <address>] [--dir <directory>] | --no-web]
 openbutler daemon uninstall
 openbutler daemon autostart [on|off|status]
 openbutler daemon autostart-status
@@ -65,7 +65,11 @@ openbutler web [--port <1-65535>] [--hostname <address>] [--dir <directory>] [--
 
 `daemon` defaults to status. `daemon run` is the internal child-process entry,
 not the normal user launch. Install/uninstall here manage startup registration;
-program removal is below. `restart` accepts no positional task/scope argument.
+`install --web` also starts the browser server at login with the saved port,
+hostname and workspace, and plain `install` keeps an existing web entry.
+`--no-web` removes web from login startup. The same startup mechanism is used
+on Windows, macOS and Linux. Program removal is below. `restart` accepts no
+positional task/scope argument.
 [Environment](environment.md), [web](web.md).
 
 ## Skills and MCP

@@ -20,8 +20,8 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/zxsmind/openbutler/main/install.ps1 | iex
 ```
 
-A specific release: `bash -s -- --version 0.6.0` for the shell installer, or
-download `install.ps1` first and run `.\install.ps1 -Version 0.6.0`.
+A specific release: `bash -s -- --version 0.6.1` for the shell installer, or
+download `install.ps1` first and run `.\install.ps1 -Version 0.6.1`.
 `--no-modify-path` (shell) and `-NoModifyPath` (PowerShell) skip PATH changes.
 Both installers verify the result with `openbutler --version`; restart the
 terminal afterwards so the updated PATH takes effect.
@@ -425,7 +425,9 @@ daemon.log           host log
 Its location is `%LOCALAPPDATA%\openbutler` on Windows,
 `~/Library/Application Support/openbutler` on macOS, and `$XDG_DATA_HOME/openbutler` (or
 `~/.local/share/openbutler`) on Linux. `OPENBUTLER_DATA_DIR` overrides it. `openbutler about`
-prints the version, the runtime, and these paths.
+prints the version, the runtime, and these paths. A pre-rename `ranite` data directory is
+adopted automatically on first run when the openbutler directory does not exist yet; when
+both exist, openbutler uses the new one and leaves the old directory untouched.
 
 ## CLI
 

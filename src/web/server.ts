@@ -74,6 +74,12 @@ export function browserWebAddress(host: string, port: number): string {
 
 const PAIR_TTL_MS = 5 * 60 * 1000;
 const SESSION_COOKIE = 'openbutler_web';
+/**
+ * The pairing cookie's pre-rename name. The token value did not change, so
+ * accepting the old name keeps browsers paired across the ranite -> openbutler
+ * rename; new pairings still receive the current name.
+ */
+const LEGACY_SESSION_COOKIE = 'ranite_web';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HEARTBEAT_MS = 15_000;
 /**
@@ -393,7 +399,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   const isAuthorized = (req: IncomingMessage): boolean => {
     const cookies = parseCookies(req.headers.cookie);
-    const token = cookies.get(SESSION_COOKIE);
+    const token = cookies.get(SESSION_COOKIE) ?? cookies.get(LEGACY_SESSION_COOKIE);
     return Boolean(token && constantTimeEquals(token, sessionToken));
   };
 

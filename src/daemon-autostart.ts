@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { cliRuntimeArgs } from './cli-entry.js';
 import { getDataPath } from './paths.js';
 import { loadSettings } from './settings.js';
 import { removeTelegramEnvFile, telegramEnvFilePath, writeTelegramEnvFile } from './telegram-setup.js';
@@ -11,6 +12,19 @@ const WINDOWS_RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run
 const WINDOWS_RUN_VALUE = 'OpenButler';
 const MACOS_LABEL = 'ai.openbutler.agent';
 const LINUX_UNIT_NAME = 'openbutler.service';
+const AUTOSTART_CONFIG_FILE = 'autostart.json';
+
+/** The binding and workspace a login startup should reproduce. */
+export type AutostartWeb = { host: string; port: number; dir: string };
+
+/**
+ * `web` omitted keeps whatever an existing managed install already had, so a
+ * token refresh or a repair never silently turns web startup off. `null`
+ * explicitly removes web from login startup.
+ */
+export type AutostartOptions = { web?: AutostartWeb | null | undefined };
+
+type CliCommand = { executable: string; args: string[] };
 
 export function autostartDescription(): string {
   if (process.platform === 'win32') return 'Current Windows user logon';
@@ -32,34 +46,57 @@ export function isAutostartInstalled(): boolean {
   }
 }
 
-export function installAutostart(): string {
-  const { executable, entry } = getCliCommand();
-  if (process.platform === 'win32') return installWindows(executable, entry);
-  if (process.platform === 'darwin') return installMacos(executable, entry);
-  if (process.platform === 'linux') return installLinux(executable, entry);
-  throw new Error(`OpenButler automatic startup is not supported on ${process.platform}.`);
+export function installAutostart(options: AutostartOptions = {}): string {
+  const web = options.web === undefined ? readAutostartWeb() : options.web === null ? null : requireAutostartWeb(options.web);
+  const command = getCliCommand(web);
+  // The normal `daemon start` child runs in the custodian directory so a host
+  // never inherits whatever directory happened to be current at logon. The
+  // login entry has to create that directory itself and use it the same way.
+  mkdirSync(getAutostartWorkingDirectory(), { recursive: true });
+  let detail: string;
+  if (process.platform === 'win32') detail = installWindows(command);
+  else if (process.platform === 'darwin') detail = installMacos(command);
+  else if (process.platform === 'linux') detail = installLinux(command);
+  else throw new Error(`OpenButler automatic startup is not supported on ${process.platform}.`);
+  writeAutostartConfig(web);
+  return detail;
 }
 
 export function uninstallAutostart(): string {
-  if (process.platform === 'win32') return uninstallWindows();
-  if (process.platform === 'darwin') return uninstallMacos();
-  if (process.platform === 'linux') return uninstallLinux();
-  throw new Error(`OpenButler automatic startup is not supported on ${process.platform}.`);
+  let detail: string;
+  if (process.platform === 'win32') detail = uninstallWindows();
+  else if (process.platform === 'darwin') detail = uninstallMacos();
+  else if (process.platform === 'linux') detail = uninstallLinux();
+  else throw new Error(`OpenButler automatic startup is not supported on ${process.platform}.`);
+  removeAutostartConfig();
+  return detail;
 }
 
-function installWindows(executable: string, entry: string): string {
+/** The web binding saved by the last managed install, or null for host-only startup. */
+export function readAutostartWeb(): AutostartWeb | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(getAutostartConfigPath(), 'utf8'));
+    if (!isRecord(parsed)) return null;
+    return parseAutostartWeb(parsed.web);
+  } catch {
+    return null;
+  }
+}
+
+function installWindows(command: CliCommand): string {
   const launcher = getWindowsLauncherPath();
   const existing = readWindowsRunValue();
   if (existing !== null && !existing.includes(launcher)) {
     throw new Error(`The Windows Run value "${WINDOWS_RUN_VALUE}" already belongs to another command; OpenButler left it unchanged.`);
   }
   mkdirSync(dirname(launcher), { recursive: true });
-  const command = `${quoteWindowsArgument(executable)} ${quoteWindowsArgument(entry)} daemon run`;
+  const commandLine = [command.executable, ...command.args].map(quoteWindowsArgument).join(' ');
   const script = [
     `' ${MANAGED_MARKER}`,
     'Set openbutlerShell = CreateObject("WScript.Shell")',
     `openbutlerShell.Environment("PROCESS")("OPENBUTLER_DATA_DIR") = "${resolve(getDataPath()).replace(/"/g, '""')}"`,
-    `openbutlerShell.Run "${command.replace(/"/g, '""')}", 0, False`,
+    `openbutlerShell.CurrentDirectory = "${getAutostartWorkingDirectory().replace(/"/g, '""')}"`,
+    `openbutlerShell.Run "${commandLine.replace(/"/g, '""')}", 0, False`,
     '',
   ].join('\r\n');
   writeAtomically(launcher, script);
@@ -81,12 +118,22 @@ function uninstallWindows(): string {
   return 'OpenButler automatic startup removed.';
 }
 
-function installMacos(executable: string, entry: string): string {
+function installMacos(command: CliCommand): string {
   const path = getAutostartFilePath();
   assertManagedFileCanBeReplaced(path);
   const logPath = getDataPath('daemon.log');
   mkdirSync(dirname(logPath), { recursive: true });
-  writeAtomically(path, buildMacosDocument(executable, entry, resolve(getDataPath()), logPath, telegramExtraEnv()));
+  writeAtomically(
+    path,
+    buildMacosDocument(
+      command.executable,
+      command.args,
+      resolve(getDataPath()),
+      logPath,
+      telegramExtraEnv(),
+      getAutostartWorkingDirectory(),
+    ),
+  );
   return `${autostartDescription()} configured.`;
 }
 
@@ -101,10 +148,10 @@ function uninstallMacos(): string {
   return 'OpenButler automatic startup removed.';
 }
 
-function installLinux(executable: string, entry: string): string {
+function installLinux(command: CliCommand): string {
   const path = getAutostartFilePath();
   assertManagedFileCanBeReplaced(path);
-  writeAutostartUnit(path, executable, entry);
+  writeAutostartUnit(path, command);
   try {
     runCommand('systemctl', ['--user', 'daemon-reload']);
     runCommand('systemctl', ['--user', 'enable', LINUX_UNIT_NAME]);
@@ -141,10 +188,11 @@ function uninstallLinux(): string {
  */
 export function buildMacosDocument(
   executable: string,
-  entry: string,
+  args: readonly string[],
   dataDir: string,
   logPath: string,
   extraEnv: Record<string, string>,
+  workingDirectory?: string,
 ): string {
   for (const name of Object.keys(extraEnv)) assertEnvName(name);
   const variables = [`<key>OPENBUTLER_DATA_DIR</key><string>${xmlEscape(dataDir)}</string>`];
@@ -159,11 +207,10 @@ export function buildMacosDocument(
     '  <key>ProgramArguments</key>',
     '  <array>',
     `    <string>${xmlEscape(executable)}</string>`,
-    `    <string>${xmlEscape(entry)}</string>`,
-    '    <string>daemon</string>',
-    '    <string>run</string>',
+    ...args.map((argument) => `    <string>${xmlEscape(argument)}</string>`),
     '  </array>',
     `  <key>EnvironmentVariables</key><dict>${variables.join('')}</dict>`,
+    ...(workingDirectory === undefined ? [] : [`  <key>WorkingDirectory</key><string>${xmlEscape(workingDirectory)}</string>`]),
     '  <key>RunAtLoad</key><true/>',
     '  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>',
     `  <key>StandardOutPath</key><string>${xmlEscape(logPath)}</string>`,
@@ -179,7 +226,13 @@ export function buildMacosDocument(
  * the unit reads an optional (`-` prefix) 0600 env file instead, so deleting
  * the file cleanly unwires the secret without touching the unit.
  */
-export function buildLinuxUnit(executable: string, entry: string, dataDir: string, envFile: string | null): string {
+export function buildLinuxUnit(
+  executable: string,
+  args: readonly string[],
+  dataDir: string,
+  envFile: string | null,
+  workingDirectory?: string,
+): string {
   return [
     '[Unit]',
     'Description=OpenButler personal agent host',
@@ -187,7 +240,8 @@ export function buildLinuxUnit(executable: string, entry: string, dataDir: strin
     '[Service]',
     'Type=simple',
     `# ${MANAGED_MARKER}`,
-    `ExecStart=${systemdQuote(executable)} ${systemdQuote(entry)} daemon run`,
+    `ExecStart=${[executable, ...args].map((argument) => systemdQuote(argument)).join(' ')}`,
+    ...(workingDirectory === undefined ? [] : [`WorkingDirectory=${systemdQuote(workingDirectory, false)}`]),
     `Environment=${systemdQuote(`OPENBUTLER_DATA_DIR=${dataDir}`, false)}`,
     ...(envFile === null ? [] : [`EnvironmentFile=-${systemdQuote(envFile, false)}`]),
     'Restart=on-failure',
@@ -214,10 +268,14 @@ function telegramExtraEnv(): Record<string, string> {
   return telegram === null ? {} : { [telegram.name]: telegram.value };
 }
 
-function writeAutostartUnit(path: string, executable: string, entry: string): void {
+function writeAutostartUnit(path: string, command: CliCommand): void {
   const dataDir = resolve(getDataPath());
+  const workingDirectory = getAutostartWorkingDirectory();
   if (process.platform === 'darwin') {
-    writeAtomically(path, buildMacosDocument(executable, entry, dataDir, getDataPath('daemon.log'), telegramExtraEnv()));
+    writeAtomically(
+      path,
+      buildMacosDocument(command.executable, command.args, dataDir, getDataPath('daemon.log'), telegramExtraEnv(), workingDirectory),
+    );
     return;
   }
   const telegram = currentTelegramEnv();
@@ -226,7 +284,7 @@ function writeAutostartUnit(path: string, executable: string, entry: string): vo
     envFile = telegramEnvFilePath(dataDir);
     writeTelegramEnvFile(envFile, telegram.name, telegram.value);
   }
-  writeAtomically(path, buildLinuxUnit(executable, entry, dataDir, envFile));
+  writeAtomically(path, buildLinuxUnit(command.executable, command.args, dataDir, envFile, workingDirectory));
 }
 
 /**
@@ -256,8 +314,7 @@ export function refreshAutostartEnv(): { updated: boolean; detail: string } {
       detail: `Login startup file is user-modified, left unchanged: ${path}. Wire the token variable there manually.`,
     };
   }
-  const { executable, entry } = getCliCommand();
-  writeAutostartUnit(path, executable, entry);
+  writeAutostartUnit(path, getCliCommand(readAutostartWeb()));
   if (process.platform === 'linux') {
     try {
       runCommand('systemctl', ['--user', 'daemon-reload']);
@@ -294,11 +351,50 @@ function getWindowsLauncherPath(): string {
   return resolve(getDataPath(join('autostart', 'openbutler-logon.vbs')));
 }
 
-function getCliCommand(): { executable: string; entry: string } {
+function getAutostartWorkingDirectory(): string {
+  return resolve(getDataPath('custodian'));
+}
+
+function getAutostartConfigPath(): string {
+  return resolve(getDataPath(AUTOSTART_CONFIG_FILE));
+}
+
+function getCliCommand(web: AutostartWeb | null): CliCommand {
   const entry = process.argv[1];
   if (!entry) throw new Error('Could not locate the OpenButler CLI entry point.');
-  if (/\.tsx?$/i.test(entry)) throw new Error('Build OpenButler and run its compiled CLI before installing automatic startup.');
-  return { executable: resolve(process.execPath), entry: resolve(entry) };
+  const command = ['daemon', 'run'];
+  if (web) command.push('--web', '--port', String(web.port), '--hostname', web.host, '--dir', web.dir);
+  return { executable: resolve(process.execPath), args: [...cliRuntimeArgs(entry), resolve(entry), ...command] };
+}
+
+/** Rejects a login entry that would fail on a later boot instead of at install time. */
+function requireAutostartWeb(web: AutostartWeb): AutostartWeb {
+  const parsed = parseAutostartWeb(web);
+  if (!parsed) {
+    throw new Error('Automatic web startup needs a host without spaces, a port between 1 and 65535, and an absolute --dir.');
+  }
+  return parsed;
+}
+
+function parseAutostartWeb(raw: unknown): AutostartWeb | null {
+  if (!isRecord(raw)) return null;
+  const { host, port, dir } = raw;
+  if (typeof host !== 'string' || !host || host.length > 255 || /[\s\0]/.test(host)) return null;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  if (typeof dir !== 'string' || !isAbsolute(dir)) return null;
+  return { host, port, dir };
+}
+
+function writeAutostartConfig(web: AutostartWeb | null): void {
+  if (web === null) {
+    removeAutostartConfig();
+    return;
+  }
+  writeAtomically(getAutostartConfigPath(), `${JSON.stringify({ web }, null, 2)}\n`);
+}
+
+function removeAutostartConfig(): void {
+  unlinkIfExists(getAutostartConfigPath());
 }
 
 function assertManagedFileCanBeReplaced(path: string): void {

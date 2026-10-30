@@ -43,29 +43,42 @@ afterEach(() => {
 describe('login startup Telegram wiring (cross-platform builders)', () => {
   it('embeds the token inline in the macOS agent and escapes XML', async () => {
     const service = await import('../src/daemon-autostart.js');
-    const document = service.buildMacosDocument('/bin/openbutler', '/app/cli.js', '/data', '/data/daemon.log', {
+    const document = service.buildMacosDocument('/bin/openbutler', ['/app/cli.js', 'daemon', 'run'], '/data', '/data/daemon.log', {
       TELEGRAM_BOT_TOKEN: '123:a&b<c>',
     });
     expect(document).toContain('<key>TELEGRAM_BOT_TOKEN</key><string>123:a&amp;b&lt;c&gt;</string>');
     expect(document).toContain('<key>OPENBUTLER_DATA_DIR</key>');
-    const plain = service.buildMacosDocument('/bin/openbutler', '/app/cli.js', '/data', '/data/daemon.log', {});
+    const plain = service.buildMacosDocument('/bin/openbutler', ['/app/cli.js', 'daemon', 'run'], '/data', '/data/daemon.log', {});
     expect(plain).not.toContain('TELEGRAM_BOT_TOKEN');
     expect(plain).toContain('<key>EnvironmentVariables</key><dict><key>OPENBUTLER_DATA_DIR</key><string>/data</string></dict>');
   });
 
   it('wires the token through an optional env file on Linux, never inline', async () => {
     const service = await import('../src/daemon-autostart.js');
-    const wired = service.buildLinuxUnit('/bin/openbutler', '/app/cli.js', '/data', '/data/telegram.env');
+    const wired = service.buildLinuxUnit('/bin/openbutler', ['/app/cli.js', 'daemon', 'run'], '/data', '/data/telegram.env');
     expect(wired).toContain('EnvironmentFile=-"/data/telegram.env"');
     expect(wired).not.toContain('123:');
-    const plain = service.buildLinuxUnit('/bin/openbutler', '/app/cli.js', '/data', null);
+    const plain = service.buildLinuxUnit('/bin/openbutler', ['/app/cli.js', 'daemon', 'run'], '/data', null);
     expect(plain).not.toContain('EnvironmentFile');
     expect(plain).toContain('Environment="OPENBUTLER_DATA_DIR=/data"');
   });
 
+  it('puts the web binding in the login command instead of a second service', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    const unit = service.buildLinuxUnit(
+      '/bin/openbutler',
+      ['/app/cli.js', 'daemon', 'run', '--web', '--port', '45278', '--hostname', '0.0.0.0', '--dir', '/work'],
+      '/data',
+      null,
+    );
+    expect(unit).toContain('"daemon" "run" "--web" "--port" "45278" "--hostname" "0.0.0.0" "--dir" "/work"');
+  });
+
   it('rejects invalid variable names in builders', async () => {
     const service = await import('../src/daemon-autostart.js');
-    expect(() => service.buildMacosDocument('/b', '/e', '/d', '/l', { 'NOPE!': 'x' })).toThrow(/invalid environment variable name/);
+    expect(() => service.buildMacosDocument('/b', ['/e', 'daemon', 'run'], '/d', '/l', { 'NOPE!': 'x' })).toThrow(
+      /invalid environment variable name/,
+    );
   });
 
   it('reads the configured token from the process environment', async () => {
@@ -107,15 +120,38 @@ describe.skipIf(process.platform !== 'win32')('user Windows automatic startup ow
     expect(existsSync(launcher)).toBe(false);
   });
 
-  it('preserves an existing foreign startup command and rejects a development-only TypeScript entry', async () => {
+  it('preserves an existing foreign startup command and accepts a development TypeScript entry', async () => {
     const service = await import('../src/daemon-autostart.js');
     registryValue = 'unrelated-user-command.exe';
     expect(() => service.installAutostart()).toThrow('another command');
     service.uninstallAutostart();
     expect(registryValue).toBe('unrelated-user-command.exe');
     expect(commands.run.mock.calls.some(([, args]) => args[0] === 'delete' || args[0] === 'add')).toBe(false);
+    registryValue = null;
     process.argv[1] = join(root, 'cli.ts');
-    expect(() => service.installAutostart()).toThrow('compiled CLI');
+    expect(() => service.installAutostart()).not.toThrow();
+    const launcher = readFileSync(join(root, 'autostart', 'openbutler-logon.vbs'), 'utf8');
+    expect(launcher).toContain('--import');
+    expect(launcher).toContain('cli.ts');
+  });
+
+  it('writes the web binding into login startup and keeps it when only the host is reinstalled', async () => {
+    const service = await import('../src/daemon-autostart.js');
+    const web = { host: '0.0.0.0', port: 45278, dir: root };
+    service.installAutostart({ web });
+    const launcher = join(root, 'autostart', 'openbutler-logon.vbs');
+    expect(readFileSync(launcher, 'utf8')).toContain('--web');
+    expect(readFileSync(launcher, 'utf8')).toContain('--hostname 0.0.0.0');
+    expect(readFileSync(launcher, 'utf8')).toContain('--port 45278');
+    expect(readFileSync(launcher, 'utf8')).toContain('--dir');
+    expect(service.readAutostartWeb()).toEqual(web);
+
+    service.installAutostart();
+    expect(readFileSync(launcher, 'utf8')).toContain('--web');
+
+    service.installAutostart({ web: null });
+    expect(readFileSync(launcher, 'utf8')).not.toContain('--web');
+    expect(service.readAutostartWeb()).toBeNull();
   });
 
   it('cleans the generated launcher if registration fails without modifying other startup data', async () => {

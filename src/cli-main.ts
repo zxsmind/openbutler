@@ -23,11 +23,13 @@ import {
   stopDaemon,
   stopWebProcess,
   webProcessStatus,
+  type WebStartOptions,
 } from './daemon.js';
 import {
   autostartDescription,
   installAutostart,
   isAutostartInstalled,
+  readAutostartWeb,
   refreshAutostartEnv,
   uninstallAutostart,
 } from './daemon-autostart.js';
@@ -92,7 +94,7 @@ function usage(): void {
     ],
     [
       'openbutler daemon',
-      'Start, inspect, stop, or toggle automatic startup of the background host; start --web also opens the browser client.',
+      'Start, inspect, stop, or toggle automatic startup of the background host; install --web also starts the browser client at login.',
     ],
     ['openbutler usage', 'Show recorded token use and cost: --days, --session, --model, --json.'],
     ['openbutler logs', 'Read the machine log: --lines, --level, --event, --json.'],
@@ -1535,17 +1537,61 @@ async function runActivityLedger(parsed: Parsed, kind: 'events' | 'actions'): Pr
   }
 }
 
+function reportAutostartWeb(): void {
+  const web = readAutostartWeb();
+  if (web) {
+    ui.kv('Web at login', `http://${web.host}:${web.port}`);
+    ui.kv('Web workspace', web.dir);
+  } else {
+    ui.info('Web server is not part of login startup. Add `--web --hostname <address>` to include it.');
+  }
+}
+
+/** `--web` turns login web startup on, `--no-web`/`--web=false` turns it off. */
+function webFlag(parsed: Parsed | undefined): 'on' | 'off' | 'unset' {
+  if (!parsed) return 'unset';
+  if (parsed.booleans.has('no-web') || parsed.flags.get('web') === 'false') return 'off';
+  if (parsed.booleans.has('web') || parsed.flags.get('web') === 'true') return 'on';
+  return 'unset';
+}
+
+/**
+ * The binding to start. Explicit flags win; otherwise the running server (for
+ * an install) or the documented defaults describe what should come back.
+ */
+async function readWebOptions(parsed: Parsed, fallback: { host: string; port: number; dir?: string } | null): Promise<WebStartOptions> {
+  const { DEFAULT_WEB_HOST } = await import('./web/server.js');
+  const { readPort } = await import('./cli/web.js');
+  const port = parsed.flags.has('port') ? readPort(parsed) : (fallback?.port ?? readPort(parsed));
+  const host = parsed.flags.get('hostname') ?? fallback?.host ?? DEFAULT_WEB_HOST;
+  const explicitDir = parsed.flags.get('dir');
+  const dir =
+    explicitDir !== undefined
+      ? resolveServerScope({ explicitDir, cwd: process.cwd() }).root
+      : (fallback?.dir ?? resolveServerScope({ cwd: process.cwd() }).root);
+  return { port, host, dir };
+}
+
 async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): Promise<void> {
   if (action === 'run') {
-    await runDaemonProcess();
+    let web: WebStartOptions | undefined;
+    if (webFlag(parsed) === 'on' && parsed) {
+      try {
+        web = await readWebOptions(parsed, null);
+      } catch (error) {
+        // A broken web configuration must not keep the terminal and Telegram
+        // host from starting; the failure is recorded in daemon.log.
+        console.error(`OpenButler web startup is misconfigured: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    await runDaemonProcess(web);
     return;
   }
   if (action === 'install') {
-    if (isAutostartInstalled()) {
-      ui.info(`Automatic startup is already installed: ${autostartDescription()}.`);
-      return;
-    }
-    ui.success(installAutostart());
+    const mode = webFlag(parsed);
+    const web = mode === 'on' && parsed ? await readWebOptions(parsed, webProcessStatus()) : mode === 'off' ? null : undefined;
+    ui.success(installAutostart({ web }));
+    reportAutostartWeb();
     ui.info('OpenButler will start at your next user login. Remove it with `openbutler daemon autostart off`.');
     return;
   }
@@ -1559,11 +1605,14 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
       ui.info(
         isAutostartInstalled() ? `Automatic startup is installed: ${autostartDescription()}.` : 'Automatic startup is not installed.',
       );
+      if (isAutostartInstalled()) reportAutostartWeb();
       return;
     }
     if (mode === 'on') {
-      if (isAutostartInstalled()) ui.info(`Automatic startup is already installed: ${autostartDescription()}.`);
-      else ui.success(installAutostart());
+      const flag = webFlag(parsed);
+      const web = flag === 'on' && parsed ? await readWebOptions(parsed, webProcessStatus()) : flag === 'off' ? null : undefined;
+      ui.success(installAutostart({ web }));
+      reportAutostartWeb();
       ui.info('OpenButler will start at your next user login. Remove it with `openbutler daemon autostart off`.');
       return;
     }
@@ -1571,10 +1620,11 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
       ui.info(uninstallAutostart());
       return;
     }
-    throw new Error('Usage: openbutler daemon autostart [on|off|status]');
+    throw new Error('Usage: openbutler daemon autostart [on|off|status] [--web [--hostname H] [--port N] [--dir PATH] | --no-web]');
   }
   if (action === 'autostart-status') {
     ui.info(isAutostartInstalled() ? `Automatic startup is installed: ${autostartDescription()}.` : 'Automatic startup is not installed.');
+    if (isAutostartInstalled()) reportAutostartWeb();
     return;
   }
   if (action === 'start') {
@@ -1586,19 +1636,10 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
     ui.kv('Workspaces', String(status.workspaceCount));
     if (status.entry) ui.kv('Host entry', `${status.entry} (${hostVintage(status.entry)})`);
     ui.info('It stays alive after this terminal closes. Stop it with `openbutler daemon stop`.');
-    const wantsWeb = parsed?.booleans.has('web') === true || parsed?.flags.get('web') === 'true';
-    if (wantsWeb && parsed) {
-      const { DEFAULT_WEB_HOST } = await import('./web/server.js');
-      const { readPort } = await import('./cli/web.js');
-      const port = readPort(parsed);
-      const host = parsed.flags.get('hostname') ?? DEFAULT_WEB_HOST;
-      const web = await startWebProcess(
-        process.argv[1],
-        port,
-        host,
-        resolveServerScope({ explicitDir: parsed.flags.get('dir'), cwd: process.cwd() }).root,
-      );
-      ui.success(`Web server running (pid ${web.pid}) at http://${host}:${web.port}`);
+    if (webFlag(parsed) === 'on' && parsed) {
+      const options = await readWebOptions(parsed, null);
+      const web = await startWebProcess(process.argv[1], options.port, options.host, options.dir);
+      ui.success(`Web server running (pid ${web.pid}) at http://${web.host}:${web.port}`);
     }
     return;
   }
@@ -1626,6 +1667,10 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
     if (status.telegram) ui.kv('Telegram', `${status.telegram.state}${status.telegram.paired ? ' / paired' : ''}`);
     if (status.legacy) ui.warn('This host uses an older protocol. Stop it before attaching with this OpenButler version.');
     ui.kv('Automatic startup', isAutostartInstalled() ? 'installed' : 'not installed');
+    if (isAutostartInstalled()) {
+      const loginWeb = readAutostartWeb();
+      if (loginWeb) ui.kv('Web at login', `http://${loginWeb.host}:${loginWeb.port}`);
+    }
     return;
   }
   if (action === 'stop') {
@@ -1636,7 +1681,7 @@ async function runDaemonCommand(action: string, sub?: string, parsed?: Parsed): 
     return;
   }
   throw new Error(
-    'Usage: openbutler daemon [start [--web [--port N]]|status|stop|install|uninstall|autostart [on|off|status]|autostart-status]',
+    'Usage: openbutler daemon [start [--web [--port N] [--hostname H] [--dir PATH]]|status|stop|install [--web [--no-web]]|uninstall|autostart [on|off|status]|autostart-status]',
   );
 }
 

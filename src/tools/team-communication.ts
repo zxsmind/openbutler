@@ -79,7 +79,7 @@ export function createTeamSendTool(send: TeamSend): ToolDefinition {
 /**
  * The shared group channel: read the messages the team posted since this
  * openbutler last looked. Group traffic is ambient and never wakes a session, so
- * this is how a openbutler catches up on the group on its own terms.
+ * this is how an OpenButler catches up on the group on its own terms.
  */
 export function createTeamGroupTool(group: TeamGroup): ToolDefinition {
   return {
@@ -136,7 +136,7 @@ export function createTeamStatusTool(status: TeamStatus): ToolDefinition {
 /**
  * Persistent history: page older group messages or a direct-message
  * conversation at any time. This is a read-only view of the hub's log; it never
- * changes what is unread, so a openbutler can look back without consuming anything.
+ * changes what is unread, so an OpenButler can look back without consuming anything.
  */
 export function createTeamHistoryTool(history: TeamHistory): ToolDefinition {
   return {
