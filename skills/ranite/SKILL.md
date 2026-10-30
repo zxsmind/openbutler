@@ -2,7 +2,7 @@
 name: ranite
 description: "Understand and operate the Ranite environment: installation, host and web setup, configuration, models, skills, MCP, sessions, projects, scheduled tasks, workers, teams, channels, memory, diagnostics, and maintenance. Use for questions or changes about Ranite itself."
 metadata:
-  product_version: "0.5.0"
+  product_version: "0.6.0"
   reviewed: "2026-10-29"
 ---
 

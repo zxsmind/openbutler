@@ -3,7 +3,7 @@ name: skill-installer
 description: "List, inspect, install and update existing Agent Skill packages for Ranite from catalogs, public or private GitHub repositories, local directories or archives. Use for source selection, safe package intake, destination conflicts and discovery repair; use skill-creator for rewriting a workflow."
 license: Apache-2.0
 metadata:
-  adapted_for: "Ranite 0.5.0"
+  adapted_for: "Ranite 0.6.0"
   reviewed: "2026-10-22"
   upstream_commit: "afddb36dc2bdddd3e6ed84ac7c3393cd8e171f4c"
 ---

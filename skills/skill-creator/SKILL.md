@@ -3,7 +3,7 @@ name: skill-creator
 description: "Create, revise and improve reusable Agent Skills for Ranite. Use for turning a workflow into a skill, restructuring an existing skill, evaluating its outputs, comparing revisions, or improving description-based discovery. Use skill-installer for importing an existing package unchanged."
 license: Apache-2.0
 metadata:
-  adapted_for: "Ranite 0.5.0"
+  adapted_for: "Ranite 0.6.0"
   reviewed: "2026-10-22"
   upstream_commit: "dbd4588f9e1033efb41dad4bef2f7947c8993d44"
 ---
